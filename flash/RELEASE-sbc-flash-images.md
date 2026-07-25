@@ -1,6 +1,6 @@
 # Flash images release (`sbc-flash-images`)
 
-Download: https://github.com/tsogs66/MT-Billing/releases/tag/sbc-flash-images
+Download: https://github.com/tsogs66/mtbilling-claude/releases/tag/sbc-flash-images
 
 Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
