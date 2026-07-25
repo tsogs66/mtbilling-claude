@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Code2, Globe, Mail, Monitor, Router } from 'lucide-react';
+import { Code2, Globe, Mail, Monitor, Router, ShieldCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import { DataTable, LogPanel, PageHeader, StatusBadge, TabBar, TabPills, logBoxClass } from '../components/ui';
 import { api } from '../api';
@@ -10,6 +10,7 @@ const TABS = [
   { key: 'panel', label: 'Panel Logs', icon: Monitor },
   { key: 'nginx', label: 'Nginx Logs', icon: Globe },
   { key: 'email', label: 'Email Logs', icon: Mail },
+  { key: 'audit', label: 'Audit Trail', icon: ShieldCheck },
 ] as const;
 
 const PANEL_SUBTABS = [
@@ -40,6 +41,7 @@ export default function Logs() {
         {tab === 'panel' && <PanelLogs />}
         {tab === 'nginx' && <NginxLogs />}
         {tab === 'email' && <EmailLogs />}
+        {tab === 'audit' && <AuditTrail />}
       </div>
     </Layout>
   );
@@ -162,5 +164,54 @@ function EmailLogs() {
         />
       </LogPanel>
     </div>
+  );
+}
+
+function AuditTrail() {
+  const [rows, setRows] = useState<any[]>([]);
+  const load = () => api.get('/audit-log?limit=300').then((r) => setRows(r.data));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const tableRows = rows.map((r) => ({
+    key: r.id,
+    cells: [
+      <span key="date" className="whitespace-nowrap text-slate-500">{new Date(r.date).toLocaleString()}</span>,
+      <div key="who" className="whitespace-nowrap">
+        <div className="font-medium text-slate-800">{r.username || 'unknown'}</div>
+        <div className="text-[11px] text-slate-400">{r.role || '—'}</div>
+      </div>,
+      <span key="method" className="font-mono text-[12px] font-semibold text-sky-600">{r.method}</span>,
+      <span key="path" className="font-mono text-[12px] text-slate-700 break-all">{r.path}</span>,
+      <span
+        key="status"
+        className={`badge ${
+          r.statusCode >= 200 && r.statusCode < 300
+            ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60'
+            : 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60'
+        }`}
+      >
+        {r.statusCode}
+      </span>,
+      <span key="ip" className="font-mono text-[11px] text-slate-400">{r.ip || '—'}</span>,
+    ],
+  }));
+
+  return (
+    <LogPanel title="Audit Trail — who changed what" onRefresh={load}>
+      <DataTable
+        columns={[
+          { key: 'date', label: 'Time', className: 'w-32' },
+          { key: 'who', label: 'User' },
+          { key: 'method', label: 'Method', className: 'w-20' },
+          { key: 'path', label: 'Endpoint' },
+          { key: 'status', label: 'Result', className: 'w-24' },
+          { key: 'ip', label: 'IP', className: 'w-32' },
+        ]}
+        rows={tableRows}
+        emptyMessage="No audited actions yet."
+      />
+    </LogPanel>
   );
 }

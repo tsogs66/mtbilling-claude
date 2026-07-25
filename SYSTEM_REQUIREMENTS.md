@@ -34,7 +34,7 @@ Run on the **Proxmox host** as root.
 
 ```bash
 # Public repo one-liner
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
 
 # Or from a clone
 sudo bash scripts/proxmox-install.sh
@@ -66,8 +66,8 @@ Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with 
 ### Build the flash files (Linux)
 
 ```bash
-git clone https://github.com/tsogs66/MT-Billing.git
-cd MT-Billing
+git clone https://github.com/tsogs66/mtbilling-claude.git
+cd mtbilling-claude
 
 # Raspberry Pi → dist/flash/mt-billing-rpi-arm64.img (+ .img.xz)
 sudo bash scripts/build-rpi-img.sh

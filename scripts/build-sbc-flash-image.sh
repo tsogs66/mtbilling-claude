@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / Pa-North
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # =============================================================================
 #  Build SEPARATE flashable disk images for Raspberry Pi, Orange Pi, and PC.
@@ -409,7 +409,7 @@ inject_usb_installer() {
   cat >"$root_mnt/etc/systemd/system/mt-billing-usb-install.service" <<'EOF'
 [Unit]
 Description=MT-Billing USB installer (clone to internal disk)
-Documentation=https://github.com/tsogs66/MT-Billing
+Documentation=https://github.com/tsogs66/mtbilling-claude
 After=network-online.target cloud-init.target cloud-init.service
 Wants=network-online.target
 Conflicts=mt-billing-firstboot.service
@@ -810,7 +810,7 @@ EOF
   "product": "MT-Billing",
   "board": "${board_name}",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "repo": "https://github.com/tsogs66/MT-Billing",
+  "repo": "https://github.com/tsogs66/mtbilling-claude",
   "default_login": "admin / admin123",
   "console_login": "mtadmin / mtbilling"
 }

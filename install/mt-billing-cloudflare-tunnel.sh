@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # Install and run Cloudflare Tunnel (cloudflared) so subscriber payment links
 # are reachable without opening router ports or using DynDNS.

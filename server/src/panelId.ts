@@ -20,8 +20,60 @@ export function panelHardwareId(): string {
   return `${h.slice(0, 4)}-${h.slice(4, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}`;
 }
 
-export const LICENSE_SECRET = 'MT-BILLING-LICENSE-2026';
-export const PASSWORD_RESET_SECRET = 'MT-BILLING-PASSWORD-RESET-2026';
+/**
+ * License keys and password-reset codes are Ed25519 signatures, not shared-secret
+ * HMACs. Only the PUBLIC key lives here (safe to publish — every self-hosted
+ * customer has this file on their own server). The matching PRIVATE key is held
+ * only by the vendor's offline `activator/` tool and is never committed to this
+ * repo — that asymmetry is what makes codes unforgeable even though the panel's
+ * own verification source is public.
+ *
+ * Regenerate both halves with `node activator/generate-keys.cjs` and paste the
+ * printed public-key value below. Keep the private key file it writes out of git.
+ */
+const LICENSE_PUBLIC_KEY_X = 'mSAK26oPFmnMU8EE0hkMkCDSXjNx2gz5p7CHJJyvZzM';
+
+let cachedPublicKey: crypto.KeyObject | null = null;
+function licensePublicKey(): crypto.KeyObject {
+  if (!cachedPublicKey) {
+    cachedPublicKey = crypto.createPublicKey({
+      key: { kty: 'OKP', crv: 'Ed25519', x: LICENSE_PUBLIC_KEY_X },
+      format: 'jwk',
+    });
+  }
+  return cachedPublicKey;
+}
+
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Decode(str: string): Buffer {
+  const clean = String(str || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+  for (const ch of clean) {
+    const idx = BASE32_ALPHABET.indexOf(ch);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+/** Ed25519-verify a base32-encoded 64-byte signature over `message`. */
+function verifySignature(message: string, signatureB32: string): boolean {
+  const sig = base32Decode(signatureB32);
+  if (sig.length !== 64) return false;
+  try {
+    return crypto.verify(null, Buffer.from(message, 'utf8'), licensePublicKey(), sig);
+  } catch {
+    return false;
+  }
+}
 
 /** Supported license durations (activator + panel). */
 export const LICENSE_DURATIONS = [
@@ -39,83 +91,43 @@ export function normalizeCode(k: string): string {
   return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-function formatKeyBody(hex: string): string {
-  return `${hex.slice(0, 5)}-${hex.slice(5, 10)}-${hex.slice(10, 15)}-${hex.slice(15, 20)}`;
-}
-
-/** Legacy perpetual key (no duration segment) — treated as lifetime. */
-export function expectedLicenseKey(hwid: string): string {
-  const norm = normalizeCode(hwid);
-  const h = crypto.createHmac('sha256', LICENSE_SECRET).update(norm).digest('hex').toUpperCase();
-  return formatKeyBody(h);
-}
-
-/** Duration-bound license key: BODY-DURATION (e.g. …-1Y or …-LIFE). */
-export function expectedLicenseKeyForDuration(hwid: string, duration: string): string {
-  const dur = String(duration || 'life').toLowerCase() as LicenseDurationId;
-  const known = LICENSE_DURATIONS.find((d) => d.id === dur);
-  const id = known?.id || 'life';
-  const norm = normalizeCode(hwid);
-  const payload = `${norm}|${id}`;
-  const h = crypto.createHmac('sha256', LICENSE_SECRET).update(payload).digest('hex').toUpperCase();
-  return `${formatKeyBody(h)}-${id.toUpperCase()}`;
-}
-
 export function durationDays(durationId: string): number | null {
   const d = LICENSE_DURATIONS.find((x) => x.id === String(durationId).toLowerCase());
   return d ? d.days : null;
 }
 
+/** Split a pasted license key into its base32 signature body and duration suffix. */
 export function parseLicenseKey(key: string): { body: string; duration: LicenseDurationId | null } {
   const raw = String(key || '').toUpperCase().trim();
   const parts = raw.split('-').filter(Boolean);
-  if (parts.length >= 5) {
+  if (parts.length >= 2) {
     const durPart = parts[parts.length - 1].toLowerCase();
     const known = LICENSE_DURATIONS.find((d) => d.id === durPart);
     if (known) {
-      return { body: parts.slice(0, -1).join('-'), duration: known.id };
+      return { body: normalizeCode(parts.slice(0, -1).join('')), duration: known.id };
     }
   }
-  return { body: parts.join('-'), duration: null };
+  return { body: normalizeCode(parts.join('')), duration: null };
 }
 
 /**
- * Validate a license key against this hardware ID.
- * Accepts legacy perpetual keys and new duration-suffixed keys.
+ * Validate a license key against this hardware ID. Keys are Ed25519 signatures
+ * over `LIC|<normalized hwid>|<duration>`, generated only by the vendor's
+ * offline activator (which holds the private key).
  */
 export function validateLicenseKey(
   hwid: string,
   key: string
 ): { ok: true; duration: LicenseDurationId; licenseKey: string } | { ok: false } {
-  const provided = normalizeCode(key);
-  if (!provided) return { ok: false };
-
   const parsed = parseLicenseKey(key);
+  if (!parsed.duration || !parsed.body) return { ok: false };
 
-  // New format with duration suffix
-  if (parsed.duration) {
-    const expected = expectedLicenseKeyForDuration(hwid, parsed.duration);
-    if (normalizeCode(expected) === provided) {
-      return { ok: true, duration: parsed.duration, licenseKey: expected };
-    }
-    return { ok: false };
-  }
+  const norm = normalizeCode(hwid);
+  const message = `LIC|${norm}|${parsed.duration}`;
+  if (!verifySignature(message, parsed.body)) return { ok: false };
 
-  // Legacy perpetual (lifetime)
-  const legacy = expectedLicenseKey(hwid);
-  if (normalizeCode(legacy) === provided) {
-    return { ok: true, duration: 'life', licenseKey: legacy };
-  }
-
-  // Also accept duration keys pasted without noticing — try all durations
-  for (const d of LICENSE_DURATIONS) {
-    const expected = expectedLicenseKeyForDuration(hwid, d.id);
-    if (normalizeCode(expected) === provided) {
-      return { ok: true, duration: d.id, licenseKey: expected };
-    }
-  }
-
-  return { ok: false };
+  const canonical = `${parsed.body.match(/.{1,5}/g)?.join('-') || parsed.body}-${parsed.duration.toUpperCase()}`;
+  return { ok: true, duration: parsed.duration, licenseKey: canonical };
 }
 
 export function expiresAtFromDuration(duration: LicenseDurationId, from = new Date()): string | null {
@@ -126,9 +138,13 @@ export function expiresAtFromDuration(duration: LicenseDurationId, from = new Da
   return d.toISOString();
 }
 
-/** Vendor-generated code from panel hardware ID (prefix RST- for identification). */
-export function expectedPasswordResetCode(hwid: string): string {
+/**
+ * Validate a password-reset code (`RST-...`) against this hardware ID. The code
+ * is an Ed25519 signature over `RST|<normalized hwid>`, generated only by the
+ * vendor's offline activator.
+ */
+export function verifyPasswordResetCode(hwid: string, code: string): boolean {
   const norm = normalizeCode(hwid);
-  const h = crypto.createHmac('sha256', PASSWORD_RESET_SECRET).update(norm).digest('hex').toUpperCase();
-  return `RST-${h.slice(0, 4)}-${h.slice(4, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}`;
+  const body = normalizeCode(code).replace(/^RST/, '');
+  return verifySignature(`RST|${norm}`, body);
 }

@@ -18,7 +18,7 @@ const TABS = [
   { key: 'database', label: 'Database Management', icon: DbIcon },
   { key: 'ai', label: 'AI Settings', icon: Bot },
   { key: 'time', label: 'Time Synchronization', icon: Clock },
-  { key: 'account', label: 'Account Reset', icon: KeyRound },
+  { key: 'account', label: 'Account & Security', icon: KeyRound },
   { key: 'routers', label: 'Router Management', icon: RouterIcon },
 ] as const;
 
@@ -68,7 +68,12 @@ export default function SystemSettings() {
       {tab === 'database' && <DatabaseManagement flash={flash} />}
       {tab === 'ai' && <AiSettings app={app} setA={setA} save={saveApp} />}
       {tab === 'time' && <TimeSync app={app} setA={setA} save={saveApp} flash={flash} />}
-      {tab === 'account' && <AccountReset flash={flash} />}
+      {tab === 'account' && (
+        <>
+          <AccountReset flash={flash} />
+          <TwoFactorAuth flash={flash} />
+        </>
+      )}
       {tab === 'routers' && <RouterManagement flash={flash} />}
     </Layout>
   );
@@ -967,6 +972,180 @@ function AccountReset({ flash }: any) {
           <input className="input" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </label>
         <button type="button" className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Reset Password'}</button>
+      </div>
+    </SettingsSection>
+  );
+}
+
+function TwoFactorAuth({ flash }: any) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; uri: string; qrDataUrl: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+  const [disablePassword, setDisablePassword] = useState('');
+  const [showDisable, setShowDisable] = useState(false);
+
+  const load = () => api.get('/account/2fa/status').then((r) => setEnabled(!!r.data.enabled));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const startSetup = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      const r = await api.post('/account/2fa/setup');
+      setSetup(r.data);
+      setCode('');
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Could not start 2FA setup.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSetup = async () => {
+    if (!code.trim()) return;
+    setError('');
+    setBusy(true);
+    try {
+      const r = await api.post('/account/2fa/confirm', { code: code.trim() });
+      setBackupCodes(r.data.backupCodes);
+      setSetup(null);
+      setEnabled(true);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Invalid code.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async () => {
+    if (!disablePassword) return;
+    setError('');
+    setBusy(true);
+    try {
+      await api.post('/account/2fa/disable', { password: disablePassword });
+      setEnabled(false);
+      setShowDisable(false);
+      setDisablePassword('');
+      flash('Two-factor authentication disabled.');
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not disable two-factor.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadBackupCodes = () => {
+    if (!backupCodes) return;
+    const blob = new Blob([backupCodes.join('\n') + '\n'], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'mt-billing-2fa-backup-codes.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <SettingsSection icon={KeyRound} title="Two-Factor Authentication">
+      <div className="space-y-4 max-w-md">
+        {backupCodes ? (
+          <div className="space-y-3">
+            <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3">
+              Two-factor authentication is now enabled. Save these one-time backup codes somewhere
+              safe — each can be used once to sign in if you lose access to your authenticator app.
+              They will not be shown again.
+            </div>
+            <div className="grid grid-cols-2 gap-2 font-mono text-sm bg-slate-50 border border-slate-200 rounded-xl p-4">
+              {backupCodes.map((c) => (
+                <div key={c}>{c}</div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary" onClick={downloadBackupCodes}>
+                <Download size={15} /> Download codes
+              </button>
+              <button type="button" className="btn-primary" onClick={() => setBackupCodes(null)}>
+                I've saved these
+              </button>
+            </div>
+          </div>
+        ) : setup ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">
+              Scan this QR code with Google Authenticator, Authy, or any TOTP app, then enter the
+              6-digit code it shows to confirm.
+            </p>
+            <img src={setup.qrDataUrl} alt="2FA QR code" className="w-48 h-48 rounded-xl border border-slate-200" />
+            <FormField label="Can't scan? Enter this key manually">
+              <code className="input font-mono text-xs bg-slate-50 block break-all">{setup.secret}</code>
+            </FormField>
+            <FormField label="6-digit code from your app">
+              <input
+                className="input font-mono text-lg tracking-widest text-center"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="123456"
+                maxLength={6}
+                autoFocus
+              />
+            </FormField>
+            {error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-4 py-3">{error}</div>}
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setSetup(null)} disabled={busy}>Cancel</button>
+              <button type="button" className="btn-primary" onClick={confirmSetup} disabled={busy || !code.trim()}>
+                {busy ? 'Confirming…' : 'Confirm & Enable'}
+              </button>
+            </div>
+          </div>
+        ) : enabled ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <StatusBadge status="Enabled" />
+              <span className="text-sm text-slate-600">Two-factor authentication is active on this account.</span>
+            </div>
+            {!showDisable ? (
+              <button type="button" className="btn-secondary text-rose-700 border-rose-200 hover:bg-rose-50" onClick={() => setShowDisable(true)}>
+                Disable two-factor
+              </button>
+            ) : (
+              <div className="space-y-3 max-w-xs">
+                <FormField label="Confirm current password to disable">
+                  <input
+                    className="input"
+                    type="password"
+                    value={disablePassword}
+                    onChange={(e) => setDisablePassword(e.target.value)}
+                    autoFocus
+                  />
+                </FormField>
+                {error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-4 py-3">{error}</div>}
+                <div className="flex gap-2">
+                  <button type="button" className="btn-secondary" onClick={() => { setShowDisable(false); setError(''); }} disabled={busy}>Cancel</button>
+                  <button type="button" className="btn-primary" onClick={disable} disabled={busy || !disablePassword}>
+                    {busy ? 'Disabling…' : 'Disable'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-slate-500">
+              Require a 6-digit code from an authenticator app in addition to your password when
+              signing in to this account.
+            </p>
+            <button type="button" className="btn-primary" onClick={startSetup} disabled={busy || enabled === null}>
+              {busy ? 'Starting…' : 'Enable two-factor authentication'}
+            </button>
+          </div>
+        )}
       </div>
     </SettingsSection>
   );

@@ -15,7 +15,8 @@ export interface User {
 interface AuthCtx {
   user: User | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<{ requiresTotp: true; pendingToken: string } | { requiresTotp: false }>;
+  completeTotpLogin: (pendingToken: string, code: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
   /** Menu/route visibility (role-based when licensed; all menus when unlicensed). */
@@ -82,12 +83,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = async (username: string, password: string) => {
-    const r = await api.post('/login', { username, password });
-    localStorage.setItem('mt_token', r.data.token);
-    const u = normalizeUser(r.data.user);
+  const applySession = (data: any) => {
+    localStorage.setItem('mt_token', data.token);
+    const u = normalizeUser(data.user);
     persistSessionFlags(u);
     setUser(u);
+  };
+
+  const login = async (username: string, password: string) => {
+    const r = await api.post('/login', { username, password });
+    if (r.data.requiresTotp) {
+      return { requiresTotp: true as const, pendingToken: r.data.pendingToken as string };
+    }
+    applySession(r.data);
+    return { requiresTotp: false as const };
+  };
+
+  const completeTotpLogin = async (pendingToken: string, code: string) => {
+    const r = await api.post('/login/totp', { pendingToken, code });
+    applySession(r.data);
   };
 
   const logout = () => {
@@ -120,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canWrite = !!user?.canWrite;
 
   return (
-    <Ctx.Provider value={{ user, loading, login, logout, refresh, canAccess, canWrite }}>
+    <Ctx.Provider value={{ user, loading, login, completeTotpLogin, logout, refresh, canAccess, canWrite }}>
       {children}
     </Ctx.Provider>
   );

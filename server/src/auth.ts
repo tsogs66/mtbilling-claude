@@ -1,9 +1,47 @@
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import { db } from './db.js';
+import { db, dataDir } from './db.js';
 import { ALL_PERMISSIONS, getLicenseStatus } from './extra.js';
 
-const SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+/** Historical hardcoded default — treated as "unset" so old .env files don't silently stay weak. */
+const KNOWN_WEAK_DEFAULTS = new Set(['change-me-in-production', '']);
+
+/**
+ * Resolve the JWT signing secret. Prefers `JWT_SECRET` from the environment; if
+ * that's unset (or still the old hardcoded default), falls back to a random
+ * secret generated on first boot and persisted locally so tokens survive
+ * restarts. That file is gitignored and unique per install, so it's never
+ * shipped in source the way a hardcoded fallback would be.
+ */
+function resolveSecret(): string {
+  const fromEnv = process.env.JWT_SECRET;
+  if (fromEnv && !KNOWN_WEAK_DEFAULTS.has(fromEnv)) return fromEnv;
+
+  const secretPath = path.join(dataDir, '.jwt-secret');
+  try {
+    const existing = fs.readFileSync(secretPath, 'utf8').trim();
+    if (existing) return existing;
+  } catch {
+    // fall through to generation
+  }
+  const generated = crypto.randomBytes(48).toString('hex');
+  try {
+    fs.writeFileSync(secretPath, generated, { mode: 0o600 });
+  } catch (e) {
+    console.warn('[auth] could not persist generated JWT secret, tokens will invalidate on restart:', e);
+  }
+  console.warn(
+    '[auth] JWT_SECRET not set in server/.env — generated and persisted a random secret at ' +
+      secretPath +
+      '. Set JWT_SECRET explicitly if you run multiple server instances behind a load balancer.'
+  );
+  return generated;
+}
+
+const SECRET = resolveSecret();
 
 export interface AuthedRequest extends Request {
   user?: { id: number; username: string; role: string };
@@ -13,8 +51,29 @@ export function signToken(payload: { id: number; username: string; role: string 
   return jwt.sign(payload, SECRET, { expiresIn: '12h' });
 }
 
+/** Short-lived token issued after password check when 2FA is enabled — proves
+ *  "who", not "logged in". Only /api/login/totp accepts it (see
+ *  verifyPendingTotpToken); requireAuth explicitly rejects anything carrying a
+ *  `purpose` claim so this can never be replayed against the general API even
+ *  with reduced permissions. */
+export function signPendingTotpToken(userId: number) {
+  return jwt.sign({ id: userId, purpose: 'totp-pending' }, SECRET, { expiresIn: '5m' });
+}
+
+export function verifyPendingTotpToken(token: string): number | null {
+  try {
+    const payload = jwt.verify(token, SECRET) as { id?: number; purpose?: string };
+    if (payload?.purpose !== 'totp-pending' || !payload.id) return null;
+    return Number(payload.id);
+  } catch {
+    return null;
+  }
+}
+
 export function verifyToken(token: string): AuthedRequest['user'] {
-  return jwt.verify(token, SECRET) as AuthedRequest['user'];
+  const payload = jwt.verify(token, SECRET) as AuthedRequest['user'] & { purpose?: string };
+  if (payload?.purpose) throw new Error('Token is not a session token');
+  return payload;
 }
 
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {

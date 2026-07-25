@@ -2,10 +2,12 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
+import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
 import { probeRouter } from './mikrotik.js';
-import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
+import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
+import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 
 export const settingsRouter = express.Router();
 
@@ -416,9 +418,7 @@ settingsRouter.post('/account/reset-password', (req: any, res) => {
   }
   if (!authorized && hasRecovery) {
     const hwid = panelHardwareId();
-    const expected = normalizeCode(expectedPasswordResetCode(hwid));
-    const provided = normalizeCode(String(recoveryKey));
-    authorized = provided === expected;
+    authorized = verifyPasswordResetCode(hwid, String(recoveryKey));
     if (!authorized) {
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'warning',
@@ -435,6 +435,84 @@ settingsRouter.post('/account/reset-password', (req: any, res) => {
     'warning',
     'account',
     `Password changed for ${username}${hasRecovery && !hasCurrent ? ' via recovery key' : ''}`
+  );
+  res.json({ ok: true });
+});
+
+// ---------- Two-factor authentication (TOTP) ----------
+// Self-service, per-account. A secret is only committed to totp_secret (and the
+// account only gated on login) after /2fa/confirm proves the user actually
+// scanned it — otherwise a typo'd setup could permanently lock the account out.
+const pendingTotpSecrets = new Map<number, string>();
+
+settingsRouter.get('/account/2fa/status', (req: any, res) => {
+  const row = db.prepare('SELECT totp_enabled FROM users WHERE id = ?').get(req.user.id) as
+    | { totp_enabled: number }
+    | undefined;
+  res.json({ enabled: !!row?.totp_enabled });
+});
+
+settingsRouter.post('/account/2fa/setup', async (req: any, res) => {
+  const user = db.prepare('SELECT id, username, totp_enabled FROM users WHERE id = ?').get(req.user.id) as
+    | { id: number; username: string; totp_enabled: number }
+    | undefined;
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  if (user.totp_enabled) return res.status(400).json({ error: 'Two-factor is already enabled. Disable it first to re-enroll.' });
+
+  const secret = generateTotpSecret();
+  pendingTotpSecrets.set(user.id, secret);
+  const uri = totpUri(secret, user.username);
+  const qrDataUrl = await QRCode.toDataURL(uri, { margin: 1, width: 240 });
+  res.json({ secret, uri, qrDataUrl });
+});
+
+settingsRouter.post('/account/2fa/confirm', (req: any, res) => {
+  const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(req.user.id) as
+    | { id: number; username: string }
+    | undefined;
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  const secret = pendingTotpSecrets.get(user.id);
+  if (!secret) return res.status(400).json({ error: 'No pending setup — start again from Enable 2FA.' });
+
+  const code = String(req.body?.code || '').trim();
+  if (!verifyTotpToken(secret, code)) {
+    return res.status(400).json({ error: 'Incorrect code. Check the time on your device and try again.' });
+  }
+
+  const backupCodes = generateBackupCodes();
+  const hashedCodes = backupCodes.map((c) => bcrypt.hashSync(c, 10));
+  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_backup_codes = ? WHERE id = ?').run(
+    secret,
+    JSON.stringify(hashedCodes),
+    user.id
+  );
+  pendingTotpSecrets.delete(user.id);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'account',
+    `Two-factor authentication enabled for ${user.username}`
+  );
+  // Shown once — the panel never stores these in plaintext, only bcrypt hashes.
+  res.json({ ok: true, backupCodes });
+});
+
+settingsRouter.post('/account/2fa/disable', (req: any, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id) as
+    | { id: number; username: string; password_hash: string; totp_enabled: number }
+    | undefined;
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  if (!user.totp_enabled) return res.json({ ok: true });
+
+  const password = String(req.body?.password || '');
+  if (!password || !bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is required to disable two-factor.' });
+  }
+  db.prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_backup_codes = NULL WHERE id = ?').run(user.id);
+  pendingTotpSecrets.delete(user.id);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'account',
+    `Two-factor authentication disabled for ${user.username}`
   );
   res.json({ ok: true });
 });

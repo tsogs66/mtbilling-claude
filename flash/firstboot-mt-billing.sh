@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / Pa-North
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # First-boot installer for Raspberry Pi / Orange Pi / PC flash images.
 # Runs once via systemd, installs Node.js + MT-Billing, configures nginx.
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${MT_INSTALL_DIR:-/opt/mt-billing}"
-REPO_URL="${MT_REPO_URL:-https://github.com/tsogs66/MT-Billing.git}"
+REPO_URL="${MT_REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}"
 REPO_BRANCH="${MT_REPO_BRANCH:-main}"
 SERVICE_USER="${MT_SERVICE_USER:-mtbilling}"
 API_PORT="${MT_API_PORT:-4000}"

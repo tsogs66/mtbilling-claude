@@ -8,8 +8,12 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
-import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable, type AuthedRequest } from './auth.js';
-import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
+import {
+  signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable,
+  signPendingTotpToken, verifyPendingTotpToken, type AuthedRequest,
+} from './auth.js';
+import { verifyTotpToken } from './totp.js';
+import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
 import {
   tryLiveResource,
   withRouter,
@@ -142,7 +146,30 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 }
 
 const app = express();
-app.use(cors());
+// Standard deployment puts nginx directly in front (see README); trust exactly
+// one hop so req.ip reflects the real client for the audit log instead of
+// always logging localhost.
+app.set('trust proxy', 1);
+
+// CORS_ORIGIN: comma-separated allowlist (e.g. https://billing.example.com).
+// Auth uses a Bearer token (not cookies), so an open CORS policy can't be used
+// to ride a victim's session — but it still lets any site's JS read panel API
+// responses if it can obtain a token, so restrict it once you have a fixed
+// public origin. Left permissive by default so fresh installs aren't broken
+// before the operator sets a public hostname.
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (corsOrigins.length) {
+  app.use(cors({ origin: corsOrigins }));
+} else {
+  console.warn(
+    '[cors] CORS_ORIGIN not set in server/.env — the API accepts cross-origin requests from any site. ' +
+      'Set CORS_ORIGIN=https://billing.example.com (comma-separated for multiple) to restrict it.'
+  );
+  app.use(cors());
+}
 // Company logo + GCash/Maya QR images are stored as data-URLs in JSON
 // DB restore uploads arrive as base64 data-URLs (~33% larger than the .db file).
 app.use(express.json({ limit: '100mb' }));
@@ -154,13 +181,62 @@ const PORT = Number(process.env.PORT) || 4000;
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
-    | { id: number; username: string; password_hash: string; role: string }
+    | { id: number; username: string; password_hash: string; role: string; totp_enabled?: number }
     | undefined;
   if (!row || !bcrypt.compareSync(password || '', row.password_hash)) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  if (row.totp_enabled) {
+    return res.json({ requiresTotp: true, pendingToken: signPendingTotpToken(row.id) });
+  }
   const token = signToken({ id: row.id, username: row.username, role: row.role });
   const session = sessionPayload(row);
+  res.json({ token, ...session });
+});
+
+/** Completes login after /api/login returned requiresTotp: verifies the 6-digit
+ *  code (or a one-time backup code) against the pendingToken's user. */
+app.post('/api/login/totp', (req, res) => {
+  const { pendingToken, code } = req.body || {};
+  const userId = verifyPendingTotpToken(String(pendingToken || ''));
+  if (!userId) return res.status(401).json({ error: 'Login session expired, please sign in again.' });
+
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as
+    | { id: number; username: string; role: string; totp_secret?: string; totp_backup_codes?: string }
+    | undefined;
+  if (!row || !row.totp_secret) return res.status(401).json({ error: 'Two-factor is not set up for this account.' });
+
+  const trimmed = String(code || '').trim();
+  let usedBackupCode = false;
+  let ok = verifyTotpToken(row.totp_secret, trimmed);
+  if (!ok && trimmed) {
+    const codes: string[] = JSON.parse(row.totp_backup_codes || '[]');
+    const idx = codes.findIndex((hash) => bcrypt.compareSync(trimmed.toUpperCase(), hash));
+    if (idx !== -1) {
+      ok = true;
+      usedBackupCode = true;
+      codes.splice(idx, 1);
+      db.prepare('UPDATE users SET totp_backup_codes = ? WHERE id = ?').run(JSON.stringify(codes), row.id);
+    }
+  }
+  if (!ok) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'auth',
+      `Failed 2FA code for ${row.username}`
+    );
+    return res.status(401).json({ error: 'Invalid authentication code.' });
+  }
+
+  const token = signToken({ id: row.id, username: row.username, role: row.role });
+  const session = sessionPayload(row);
+  if (usedBackupCode) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'auth',
+      `${row.username} logged in using a 2FA backup code`
+    );
+  }
   res.json({ token, ...session });
 });
 
@@ -197,9 +273,8 @@ app.get('/api/company/branding', (_req, res) => {
 app.post('/api/auth/forgot-password-reset', (req, res) => {
   const hwid = panelHardwareId();
   const provided = normalizeCode(req.body?.code);
-  const expected = normalizeCode(expectedPasswordResetCode(hwid));
   if (!provided) return res.status(400).json({ error: 'Reset code is required.' });
-  if (provided !== expected) {
+  if (!verifyPasswordResetCode(hwid, provided)) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       'warning',
       'auth',
@@ -301,6 +376,53 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.use('/api', requireAuth);
+
+const AUDIT_REDACT_KEYS = /pass|secret|token|key|pin|otp|code/i;
+function redactBodyForAudit(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+    if (AUDIT_REDACT_KEYS.test(k)) {
+      out[k] = '[redacted]';
+    } else if (typeof v === 'string' && v.length > 200) {
+      out[k] = v.slice(0, 200) + '…';
+    } else if (v != null && typeof v === 'object') {
+      out[k] = Array.isArray(v) ? `[array:${v.length}]` : '[object]';
+    } else {
+      out[k] = v;
+    }
+  }
+  const json = JSON.stringify(out);
+  return json.length > 2000 ? json.slice(0, 2000) + '…' : json;
+}
+
+/** Records who did what: every mutating /api call, regardless of whether it was
+ *  ultimately allowed (read-only/license-gate rejections are audit-worthy too). */
+app.use('/api', (req: AuthedRequest, res, next) => {
+  const method = req.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  res.on('finish', () => {
+    try {
+      db.prepare(
+        `INSERT INTO audit_log (user_id, username, role, method, path, status_code, ip, body_summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        req.user?.id ?? null,
+        req.user?.username ?? null,
+        req.user?.role ?? null,
+        method,
+        req.originalUrl.split('?')[0],
+        res.statusCode,
+        req.ip || null,
+        redactBodyForAudit(req.body)
+      );
+    } catch {
+      // never let audit logging break the request it's observing
+    }
+  });
+  next();
+});
+
 app.use('/api', requireLicenseOrAllowlist);
 app.use('/api', requireRoleWritable);
 
@@ -978,6 +1100,34 @@ app.get('/api/pppoe/users', async (req, res) => {
   );
 });
 
+/** CSV export of the current service's users (core billing fields, not live router state).
+ *  Registered before the /:id route below — "export.csv" would otherwise match :id. */
+app.get('/api/pppoe/users/export.csv', (req, res) => {
+  const service = String(req.query.service || 'pppoe');
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const rows = (
+    routerId
+      ? db.prepare('SELECT * FROM pppoe_users WHERE service = ? AND router_id = ? ORDER BY id').all(service, routerId)
+      : db.prepare('SELECT * FROM pppoe_users WHERE service = ? ORDER BY id').all(service)
+  ) as any[];
+
+  const columns = [
+    'username', 'customer_name', 'account_number', 'profile', 'status', 'subscription_due',
+    'price', 'address', 'email', 'contact', 'router_id', 'service', 'expiration_profile',
+  ];
+  const csvEscape = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [columns.join(',')];
+  for (const r of rows) lines.push(columns.map((c) => csvEscape((r as any)[c])).join(','));
+  const csv = lines.join('\r\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${service}-users-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(csv);
+});
+
 // Full record for the edit form.
 app.get('/api/pppoe/users/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id));
@@ -995,24 +1145,25 @@ function generateAccountNumber(): string {
   return String(Date.now()).slice(-12).padStart(12, '0');
 }
 
-app.post('/api/pppoe/users', async (req, res) => {
-  const b = req.body || {};
+/** Shared by the single-create route and CSV bulk import — same validation,
+ *  MikroTik secret creation, and rollback-on-failure behavior either way. */
+async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true; row: any } | { ok: false; status: number; error: string }> {
   const {
     username, password, customer_name, profile, status, subscription_due, price, service,
     expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
   } = b;
-  if (!username) return res.status(400).json({ error: 'username is required' });
-  if (!password) return res.status(400).json({ error: 'password is required to create the MikroTik PPP secret' });
+  if (!username) return { ok: false, status: 400, error: 'username is required' };
+  if (!password) return { ok: false, status: 400, error: 'password is required to create the MikroTik PPP secret' };
   if (!profile || isSystemPppProfileName(profile)) {
-    return res.status(400).json({ error: 'Select a billing plan (not default / non-payments)' });
+    return { ok: false, status: 400, error: 'Select a billing plan (not default / non-payments)' };
   }
 
   const routerId = Number(b.router_id || b.routerId || 0);
   if (!routerId) {
-    return res.status(400).json({ error: 'Select a router first (routerId required to create PPP secret).' });
+    return { ok: false, status: 400, error: 'Select a router first (routerId required to create PPP secret).' };
   }
   const router = getRouterById(routerId);
-  if (!router) return res.status(404).json({ error: 'Router not found' });
+  if (!router) return { ok: false, status: 404, error: 'Router not found' };
 
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(profile) as { price: number } | undefined;
   const account = generateAccountNumber();
@@ -1049,7 +1200,7 @@ app.post('/api/pppoe/users', async (req, res) => {
     insertedId = Number(info.lastInsertRowid);
   } catch (e: any) {
     if (String(e?.message || '').includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Username already exists' });
+      return { ok: false, status: 409, error: 'Username already exists' };
     }
     throw e;
   }
@@ -1058,10 +1209,11 @@ app.post('/api/pppoe/users', async (req, res) => {
 
   if (!routerHasApi(router)) {
     db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-    return res.status(400).json({
-      error:
-        'Router API credentials are not configured. Open Router Management, set Host + API user/password, then try again.',
-    });
+    return {
+      ok: false,
+      status: 400,
+      error: 'Router API credentials are not configured. Open Router Management, set Host + API user/password, then try again.',
+    };
   }
 
   try {
@@ -1069,9 +1221,11 @@ app.post('/api/pppoe/users', async (req, res) => {
     const mtProfile = planMeta?.pppProfile || mikrotikProfileForPlan(row.profile);
     if (!mtProfile) {
       db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-      return res.status(400).json({
+      return {
+        ok: false,
+        status: 400,
         error: `Billing plan "${row.profile}" has no linked MikroTik PPP profile. Edit the plan under Billing Plans and select an existing profile.`,
-      });
+      };
     }
     await addPppSecret(router, {
       name: row.username,
@@ -1083,9 +1237,7 @@ app.post('/api/pppoe/users', async (req, res) => {
     });
   } catch (e: any) {
     db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-    return res.status(502).json({
-      error: e?.message || 'Failed to create PPP secret on MikroTik',
-    });
+    return { ok: false, status: 502, error: e?.message || 'Failed to create PPP secret on MikroTik' };
   }
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -1093,7 +1245,40 @@ app.post('/api/pppoe/users', async (req, res) => {
     'pppoe',
     `Created ${row.service || 'pppoe'} user ${username} (acct ${account}) + MikroTik secret`
   );
-  res.status(201).json(row);
+  return { ok: true, row };
+}
+
+app.post('/api/pppoe/users', async (req, res) => {
+  const result = await createPppoeUserRecord(req.body || {});
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.status(201).json(result.row);
+});
+
+/** Bulk-create from a parsed CSV (client parses the file and posts row objects). */
+app.post('/api/pppoe/users/import-batch', async (req, res) => {
+  const rows: Record<string, any>[] = Array.isArray(req.body?.users) ? req.body.users : [];
+  if (!rows.length) return res.status(400).json({ error: 'No rows to import' });
+  if (rows.length > 500) return res.status(400).json({ error: 'Import is limited to 500 rows at a time' });
+
+  const created: string[] = [];
+  const failed: { row: number; username: string; error: string }[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      const result = await createPppoeUserRecord(r);
+      if (result.ok) created.push(result.row.username);
+      else failed.push({ row: i + 1, username: String(r.username || ''), error: result.error });
+    } catch (e: any) {
+      failed.push({ row: i + 1, username: String(r.username || ''), error: e?.message || 'Unexpected error' });
+    }
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    failed.length ? 'warning' : 'info',
+    'pppoe',
+    `CSV import: ${created.length} created, ${failed.length} failed`
+  );
+  res.json({ created: created.length, failed });
 });
 
 app.put('/api/pppoe/users/:id', async (req, res) => {
@@ -3345,6 +3530,20 @@ app.get('/api/inventory', (_req, res) => {
 // ---- Logs ----
 app.get('/api/logs', (_req, res) => {
   res.json(db.prepare('SELECT id, level, source, message, created_at AS date FROM logs ORDER BY id DESC LIMIT 200').all());
+});
+
+/** Audit trail of mutating actions (who did what, from where, and whether it was allowed). */
+app.get('/api/audit-log', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+  res.json(
+    db
+      .prepare(
+        `SELECT id, user_id AS userId, username, role, method, path, status_code AS statusCode,
+                ip, body_summary AS bodySummary, created_at AS date
+         FROM audit_log ORDER BY id DESC LIMIT ?`
+      )
+      .all(limit)
+  );
 });
 
 // ---- Company ----

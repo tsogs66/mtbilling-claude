@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -10,6 +10,7 @@ import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair, UsagePair } from '../lib/traffic';
 import { copyTextOrPrompt } from '../lib/clipboard';
+import { parseCsvObjects } from '../lib/csv';
 import ReceiptPrintModal from '../components/ReceiptPrintModal';
 import LiveTrafficDetailSheet from '../components/LiveTrafficDetailSheet';
 import { openReceiptForPrint } from '../lib/receiptPrint';
@@ -367,6 +368,71 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       showToast(e?.response?.data?.error || 'Fetch from MikroTik failed.');
     } finally {
       setFetching(false);
+    }
+  };
+
+  const exportCsv = async () => {
+    try {
+      const r = await api.get(`/pppoe/users/export.csv?service=${service}${routerQ}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${service}-users-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast('Export failed.');
+    }
+  };
+
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<{ created: number; failed: { row: number; username: string; error: string }[] } | null>(null);
+
+  const openImportPicker = () => importFileRef.current?.click();
+
+  const importCsvFile = async (file: File) => {
+    if (!current) {
+      showToast('Select a router in the top bar first — imported users are provisioned on it.');
+      return;
+    }
+    setImportBusy(true);
+    setImportResult(null);
+    try {
+      const text = await file.text();
+      const parsed = parseCsvObjects(text);
+      if (!parsed.length) {
+        showToast('CSV has no data rows.');
+        return;
+      }
+      const rows = parsed.map((r) => ({
+        username: r.username,
+        password: r.password || r.pass || '',
+        customer_name: r.customer_name || r.customer || r.username,
+        profile: r.profile,
+        status: r.status || 'Active',
+        subscription_due: r.subscription_due || r.subscriptionDue || '',
+        price: r.price ? Number(r.price) : undefined,
+        address: r.address || '',
+        email: r.email || '',
+        contact: r.contact || '',
+        routerId: current.id,
+        service,
+      }));
+      const r = await api.post('/pppoe/users/import-batch', { users: rows });
+      setImportResult(r.data);
+      if (r.data.created > 0) {
+        showToast(`Imported ${r.data.created} user(s)${r.data.failed?.length ? `, ${r.data.failed.length} failed` : ''}.`);
+        loadUsers();
+      } else if (!r.data.failed?.length) {
+        showToast('Nothing imported.');
+      }
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Import failed.');
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -980,6 +1046,29 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   >
                     <DownloadCloud size={16} /> {fetching ? 'Fetching…' : 'Fetch from MikroTik'}
                   </button>
+                  <button type="button" className="btn-secondary" onClick={exportCsv} title="Export current users to CSV">
+                    <FileDown size={16} /> Export CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={openImportPicker}
+                    disabled={importBusy}
+                    title="Bulk-create users from a CSV file (needs username, password, profile columns)"
+                  >
+                    <FileUp size={16} /> {importBusy ? 'Importing…' : 'Import CSV'}
+                  </button>
+                  <input
+                    ref={importFileRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (file) importCsvFile(file);
+                    }}
+                  />
                   <button type="button" className="btn-primary" onClick={() => setShowAdd(true)}>
                     <Plus size={16} /> Add New User
                   </button>
@@ -1536,6 +1625,38 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             </p>
             <p className="text-xs text-slate-400">MikroTik secrets were synced where router API credentials are configured.</p>
           </div>
+        </Modal>
+      )}
+
+      {importResult && (
+        <Modal
+          title="CSV import complete"
+          subtitle={`${importResult.created} created${importResult.failed.length ? `, ${importResult.failed.length} failed` : ''}`}
+          onClose={() => setImportResult(null)}
+          footer={
+            <button type="button" className="btn-primary" onClick={() => setImportResult(null)}>
+              OK
+            </button>
+          }
+        >
+          {importResult.failed.length ? (
+            <div className="text-sm text-slate-600 space-y-2 max-h-72 overflow-y-auto">
+              <p className="text-xs text-slate-400">
+                Rows are matched to the CSV, header row excluded (row 1 = first data row). Fix and re-import just these.
+              </p>
+              {importResult.failed.map((f, i) => (
+                <div key={i} className="flex items-start gap-2 border-b border-slate-100 pb-1.5">
+                  <span className="text-slate-400 w-10 shrink-0">#{f.row}</span>
+                  <div>
+                    <div className="font-medium text-slate-800">{f.username || '(no username)'}</div>
+                    <div className="text-rose-600 text-xs">{f.error}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-600">All rows imported successfully.</p>
+          )}
         </Modal>
       )}
 

@@ -1,31 +1,23 @@
 #!/usr/bin/env node
 /*
  * MT-Billing Password Reset Activator (vendor tool).
- * Prefer the unified activator/activator.cjs which also generates license keys.
+ * Prefer the unified activator.cjs which also generates license keys.
  *
- * Algorithm must match server/src/panelId.ts (expectedPasswordResetCode).
+ * Needs the private key from `node generate-keys.cjs`
+ * (keys/vendor-private-key.pem, gitignored — never commit it).
  */
 'use strict';
 
-const crypto = require('crypto');
 const readline = require('readline');
+const { loadPrivateKey, signResetCode } = require('./sign.cjs');
 
-const PASSWORD_RESET_SECRET = 'MT-BILLING-PASSWORD-RESET-2026';
-
-function normalizeCode(k) {
-  return String(k || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '');
+function parseKeyPath(args) {
+  const i = args.indexOf('--key');
+  return i >= 0 && args[i + 1] ? args[i + 1] : undefined;
 }
 
-function resetCodeFor(hwid) {
-  const norm = normalizeCode(hwid);
-  const h = crypto.createHmac('sha256', PASSWORD_RESET_SECRET).update(norm).digest('hex').toUpperCase();
-  return 'RST-' + h.slice(0, 4) + '-' + h.slice(4, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16);
-}
-
-function printResult(panelId) {
-  const code = resetCodeFor(panelId);
+function printResult(panelId, privateKey) {
+  const code = signResetCode(privateKey, panelId);
   console.log('');
   console.log('  ========================================');
   console.log('   MT-Billing Password Reset Activator');
@@ -34,17 +26,29 @@ function printResult(panelId) {
   console.log('   Reset Code : ' + code);
   console.log('  ========================================');
   console.log('');
-  console.log('  Tip: use activator/activator.cjs for license + recovery together.');
+  console.log('  Tip: use activator.cjs for license + recovery together.');
   console.log('');
 }
 
-const arg = process.argv[2];
-if (arg) {
-  printResult(arg);
+const args = process.argv.slice(2);
+let privateKey;
+try {
+  privateKey = loadPrivateKey(parseKeyPath(args));
+} catch (e) {
+  console.error('');
+  console.error('  ' + e.message);
+  console.error('');
+  process.exit(1);
+}
+
+const panelId = args[0] && !args[0].startsWith('-') ? args[0] : undefined;
+
+if (panelId) {
+  printResult(panelId, privateKey);
 } else {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   rl.question('Enter the customer Panel ID: ', (ans) => {
-    printResult(ans.trim());
+    printResult(ans.trim(), privateKey);
     rl.question('Press Enter to exit...', () => rl.close());
   });
 }

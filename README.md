@@ -136,13 +136,13 @@ data otherwise).
 GitHub raw URLs return **404 on private repositories**. Make the repo public first, or use the **local install** below.
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
 ```
 
 Unattended:
 
 ```bash
-mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
+mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
 ```
 
 ### Local install (private repo — use this if curl returns 404)
@@ -150,8 +150,8 @@ mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-
 On the **Proxmox host** as root:
 
 ```bash
-git clone https://github.com/tsogs66/MT-Billing.git
-cd MT-Billing
+git clone https://github.com/tsogs66/mtbilling-claude.git
+cd mtbilling-claude
 mode=default bash ct/mt-billing.sh
 ```
 
@@ -183,7 +183,7 @@ journalctl -u mt-billing-auto-update.service -n 50
 
 ```bash
 # One-liner inside the LXC
-curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/scripts/fetch-update-from-github.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash
 
 # Proxmox host → copy into container, then run update
 sudo bash scripts/fetch-update-from-github.sh --run
@@ -208,13 +208,13 @@ sudo bash /opt/mt-billing/install/mt-billing-update.sh
 **If the panel Updater button fails** (needs root once — grants privilege and updates):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash
 ```
 
 Or grant UI updates only, then use **Update from GitHub** again:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-grant-updater-root.sh | sudo bash
 ```
 
 ### Public pay links (LAN IP)
@@ -301,7 +301,7 @@ sudo bash /opt/mt-billing/install/mt-billing-reinstall.sh --yes --fresh-env
 One-liner from GitHub (inside LXC):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-reinstall.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-reinstall.sh | sudo bash -s -- --yes
 ```
 
 **Enable on an existing LXC** (after pulling this repo change):
@@ -319,7 +319,7 @@ sudo systemctl enable --now mt-billing-auto-update.timer
 ### Manual install (inside an existing VM/LXC)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-install.sh | bash
 ```
 
 Or step by step:

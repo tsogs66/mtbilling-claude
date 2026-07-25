@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # Configure this LXC/VM to host subscriber payment links on a DynDNS (or any)
 # public hostname — or bind pay links to this host's LAN IP.

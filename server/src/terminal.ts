@@ -4,7 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { Client as SshClient } from 'ssh2';
 import express from 'express';
 import { db } from './db.js';
-import { verifyToken } from './auth.js';
+import { verifyToken, roleIsReadOnly } from './auth.js';
 import { withRouter } from './mikrotik.js';
 
 export const terminalRouter = express.Router();
@@ -221,10 +221,18 @@ export function initTerminalWs(server: Server) {
       return;
     }
     const token = typeof query.token === 'string' ? query.token : '';
+    let user: { id: number; username: string; role: string } | undefined;
     try {
-      verifyToken(token);
+      user = verifyToken(token);
     } catch {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    // Router terminal = arbitrary command execution on network hardware — never
+    // allowed for read-only/Viewer accounts, regardless of their menu permissions.
+    if (!user || roleIsReadOnly(user.role)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }

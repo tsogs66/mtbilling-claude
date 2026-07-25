@@ -8,26 +8,31 @@
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
         background: linear-gradient(135deg, #0f172a, #1e293b 60%, #ea580c); font-family: 'Segoe UI', system-ui, sans-serif; color: #1f2937; }
-      .card { background: #fff; width: 100%; max-width: 480px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 28px; margin: 16px; }
+      .card { background: #fff; width: 100%; max-width: 520px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 28px; margin: 16px; }
       .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
       .logo { width: 40px; height: 40px; border-radius: 10px; background: #f97316; color: #fff; font-weight: 700; font-size: 20px; display: flex; align-items: center; justify-content: center; }
       h1 { font-size: 18px; margin: 0; }
       .sub { font-size: 12px; color: #94a3b8; }
       label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
-      input, select { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: ui-monospace, monospace; }
+      input, select, textarea { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: ui-monospace, monospace; }
+      textarea { resize: vertical; min-height: 90px; }
       button { margin-top: 16px; width: 100%; padding: 11px; border: 0; border-radius: 10px; background: #f97316; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
       button:hover { background: #ea580c; }
+      button:disabled { background: #cbd5e1; cursor: not-allowed; }
       .out { margin-top: 18px; padding: 14px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; display: none; }
       .out.show { display: block; }
       .row { margin-bottom: 14px; }
       .row:last-child { margin-bottom: 0; }
       .out .k { font-size: 12px; color: #64748b; }
-      .out .v { font-family: ui-monospace, monospace; font-size: 15px; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; word-break: break-all; }
+      .out .v { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700; color: #0f172a; letter-spacing: 0.3px; word-break: break-all; }
       .copy { margin-top: 8px; background: #0ea5e9; width: auto; padding: 8px 12px; font-size: 12px; }
       .copy:hover { background: #0284c7; }
       .copy.ok { background: #059669; }
       .copy.ok:hover { background: #047857; }
       .note { font-size: 11px; color: #94a3b8; margin-top: 16px; line-height: 1.45; }
+      .warn { font-size: 11px; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 12px; margin-top: 12px; line-height: 1.45; }
+      .err { font-size: 12px; color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-top: 12px; display: none; }
+      .err.show { display: block; }
       .tabs { display: flex; gap: 8px; margin-top: 8px; }
       .tab { flex: 1; background: #f1f5f9; color: #475569; margin-top: 0; }
       .tab.active { background: #0f172a; color: #fff; }
@@ -42,6 +47,9 @@
           <div class="sub">Vendor tool — license keys &amp; password recovery</div>
         </div>
       </div>
+
+      <label for="privKey">Vendor private key (PEM, from generate-keys.cjs)</label>
+      <textarea id="privKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" autocomplete="off" spellcheck="false"></textarea>
 
       <div class="tabs">
         <button type="button" class="tab active" id="tabBoth">Both</button>
@@ -63,6 +71,7 @@
       </select>
 
       <button id="gen">Generate</button>
+      <div class="err" id="err"></div>
 
       <div class="out" id="out">
         <div class="row" id="rowLicense">
@@ -78,44 +87,86 @@
         </div>
       </div>
 
+      <div class="warn">
+        The private key you paste above is used only in this page's memory to sign codes —
+        it is never sent anywhere (this page makes no network requests) and is not saved when
+        you close the tab. Still, prefer the CLI tool (<code>activator.cjs</code> /
+        the packaged <code>.exe</code>) for routine use so the key touches disk in one place only.
+      </div>
       <div class="note">
-        Runs fully offline. Duration is embedded in the license key suffix (e.g. <code>-1Y</code>, <code>-LIFE</code>).
-        Must match <code>server/src/panelId.ts</code>.
+        Runs fully offline using Ed25519 signatures (Web Crypto API). Needs a browser with
+        native Ed25519 support (recent Chrome/Edge/Firefox). If generation fails below, use
+        <code>node activator.cjs</code> instead.
       </div>
     </div>
 
     <script>
-      const LICENSE_SECRET = 'MT-BILLING-LICENSE-2026';
-      const PASSWORD_RESET_SECRET = 'MT-BILLING-PASSWORD-RESET-2026';
       const DURATIONS = {
         '30d': '30 days', '90d': '90 days', '180d': '6 months',
         '1y': '1 year', '2y': '2 years', 'life': 'Lifetime'
       };
+      const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
       function normalizeCode(k) {
         return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       }
 
-      async function hmacHex(secret, message) {
-        const enc = new TextEncoder();
-        const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-        const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
-        return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+      function base32Encode(bytes) {
+        let bits = 0, value = 0, output = '';
+        for (const byte of bytes) {
+          value = (value << 8) | byte;
+          bits += 8;
+          while (bits >= 5) {
+            output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+            bits -= 5;
+          }
+        }
+        if (bits > 0) output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+        return output;
       }
 
-      async function licenseKeyFor(hwid, duration) {
+      function chunk(s, size) {
+        const n = size || 5;
+        const parts = [];
+        for (let i = 0; i < s.length; i += n) parts.push(s.slice(i, i + n));
+        return parts.join('-');
+      }
+
+      function pemToArrayBuffer(pem) {
+        const b64 = pem
+          .replace(/-----BEGIN PRIVATE KEY-----/, '')
+          .replace(/-----END PRIVATE KEY-----/, '')
+          .replace(/\s+/g, '');
+        const raw = atob(b64);
+        const buf = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+        return buf.buffer;
+      }
+
+      async function importPrivateKey(pem) {
+        const der = pemToArrayBuffer(pem);
+        return crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, false, ['sign']);
+      }
+
+      async function sign(key, message) {
+        const sig = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(message));
+        return new Uint8Array(sig);
+      }
+
+      async function licenseKeyFor(key, hwid, duration) {
         const dur = DURATIONS[duration] ? duration : 'life';
-        const hex = await hmacHex(LICENSE_SECRET, normalizeCode(hwid) + '|' + dur);
-        return hex.slice(0, 5) + '-' + hex.slice(5, 10) + '-' + hex.slice(10, 15) + '-' + hex.slice(15, 20) + '-' + dur.toUpperCase();
+        const sig = await sign(key, 'LIC|' + normalizeCode(hwid) + '|' + dur);
+        return chunk(base32Encode(sig)) + '-' + dur.toUpperCase();
       }
 
-      async function resetCodeFor(hwid) {
-        const hex = await hmacHex(PASSWORD_RESET_SECRET, normalizeCode(hwid));
-        return 'RST-' + hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16);
+      async function resetCodeFor(key, hwid) {
+        const sig = await sign(key, 'RST|' + normalizeCode(hwid));
+        return 'RST-' + chunk(base32Encode(sig));
       }
 
       let mode = 'both';
       const out = document.getElementById('out');
+      const errBox = document.getElementById('err');
       const rowLicense = document.getElementById('rowLicense');
       const rowReset = document.getElementById('rowReset');
 
@@ -129,13 +180,40 @@
       document.getElementById('tabLicense').onclick = () => setMode('license');
       document.getElementById('tabReset').onclick = () => setMode('reset');
 
+      function showError(msg) {
+        errBox.textContent = msg;
+        errBox.classList.add('show');
+      }
+
       async function run() {
+        errBox.classList.remove('show');
         const hwid = document.getElementById('hwid').value.trim();
+        const pem = document.getElementById('privKey').value.trim();
         if (!hwid) return;
+        if (!pem.includes('BEGIN PRIVATE KEY')) {
+          showError('Paste the vendor private key PEM (from generate-keys.cjs) first.');
+          return;
+        }
+        if (!window.crypto || !window.crypto.subtle) {
+          showError('Web Crypto API unavailable in this browser. Use node activator.cjs instead.');
+          return;
+        }
+        let key;
+        try {
+          key = await importPrivateKey(pem);
+        } catch (e) {
+          showError('Could not read that private key (' + (e && e.message ? e.message : e) + '). Use node activator.cjs instead.');
+          return;
+        }
         const duration = document.getElementById('duration').value;
-        document.getElementById('licenseKey').textContent = await licenseKeyFor(hwid, duration);
-        document.getElementById('durationLabel').textContent = 'Expiration: ' + (DURATIONS[duration] || duration);
-        document.getElementById('resetCode').textContent = await resetCodeFor(hwid);
+        try {
+          document.getElementById('licenseKey').textContent = await licenseKeyFor(key, hwid, duration);
+          document.getElementById('durationLabel').textContent = 'Expiration: ' + (DURATIONS[duration] || duration);
+          document.getElementById('resetCode').textContent = await resetCodeFor(key, hwid);
+        } catch (e) {
+          showError('Ed25519 signing failed in this browser (' + (e && e.message ? e.message : e) + '). Use node activator.cjs instead.');
+          return;
+        }
         rowLicense.style.display = mode === 'reset' ? 'none' : 'block';
         rowReset.style.display = mode === 'license' ? 'none' : 'block';
         out.classList.add('show');

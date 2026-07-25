@@ -11,7 +11,7 @@ import { publicApi } from '../api';
 import { isNativeApp, setStoredServerUrl, getStoredServerUrl } from '../config';
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, completeTotpLogin } = useAuth();
   const { company } = useCompany();
   const nav = useNavigate();
   const [username, setUsername] = useState('');
@@ -19,6 +19,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+  const [pendingToken, setPendingToken] = useState('');
   const businessName = company?.name?.trim() || BRAND_SHORT;
 
   useEffect(() => {
@@ -30,8 +31,12 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      await login(username, password);
-      nav('/');
+      const result = await login(username, password);
+      if (result.requiresTotp) {
+        setPendingToken(result.pendingToken);
+      } else {
+        nav('/');
+      }
     } catch (err: any) {
       const apiMsg = err?.response?.data?.error;
       if (apiMsg) setError(apiMsg);
@@ -84,7 +89,19 @@ export default function Login() {
             </div>
 
             <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-5 sm:p-8 md:p-10">
-              {!forgotOpen ? (
+              {pendingToken ? (
+                <TotpStepForm
+                  pendingToken={pendingToken}
+                  onBack={() => {
+                    setPendingToken('');
+                    setPassword('');
+                  }}
+                  onSubmit={async (code) => {
+                    await completeTotpLogin(pendingToken, code);
+                    nav('/');
+                  }}
+                />
+              ) : !forgotOpen ? (
                 <>
                   <div className="mb-6 sm:mb-8 min-w-0">
                     <h2
@@ -299,6 +316,74 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
       <p className="text-xs text-slate-400 mt-6 text-center">
         After reset, sign in with username <span className="font-medium text-slate-500">{defaultUser}</span> and the restored password from your vendor.
       </p>
+    </div>
+  );
+}
+
+function TotpStepForm({
+  pendingToken,
+  onBack,
+  onSubmit,
+}: {
+  pendingToken: string;
+  onBack: () => void;
+  onSubmit: (code: string) => Promise<void>;
+}) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingToken) return;
+    setError('');
+    setLoading(true);
+    try {
+      await onSubmit(code.trim());
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Invalid code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <button type="button" onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
+        <ArrowLeft size={16} /> Back to sign in
+      </button>
+
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+          <Shield size={22} className="text-brand-500" />
+          Two-factor authentication
+        </h2>
+        <p className="text-slate-500 text-sm mt-1 leading-relaxed">
+          Enter the 6-digit code from your authenticator app, or one of your backup codes.
+        </p>
+      </div>
+
+      <form onSubmit={submit} className="space-y-4">
+        <FormField label="Authentication code">
+          <input
+            className="input font-mono text-lg tracking-widest text-center"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="123456"
+            inputMode="text"
+            autoFocus
+            maxLength={11}
+          />
+        </FormField>
+
+        {error && (
+          <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-4 py-3">{error}</div>
+        )}
+
+        <button type="submit" disabled={loading || !code.trim()} className="btn-primary w-full py-3">
+          {loading ? <Loader2 size={18} className="animate-spin" /> : 'Verify & sign in'}
+        </button>
+      </form>
     </div>
   );
 }

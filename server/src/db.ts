@@ -129,6 +129,19 @@ export function initSchema() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT,
+      role TEXT,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      status_code INTEGER,
+      ip TEXT,
+      body_summary TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS company (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       name TEXT,
@@ -447,6 +460,15 @@ export function migrate() {
 
   if (!columnExists('transactions', 'receipt_json')) {
     db.exec('ALTER TABLE transactions ADD COLUMN receipt_json TEXT');
+  }
+
+  const userCols: [string, string][] = [
+    ['totp_secret', 'TEXT'],
+    ['totp_enabled', 'INTEGER DEFAULT 0'],
+    ['totp_backup_codes', 'TEXT'],
+  ];
+  for (const [col, type] of userCols) {
+    if (!columnExists('users', col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
   }
 }
 

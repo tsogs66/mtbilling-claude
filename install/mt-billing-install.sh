@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / Pa-North
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # Guest install script — executed inside the LXC by community-scripts build.func
 # Keep in sync with the embedded block in ct/mt-billing.sh (run scripts/sync-proxmox-embed.sh).
@@ -15,7 +15,7 @@ network_check
 update_os
 
 INSTALL_DIR="${var_install_dir:-/opt/mt-billing}"
-REPO_URL="${var_repo_url:-https://github.com/tsogs66/MT-Billing.git}"
+REPO_URL="${var_repo_url:-https://github.com/tsogs66/mtbilling-claude.git}"
 REPO_BRANCH="${var_repo_branch:-main}"
 SERVICE_USER="${var_service_user:-mtbilling}"
 API_PORT="${var_api_port:-4000}"
