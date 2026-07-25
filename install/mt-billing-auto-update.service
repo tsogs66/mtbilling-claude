@@ -1,0 +1,14 @@
+[Unit]
+Description=MT-Billing auto-update (pull when GitHub has new commits)
+Documentation=https://github.com/tsogs66/MT-Billing
+
+[Service]
+Type=oneshot
+Environment=MT_BILLING_AUTO_ONLY=1
+Environment=var_install_dir=/opt/mt-billing
+Environment=var_repo_branch=main
+ExecStart=/opt/mt-billing/install/mt-billing-update.sh --auto
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

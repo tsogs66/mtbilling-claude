@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MT-Billing Activator</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, #0f172a, #1e293b 60%, #ea580c); font-family: 'Segoe UI', system-ui, sans-serif; color: #1f2937; }
+      .card { background: #fff; width: 100%; max-width: 480px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 28px; margin: 16px; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+      .logo { width: 40px; height: 40px; border-radius: 10px; background: #f97316; color: #fff; font-weight: 700; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+      h1 { font-size: 18px; margin: 0; }
+      .sub { font-size: 12px; color: #94a3b8; }
+      label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+      input, select { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: ui-monospace, monospace; }
+      button { margin-top: 16px; width: 100%; padding: 11px; border: 0; border-radius: 10px; background: #f97316; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+      button:hover { background: #ea580c; }
+      .out { margin-top: 18px; padding: 14px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; display: none; }
+      .out.show { display: block; }
+      .row { margin-bottom: 14px; }
+      .row:last-child { margin-bottom: 0; }
+      .out .k { font-size: 12px; color: #64748b; }
+      .out .v { font-family: ui-monospace, monospace; font-size: 15px; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; word-break: break-all; }
+      .copy { margin-top: 8px; background: #0ea5e9; width: auto; padding: 8px 12px; font-size: 12px; }
+      .copy:hover { background: #0284c7; }
+      .copy.ok { background: #059669; }
+      .copy.ok:hover { background: #047857; }
+      .note { font-size: 11px; color: #94a3b8; margin-top: 16px; line-height: 1.45; }
+      .tabs { display: flex; gap: 8px; margin-top: 8px; }
+      .tab { flex: 1; background: #f1f5f9; color: #475569; margin-top: 0; }
+      .tab.active { background: #0f172a; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div>
+          <h1>MT-Billing Activator</h1>
+          <div class="sub">Vendor tool — license keys &amp; password recovery</div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button type="button" class="tab active" id="tabBoth">Both</button>
+        <button type="button" class="tab" id="tabLicense">License</button>
+        <button type="button" class="tab" id="tabReset">Recovery</button>
+      </div>
+
+      <label for="hwid">Customer Hardware ID / Panel ID</label>
+      <input id="hwid" placeholder="1A2B-3C4D-5E6F-7890" autocomplete="off" spellcheck="false" />
+
+      <label for="duration">License expiration</label>
+      <select id="duration">
+        <option value="30d">30 days</option>
+        <option value="90d">90 days</option>
+        <option value="180d">6 months</option>
+        <option value="1y">1 year</option>
+        <option value="2y">2 years</option>
+        <option value="life" selected>Lifetime</option>
+      </select>
+
+      <button id="gen">Generate</button>
+
+      <div class="out" id="out">
+        <div class="row" id="rowLicense">
+          <div class="k">License Key (System → License)</div>
+          <div class="v" id="licenseKey">—</div>
+          <div class="k" id="durationLabel" style="margin-top:6px"></div>
+          <button type="button" class="copy" data-copy="licenseKey">Copy license key</button>
+        </div>
+        <div class="row" id="rowReset">
+          <div class="k">Password Reset Code (login → Forgot password)</div>
+          <div class="v" id="resetCode">—</div>
+          <button type="button" class="copy" data-copy="resetCode">Copy reset code</button>
+        </div>
+      </div>
+
+      <div class="note">
+        Runs fully offline. Duration is embedded in the license key suffix (e.g. <code>-1Y</code>, <code>-LIFE</code>).
+        Must match <code>server/src/panelId.ts</code>.
+      </div>
+    </div>
+
+    <script>
+      const LICENSE_SECRET = 'MT-BILLING-LICENSE-2026';
+      const PASSWORD_RESET_SECRET = 'MT-BILLING-PASSWORD-RESET-2026';
+      const DURATIONS = {
+        '30d': '30 days', '90d': '90 days', '180d': '6 months',
+        '1y': '1 year', '2y': '2 years', 'life': 'Lifetime'
+      };
+
+      function normalizeCode(k) {
+        return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      }
+
+      async function hmacHex(secret, message) {
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+        return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+      }
+
+      async function licenseKeyFor(hwid, duration) {
+        const dur = DURATIONS[duration] ? duration : 'life';
+        const hex = await hmacHex(LICENSE_SECRET, normalizeCode(hwid) + '|' + dur);
+        return hex.slice(0, 5) + '-' + hex.slice(5, 10) + '-' + hex.slice(10, 15) + '-' + hex.slice(15, 20) + '-' + dur.toUpperCase();
+      }
+
+      async function resetCodeFor(hwid) {
+        const hex = await hmacHex(PASSWORD_RESET_SECRET, normalizeCode(hwid));
+        return 'RST-' + hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16);
+      }
+
+      let mode = 'both';
+      const out = document.getElementById('out');
+      const rowLicense = document.getElementById('rowLicense');
+      const rowReset = document.getElementById('rowReset');
+
+      function setMode(m) {
+        mode = m;
+        document.getElementById('tabBoth').classList.toggle('active', m === 'both');
+        document.getElementById('tabLicense').classList.toggle('active', m === 'license');
+        document.getElementById('tabReset').classList.toggle('active', m === 'reset');
+      }
+      document.getElementById('tabBoth').onclick = () => setMode('both');
+      document.getElementById('tabLicense').onclick = () => setMode('license');
+      document.getElementById('tabReset').onclick = () => setMode('reset');
+
+      async function run() {
+        const hwid = document.getElementById('hwid').value.trim();
+        if (!hwid) return;
+        const duration = document.getElementById('duration').value;
+        document.getElementById('licenseKey').textContent = await licenseKeyFor(hwid, duration);
+        document.getElementById('durationLabel').textContent = 'Expiration: ' + (DURATIONS[duration] || duration);
+        document.getElementById('resetCode').textContent = await resetCodeFor(hwid);
+        rowLicense.style.display = mode === 'reset' ? 'none' : 'block';
+        rowReset.style.display = mode === 'license' ? 'none' : 'block';
+        out.classList.add('show');
+      }
+
+      async function copyToClipboard(text) {
+        const value = String(text || '');
+        if (!value || value === '—') return false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+          }
+        } catch (_) { /* fall through */ }
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = value;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          ta.setSelectionRange(0, value.length);
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          return ok;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      document.getElementById('gen').addEventListener('click', run);
+      document.getElementById('hwid').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+      document.querySelectorAll('[data-copy]').forEach((btn) => {
+        const label = btn.textContent;
+        btn.addEventListener('click', async () => {
+          const el = document.getElementById(btn.getAttribute('data-copy'));
+          if (!el) return;
+          const ok = await copyToClipboard(el.textContent);
+          if (!ok) return;
+          btn.textContent = 'Copied';
+          btn.classList.add('ok');
+          setTimeout(() => {
+            btn.textContent = label;
+            btn.classList.remove('ok');
+          }, 2000);
+        });
+      });
+    </script>
+  </body>
+</html>

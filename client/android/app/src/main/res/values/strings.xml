@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MT-Billing</string>
+    <string name="title_activity_main">MT-Billing</string>
+    <string name="package_name">com.tsogs.mtbilling</string>
+    <string name="custom_url_scheme">com.tsogs.mtbilling</string>
+</resources>

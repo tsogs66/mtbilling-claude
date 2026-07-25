@@ -1,0 +1,26 @@
+{
+  "name": "mt-billing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mikrotik ISP Billing, Monitoring and Commisioning Software. Created by: ts0gs, version 1.0.0",
+  "scripts": {
+    "postinstall": "npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "lint": "npm --prefix client run lint",
+    "start": "npm --prefix server run start",
+    "android:sync": "npm --prefix client run cap:sync",
+    "android:open": "npm --prefix client run cap:open",
+    "flash:rpi": "bash scripts/build-rpi-img.sh",
+    "flash:opi": "bash scripts/build-opi-img.sh",
+    "flash:opi-one": "bash scripts/build-opi-one-img.sh",
+    "flash:pc": "bash scripts/build-pc-img.sh",
+    "flash:pc-usb": "bash scripts/build-pc-usb-img.sh",
+    "flash:all": "bash scripts/build-all-flash-images.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

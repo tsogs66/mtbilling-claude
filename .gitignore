@@ -1,0 +1,25 @@
+activator/dist/
+activator/keys/
+*.pem
+build/
+coverage/
+dist/
+.DS_Store
+.env
+*.log
+node_modules/
+server/data/backups/
+server/data/*.db
+server/data/*.db-*
+server/data/pay-proofs/
+server/data/.jwt-secret
+*.sqlite
+*.sqlite3
+*.db
+*.tsbuildinfo
+
+# Capacitor / Android local tooling
+client/android/local.properties
+client/android/.idea/
+client/android/.gradle/
+client/android/**/build/

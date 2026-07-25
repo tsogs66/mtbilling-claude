@@ -1,0 +1,19 @@
+[Unit]
+Description=MT-Billing panel update (triggered from Application Updater UI)
+Documentation=https://github.com/tsogs66/MT-Billing
+# Do not require the API — this unit stops/restarts it
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=5
+Environment=var_install_dir=/opt/mt-billing
+Environment=var_repo_branch=main
+Environment=MT_BILLING_AUTO_ONLY=0
+ExecStart=/bin/bash /opt/mt-billing/install/mt-billing-update.sh
+# Keep logs for the panel / journalctl
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
