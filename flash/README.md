@@ -1,7 +1,7 @@
 # Flash images (Raspberry Pi, Orange Pi & PC)
 
 Separate disk images — **one per board/platform**. Download from the
-[flash images release](https://github.com/tsogs66/MT-Billing/releases/tag/sbc-flash-images)
+[flash images release](https://github.com/tsogs66/mtbilling-claude/releases/tag/sbc-flash-images)
 or build locally, then flash with **Balena Etcher** or **Rufus** (DD Image mode).
 
 | Platform | Build command | Output files |
