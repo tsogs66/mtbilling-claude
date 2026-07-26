@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun, Radar } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun, Sparkles } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
-import {
-  fetchCurrentWeather, weatherCategory, fetchRadarFrames,
-  type WeatherNow, type WeatherCategory, type RadarFrame,
-} from '../lib/weather';
+import { fetchCurrentWeather, weatherCategory, type WeatherNow, type WeatherCategory } from '../lib/weather';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -387,6 +384,75 @@ function equipIcon(name: string, kind: string, active = false, online?: boolean 
   return napIcon(name, active);
 }
 
+/**
+ * Full-map weather simulation — a plain screen-space overlay, not tied to
+ * map coordinates/zoom, so (unlike a tiled radar image) it never goes blank
+ * or misaligned as the map is panned/zoomed.
+ */
+function MapWeatherOverlay({ category }: { category: WeatherCategory }) {
+  const rand = (min: number, max: number) => min + Math.random() * (max - min);
+  const drops = useMemo(
+    () => Array.from({ length: 40 }, () => ({ left: rand(0, 100), delay: rand(0, 1.5), duration: rand(0.7, 1.3) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [category]
+  );
+  const flakes = useMemo(
+    () => Array.from({ length: 28 }, () => ({ left: rand(0, 100), delay: rand(0, 4), duration: rand(3.5, 6), size: rand(3, 6) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [category]
+  );
+
+  if (category === 'rain' || category === 'storm') {
+    return (
+      <div className="map-weatherfx-layer" aria-hidden>
+        {drops.map((p, i) => (
+          <span key={i} className="mapfx-drop" style={{ left: `${p.left}%`, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s` }} />
+        ))}
+        {category === 'storm' && <span className="mapfx-flash" />}
+      </div>
+    );
+  }
+  if (category === 'snow') {
+    return (
+      <div className="map-weatherfx-layer" aria-hidden>
+        {flakes.map((p, i) => (
+          <span
+            key={i}
+            className="mapfx-flake"
+            style={{ left: `${p.left}%`, width: p.size, height: p.size, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s` }}
+          />
+        ))}
+      </div>
+    );
+  }
+  if (category === 'clear') {
+    return (
+      <div className="map-weatherfx-layer" aria-hidden>
+        <span className="mapfx-sunburst" />
+      </div>
+    );
+  }
+  if (category === 'cloud') {
+    return (
+      <div className="map-weatherfx-layer" aria-hidden>
+        <span className="mapfx-cloud mapfx-cloud-1" />
+        <span className="mapfx-cloud mapfx-cloud-2" />
+        <span className="mapfx-cloud mapfx-cloud-3" />
+      </div>
+    );
+  }
+  if (category === 'fog') {
+    return (
+      <div className="map-weatherfx-layer" aria-hidden>
+        <span className="mapfx-fogband mapfx-fogband-1" />
+        <span className="mapfx-fogband mapfx-fogband-2" />
+        <span className="mapfx-fogband mapfx-fogband-3" />
+      </div>
+    );
+  }
+  return null;
+}
+
 function FitBounds({ points }: { points: [number, number][] }) {
   const map = useMap();
   const fitted = useRef(false);
@@ -633,34 +699,25 @@ export default function ClientsMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weatherOn, JSON.stringify(weatherTargets)]);
 
-  /** Animated precipitation radar loop (RainViewer) — off by default, opt-in via the toolbar. */
-  const [radarOn, setRadarOn] = useState(false);
-  const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
-  const [radarIdx, setRadarIdx] = useState(0);
-  useEffect(() => {
-    if (!radarOn) return;
-    let cancelled = false;
-    fetchRadarFrames().then((frames) => {
-      if (cancelled) return;
-      setRadarFrames(frames);
-      setRadarIdx(Math.max(0, frames.length - 1));
-    });
-    const refresh = setInterval(() => {
-      fetchRadarFrames().then((frames) => !cancelled && setRadarFrames(frames));
-    }, 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(refresh);
-    };
-  }, [radarOn]);
-  useEffect(() => {
-    if (!radarOn || radarFrames.length === 0) return;
-    const t = setInterval(() => {
-      setRadarIdx((i) => (i + 1) % radarFrames.length);
-    }, 700);
-    return () => clearInterval(t);
-  }, [radarOn, radarFrames.length]);
-  const radarFrame = radarFrames[radarIdx];
+  /**
+   * Full-map weather simulation — off by default, opt-in via the toolbar.
+   * Unlike a tiled radar image, this is a plain screen-space overlay (not
+   * georeferenced), so it has no native zoom level and never breaks or goes
+   * blank as the map is zoomed in/out over an OLT.
+   */
+  const [weatherFxOn, setWeatherFxOn] = useState(false);
+  const dominantWeatherCategory = useMemo<WeatherCategory | null>(() => {
+    const counts: Partial<Record<WeatherCategory, number>> = {};
+    for (const w of Object.values(weather)) {
+      if (!w) continue;
+      const cat = weatherCategory(w.code);
+      counts[cat] = (counts[cat] || 0) + 1;
+    }
+    const entries = Object.entries(counts) as [WeatherCategory, number][];
+    if (entries.length === 0) return null;
+    entries.sort((a, b) => b[1] - a[1]);
+    return entries[0][0];
+  }, [weather]);
 
   /** Topology-valid "From" options for the selected cable route type. */
   const routeFromOptions = useMemo(() => {
@@ -945,11 +1002,11 @@ export default function ClientsMap() {
             </button>
             <button
               type="button"
-              title="Animate a live precipitation radar loop over the map"
-              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${radarOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
-              onClick={() => setRadarOn((v) => !v)}
+              title="Simulate the current weather (rain/snow/sun/clouds/fog) across the whole map"
+              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${weatherFxOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              onClick={() => setWeatherFxOn((v) => !v)}
             >
-              <Radar size={15} /> Radar
+              <Sparkles size={15} /> Weather FX
             </button>
             <div className="relative">
               <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
@@ -1264,10 +1321,10 @@ export default function ClientsMap() {
             <Maximize2 size={13} /> Fullscreen
           </button>
 
-          {radarOn && (
+          {weatherFxOn && dominantWeatherCategory && (
             <div className="absolute top-3 left-3 z-[500] bg-slate-900/85 border border-white/20 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center gap-1.5 shadow-sm">
-              <Radar size={13} className="text-sky-400" />
-              {radarFrame ? `Radar ${new Date(radarFrame.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Radar loading…'}
+              <Sparkles size={13} className="text-sky-400" />
+              Simulated {dominantWeatherCategory}
             </div>
           )}
 
@@ -1287,15 +1344,6 @@ export default function ClientsMap() {
               maxZoom={22}
               maxNativeZoom={19}
             />
-            {radarOn && radarFrame && (
-              <TileLayer
-                key="rainviewer-radar"
-                attribution="Radar &copy; RainViewer"
-                url={radarFrame.tileUrl}
-                opacity={0.55}
-                zIndex={410}
-              />
-            )}
             <FitBounds points={allPoints} />
             <MapDrawClicks active={drawMode} onAdd={(lat, lng) => setDrawPoints((p) => [...p, [lat, lng]])} />
 
@@ -1462,6 +1510,8 @@ export default function ClientsMap() {
               );
             })}
           </MapContainer>
+
+          {weatherFxOn && dominantWeatherCategory && <MapWeatherOverlay category={dominantWeatherCategory} />}
         </div>
       </div>
 

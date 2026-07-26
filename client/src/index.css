@@ -1430,6 +1430,146 @@ body {
   0%, 88%, 100% { opacity: 0; }
   90%, 94% { opacity: 0.85; }
 }
+
+/* Full-map weather simulation — screen-space overlay, not a georeferenced
+   tile layer, so it has no native zoom level and never breaks/goes blank
+   as the map is panned or zoomed. */
+.map-weatherfx-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 450;
+}
+.mapfx-drop {
+  position: absolute;
+  top: -5%;
+  width: 2px;
+  height: 3.5%;
+  min-height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(rgba(186, 230, 253, 0.9), rgba(186, 230, 253, 0));
+  animation-name: mapfx-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes mapfx-fall {
+  0% { top: -5%; opacity: 0; }
+  10% { opacity: 0.9; }
+  95% { opacity: 0.9; }
+  100% { top: 108%; opacity: 0; }
+}
+.mapfx-flake {
+  position: absolute;
+  top: -4%;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.85);
+  animation-name: mapfx-snowfall;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+@keyframes mapfx-snowfall {
+  0% { top: -4%; transform: translateX(0); opacity: 0; }
+  10% { opacity: 0.95; }
+  50% { transform: translateX(14px); }
+  90% { opacity: 0.95; }
+  100% { top: 106%; transform: translateX(-10px); opacity: 0; }
+}
+.mapfx-sunburst {
+  position: absolute;
+  top: 6%;
+  right: 8%;
+  width: 130px;
+  height: 130px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(253, 224, 71, 0.55) 0%, rgba(253, 224, 71, 0.18) 55%, transparent 75%);
+  animation: mapfx-sun-pulse 4s ease-in-out infinite;
+  filter: blur(1px);
+}
+@keyframes mapfx-sun-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+.mapfx-cloud {
+  position: absolute;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.5);
+  filter: blur(2px);
+  animation-name: mapfx-cloud-drift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+.mapfx-cloud-1 {
+  top: 10%;
+  width: 160px;
+  height: 46px;
+  animation-duration: 42s;
+}
+.mapfx-cloud-2 {
+  top: 28%;
+  width: 110px;
+  height: 34px;
+  animation-duration: 55s;
+  animation-delay: -14s;
+  opacity: 0.8;
+}
+.mapfx-cloud-3 {
+  top: 4%;
+  width: 90px;
+  height: 28px;
+  animation-duration: 65s;
+  animation-delay: -30s;
+  opacity: 0.65;
+}
+@keyframes mapfx-cloud-drift {
+  0% { left: -20%; }
+  100% { left: 110%; }
+}
+.mapfx-fogband {
+  position: absolute;
+  left: -10%;
+  width: 120%;
+  height: 14%;
+  min-height: 30px;
+  border-radius: 9999px;
+  background: rgba(226, 232, 240, 0.4);
+  filter: blur(6px);
+  animation-name: mapfx-fog-drift;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.mapfx-fogband-1 {
+  top: 15%;
+  animation-duration: 14s;
+}
+.mapfx-fogband-2 {
+  top: 45%;
+  animation-duration: 18s;
+  animation-delay: -6s;
+  opacity: 0.7;
+}
+.mapfx-fogband-3 {
+  top: 72%;
+  animation-duration: 16s;
+  animation-delay: -3s;
+  opacity: 0.6;
+}
+@keyframes mapfx-fog-drift {
+  0%, 100% { transform: translateX(-4%); opacity: 0.5; }
+  50% { transform: translateX(4%); opacity: 0.85; }
+}
+.mapfx-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(250, 204, 21, 0.35);
+  animation: mapfx-flash 5s ease-in-out infinite;
+}
+@keyframes mapfx-flash {
+  0%, 90%, 100% { opacity: 0; }
+  92%, 95% { opacity: 1; }
+}
+
 .map-onu-round {
   display: inline-flex;
   align-items: center;
