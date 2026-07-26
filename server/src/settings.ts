@@ -50,7 +50,7 @@ settingsRouter.put('/settings/app', (req, res) => {
     cur[f] = v;
   }
   // Normalize theme values
-  const theme = ['light', 'dark', 'onepiece'].includes(cur.theme) ? cur.theme : 'light';
+  const theme = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'].includes(cur.theme) ? cur.theme : 'light';
   db.prepare(
     `UPDATE app_settings SET theme=@theme, language=@language, currency=@currency,
        ngrok_enabled=@ngrok_enabled, ngrok_authtoken=@ngrok_authtoken, ngrok_region=@ngrok_region,

@@ -130,6 +130,24 @@ body {
   [data-theme='onepiece'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
     background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, var(--card-bg, #1e1b4b));
   }
+  [data-theme='steampunk'] .data-table--freeze-first th.data-table-freeze-cell {
+    background-color: color-mix(in srgb, var(--card-bg, #2b1e14) 90%, #fff 10%);
+  }
+  [data-theme='steampunk'] .data-table--freeze-first td.data-table-freeze-cell {
+    background-color: var(--card-bg, #2b1e14);
+  }
+  [data-theme='steampunk'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
+    background-color: color-mix(in srgb, var(--brand, #c9812a) 10%, var(--card-bg, #2b1e14));
+  }
+  [data-theme='isptech'] .data-table--freeze-first th.data-table-freeze-cell {
+    background-color: color-mix(in srgb, var(--card-bg, #081420) 90%, #fff 10%);
+  }
+  [data-theme='isptech'] .data-table--freeze-first td.data-table-freeze-cell {
+    background-color: var(--card-bg, #081420);
+  }
+  [data-theme='isptech'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
+    background-color: color-mix(in srgb, var(--brand, #2dd4bf) 10%, var(--card-bg, #081420));
+  }
   .card-header {
     flex-direction: column;
     align-items: flex-start;
@@ -631,6 +649,272 @@ body {
   color: #e8b923 !important;
 }
 
+/* ── Steampunk theme (brass / copper / engraved leather) ── */
+[data-theme='steampunk'] {
+  color-scheme: dark;
+  --brand: #c9812a;
+  --brand-glow: rgba(201, 129, 42, 0.4);
+  --page-bg: #1b140d;
+  --page-fg: #ead9c0;
+  --card-bg: rgba(43, 30, 20, 0.92);
+  --card-border: rgba(184, 115, 51, 0.35);
+  --modal-bg: rgba(30, 20, 13, 0.97);
+  --modal-border: rgba(184, 115, 51, 0.4);
+  --sidebar-bg: #140d08;
+  --sidebar-fg: #d9c4a0;
+  --sidebar-border: rgba(184, 115, 51, 0.3);
+  --sidebar-muted: #a68a63;
+  --sidebar-hover-bg: rgba(184, 115, 51, 0.1);
+  --sidebar-active-bg: rgba(201, 129, 42, 0.18);
+  --sidebar-active-fg: #f0c987;
+  --sidebar-icon-bg: rgba(30, 20, 13, 0.75);
+  --bottom-nav-bg: rgba(27, 20, 13, 0.96);
+  --bottom-nav-border: rgba(184, 115, 51, 0.3);
+  --bottom-nav-fg: #a68a63;
+  --bottom-nav-active-fg: #f0c987;
+  --bottom-nav-sheet-bg: rgba(20, 13, 8, 0.98);
+  --topbar-bg: rgba(30, 20, 13, 0.92);
+  --topbar-border: rgba(184, 115, 51, 0.3);
+  --topbar-fg: #ead9c0;
+  --topbar-muted: #a68a63;
+  --topbar-pill-bg: rgba(43, 30, 20, 0.75);
+  --topbar-pill-border: rgba(184, 115, 51, 0.35);
+  --topbar-pill-hover-border: rgba(201, 129, 42, 0.55);
+  --topbar-icon-hover-bg: rgba(184, 115, 51, 0.12);
+  --topbar-menu-bg: rgba(27, 20, 13, 0.98);
+  --topbar-menu-border: rgba(184, 115, 51, 0.35);
+  --topbar-divider: rgba(184, 115, 51, 0.28);
+  --topbar-avatar-bg: linear-gradient(145deg, #3d2a18, #140d08);
+  --topbar-avatar-fg: #f0c987;
+}
+[data-theme='steampunk'] body {
+  background-color: #1b140d;
+  background-image:
+    radial-gradient(ellipse at 12% 0%, rgba(201, 129, 42, 0.16) 0%, transparent 45%),
+    radial-gradient(ellipse at 88% 100%, rgba(139, 69, 19, 0.16) 0%, transparent 45%),
+    repeating-linear-gradient(135deg, rgba(184, 115, 51, 0.035) 0px, rgba(184, 115, 51, 0.035) 2px, transparent 2px, transparent 14px);
+  color: #ead9c0;
+}
+[data-theme='steampunk'] .theme-main,
+[data-theme='steampunk'] .bg-slate-100,
+[data-theme='steampunk'] .bg-mesh-light {
+  background-color: #1b140d !important;
+  background-image:
+    radial-gradient(ellipse at 12% 0%, rgba(201, 129, 42, 0.14) 0%, transparent 45%),
+    radial-gradient(ellipse at 88% 100%, rgba(139, 69, 19, 0.14) 0%, transparent 45%),
+    repeating-linear-gradient(135deg, rgba(184, 115, 51, 0.03) 0px, rgba(184, 115, 51, 0.03) 2px, transparent 2px, transparent 14px) !important;
+}
+[data-theme='steampunk'] .theme-sidebar,
+[data-theme='steampunk'] aside.theme-sidebar {
+  background: linear-gradient(180deg, #140d08 0%, #2b1e14 50%, #1b140d 100%) !important;
+  border-right-color: rgba(184, 115, 51, 0.3) !important;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  color: #d9c4a0;
+}
+[data-theme='steampunk'] .theme-sidebar-banner {
+  border-color: rgba(201, 129, 42, 0.35);
+  background: rgba(184, 115, 51, 0.14);
+  color: #f0c987;
+}
+[data-theme='steampunk'] .card,
+[data-theme='steampunk'] .card-interactive {
+  background: linear-gradient(145deg, rgba(43, 30, 20, 0.94), rgba(30, 20, 13, 0.9)) !important;
+  border-color: rgba(184, 115, 51, 0.32) !important;
+  box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(201, 129, 42, 0.08);
+  color: #ead9c0;
+}
+[data-theme='steampunk'] .glass {
+  background: rgba(30, 20, 13, 0.85) !important;
+  border-color: rgba(184, 115, 51, 0.25) !important;
+}
+[data-theme='steampunk'] .theme-modal {
+  background: linear-gradient(160deg, rgba(43, 30, 20, 0.97), rgba(20, 13, 8, 0.98)) !important;
+  border-color: rgba(184, 115, 51, 0.4) !important;
+  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(201, 129, 42, 0.12);
+  color: #ead9c0;
+}
+[data-theme='steampunk'] .theme-modal-header,
+[data-theme='steampunk'] .theme-modal-footer {
+  border-color: rgba(184, 115, 51, 0.25) !important;
+  background: rgba(20, 13, 8, 0.55) !important;
+}
+[data-theme='steampunk'] .theme-modal-backdrop {
+  background: rgba(15, 10, 6, 0.75) !important;
+}
+[data-theme='steampunk'] .btn-primary,
+[data-theme='steampunk'] button.btn-primary {
+  background: linear-gradient(135deg, #b8733a, #e8b923) !important;
+  border: none;
+  color: #1b140d !important;
+}
+[data-theme='steampunk'] .input,
+[data-theme='steampunk'] input.input,
+[data-theme='steampunk'] select.input,
+[data-theme='steampunk'] textarea.input {
+  background: rgba(20, 13, 8, 0.85) !important;
+  border-color: rgba(184, 115, 51, 0.3) !important;
+  color: #ead9c0 !important;
+}
+[data-theme='steampunk'] .text-slate-900,
+[data-theme='steampunk'] .text-slate-800,
+[data-theme='steampunk'] .text-slate-700 {
+  color: #ead9c0 !important;
+}
+[data-theme='steampunk'] .text-slate-600,
+[data-theme='steampunk'] .text-slate-500 {
+  color: #a68a63 !important;
+}
+[data-theme='steampunk'] .border-slate-200,
+[data-theme='steampunk'] .border-slate-100 {
+  border-color: rgba(184, 115, 51, 0.25) !important;
+}
+[data-theme='steampunk'] .bg-white,
+[data-theme='steampunk'] .bg-white\/90,
+[data-theme='steampunk'] .bg-white\/95,
+[data-theme='steampunk'] .bg-slate-50 {
+  background-color: rgba(43, 30, 20, 0.92) !important;
+}
+[data-theme='steampunk'] .text-brand-600,
+[data-theme='steampunk'] .text-brand-500,
+[data-theme='steampunk'] .text-brand-400 {
+  color: #d99a3f !important;
+}
+
+/* ── ISP Tech theme (fiber-grid NOC console) ── */
+[data-theme='isptech'] {
+  color-scheme: dark;
+  --brand: #2dd4bf;
+  --brand-glow: rgba(45, 212, 191, 0.4);
+  --page-bg: #050b14;
+  --page-fg: #d6f5f0;
+  --card-bg: rgba(8, 20, 32, 0.92);
+  --card-border: rgba(45, 212, 191, 0.25);
+  --modal-bg: rgba(5, 14, 24, 0.97);
+  --modal-border: rgba(45, 212, 191, 0.32);
+  --sidebar-bg: #030810;
+  --sidebar-fg: #b8ece4;
+  --sidebar-border: rgba(45, 212, 191, 0.28);
+  --sidebar-muted: #5b8a89;
+  --sidebar-hover-bg: rgba(45, 212, 191, 0.08);
+  --sidebar-active-bg: rgba(45, 212, 191, 0.16);
+  --sidebar-active-fg: #5eead4;
+  --sidebar-icon-bg: rgba(5, 14, 24, 0.75);
+  --bottom-nav-bg: rgba(5, 14, 24, 0.96);
+  --bottom-nav-border: rgba(45, 212, 191, 0.25);
+  --bottom-nav-fg: #5b8a89;
+  --bottom-nav-active-fg: #5eead4;
+  --bottom-nav-sheet-bg: rgba(3, 8, 16, 0.98);
+  --topbar-bg: rgba(5, 14, 24, 0.9);
+  --topbar-border: rgba(45, 212, 191, 0.25);
+  --topbar-fg: #d6f5f0;
+  --topbar-muted: #5b8a89;
+  --topbar-pill-bg: rgba(8, 20, 32, 0.75);
+  --topbar-pill-border: rgba(45, 212, 191, 0.3);
+  --topbar-pill-hover-border: rgba(45, 212, 191, 0.55);
+  --topbar-icon-hover-bg: rgba(45, 212, 191, 0.1);
+  --topbar-menu-bg: rgba(5, 14, 24, 0.98);
+  --topbar-menu-border: rgba(45, 212, 191, 0.3);
+  --topbar-divider: rgba(45, 212, 191, 0.25);
+  --topbar-avatar-bg: linear-gradient(145deg, #0b2b33, #030810);
+  --topbar-avatar-fg: #5eead4;
+}
+[data-theme='isptech'] body {
+  background-color: #050b14;
+  background-image:
+    radial-gradient(circle at 18% 12%, rgba(45, 212, 191, 0.16) 0%, transparent 42%),
+    radial-gradient(circle at 82% 88%, rgba(34, 211, 238, 0.12) 0%, transparent 42%),
+    linear-gradient(rgba(45, 212, 191, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 212, 191, 0.05) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px, 28px 28px;
+  color: #d6f5f0;
+}
+[data-theme='isptech'] .theme-main,
+[data-theme='isptech'] .bg-slate-100,
+[data-theme='isptech'] .bg-mesh-light {
+  background-color: #050b14 !important;
+  background-image:
+    radial-gradient(circle at 18% 12%, rgba(45, 212, 191, 0.13) 0%, transparent 42%),
+    radial-gradient(circle at 82% 88%, rgba(34, 211, 238, 0.1) 0%, transparent 42%),
+    linear-gradient(rgba(45, 212, 191, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 212, 191, 0.045) 1px, transparent 1px) !important;
+  background-size: auto, auto, 28px 28px, 28px 28px !important;
+}
+[data-theme='isptech'] .theme-sidebar,
+[data-theme='isptech'] aside.theme-sidebar {
+  background: linear-gradient(180deg, #030810 0%, #081b28 50%, #050b14 100%) !important;
+  border-right-color: rgba(45, 212, 191, 0.28) !important;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  color: #b8ece4;
+}
+[data-theme='isptech'] .theme-sidebar-banner {
+  border-color: rgba(45, 212, 191, 0.35);
+  background: rgba(45, 212, 191, 0.1);
+  color: #99f6e4;
+}
+[data-theme='isptech'] .card,
+[data-theme='isptech'] .card-interactive {
+  background: linear-gradient(145deg, rgba(8, 20, 32, 0.94), rgba(5, 14, 24, 0.9)) !important;
+  border-color: rgba(45, 212, 191, 0.26) !important;
+  box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(45, 212, 191, 0.08);
+  color: #d6f5f0;
+}
+[data-theme='isptech'] .glass {
+  background: rgba(5, 14, 24, 0.85) !important;
+  border-color: rgba(45, 212, 191, 0.2) !important;
+}
+[data-theme='isptech'] .theme-modal {
+  background: linear-gradient(160deg, rgba(8, 24, 36, 0.97), rgba(3, 10, 18, 0.98)) !important;
+  border-color: rgba(45, 212, 191, 0.32) !important;
+  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(45, 212, 191, 0.12);
+  color: #d6f5f0;
+}
+[data-theme='isptech'] .theme-modal-header,
+[data-theme='isptech'] .theme-modal-footer {
+  border-color: rgba(45, 212, 191, 0.2) !important;
+  background: rgba(3, 10, 18, 0.55) !important;
+}
+[data-theme='isptech'] .theme-modal-backdrop {
+  background: rgba(2, 6, 12, 0.78) !important;
+}
+[data-theme='isptech'] .btn-primary,
+[data-theme='isptech'] button.btn-primary {
+  background: linear-gradient(135deg, #0891b2, #2dd4bf) !important;
+  border: none;
+  color: #04241f !important;
+}
+[data-theme='isptech'] .input,
+[data-theme='isptech'] input.input,
+[data-theme='isptech'] select.input,
+[data-theme='isptech'] textarea.input {
+  background: rgba(3, 10, 18, 0.85) !important;
+  border-color: rgba(45, 212, 191, 0.28) !important;
+  color: #d6f5f0 !important;
+}
+[data-theme='isptech'] .text-slate-900,
+[data-theme='isptech'] .text-slate-800,
+[data-theme='isptech'] .text-slate-700 {
+  color: #d6f5f0 !important;
+}
+[data-theme='isptech'] .text-slate-600,
+[data-theme='isptech'] .text-slate-500 {
+  color: #5b8a89 !important;
+}
+[data-theme='isptech'] .border-slate-200,
+[data-theme='isptech'] .border-slate-100 {
+  border-color: rgba(45, 212, 191, 0.2) !important;
+}
+[data-theme='isptech'] .bg-white,
+[data-theme='isptech'] .bg-white\/90,
+[data-theme='isptech'] .bg-white\/95,
+[data-theme='isptech'] .bg-slate-50 {
+  background-color: rgba(8, 20, 32, 0.92) !important;
+}
+[data-theme='isptech'] .text-brand-600,
+[data-theme='isptech'] .text-brand-500,
+[data-theme='isptech'] .text-brand-400 {
+  color: #2dd4bf !important;
+}
+
 /* Usage stats: selected subscriber — never use solid light fills on dark themes */
 .usage-user-btn {
   display: block;
@@ -656,21 +940,31 @@ body {
   font-weight: 700;
 }
 [data-theme='dark'] .usage-user-btn.is-selected .usage-user-name,
-[data-theme='onepiece'] .usage-user-btn.is-selected .usage-user-name {
+[data-theme='onepiece'] .usage-user-btn.is-selected .usage-user-name,
+[data-theme='steampunk'] .usage-user-btn.is-selected .usage-user-name,
+[data-theme='isptech'] .usage-user-btn.is-selected .usage-user-name {
   color: var(--sidebar-active-fg, #fdba74) !important;
 }
 [data-theme='dark'] .data-table tbody tr:hover,
-[data-theme='onepiece'] .data-table tbody tr:hover {
+[data-theme='onepiece'] .data-table tbody tr:hover,
+[data-theme='steampunk'] .data-table tbody tr:hover,
+[data-theme='isptech'] .data-table tbody tr:hover {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, transparent) !important;
 }
 [data-theme='dark'] .bg-brand-50,
 [data-theme='onepiece'] .bg-brand-50,
+[data-theme='steampunk'] .bg-brand-50,
+[data-theme='isptech'] .bg-brand-50,
 [data-theme='dark'] .bg-brand-50\/30,
-[data-theme='onepiece'] .bg-brand-50\/30 {
+[data-theme='onepiece'] .bg-brand-50\/30,
+[data-theme='steampunk'] .bg-brand-50\/30,
+[data-theme='isptech'] .bg-brand-50\/30 {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 16%, transparent) !important;
 }
 [data-theme='dark'] .ring-brand-200,
-[data-theme='onepiece'] .ring-brand-200 {
+[data-theme='onepiece'] .ring-brand-200,
+[data-theme='steampunk'] .ring-brand-200,
+[data-theme='isptech'] .ring-brand-200 {
   --tw-ring-color: color-mix(in srgb, var(--brand, #fb923c) 45%, transparent) !important;
 }
 

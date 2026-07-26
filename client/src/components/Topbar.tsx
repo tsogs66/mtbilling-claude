@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown, RefreshCw, LogOut, Router as RouterIcon, Menu,
-  Sun, Moon, Anchor, Palette,
+  Sun, Moon, Anchor, Cog, Network, Palette,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useRouterDevice } from '../context/RouterContext';
@@ -15,11 +15,15 @@ const THEMES: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] 
   { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
   { key: 'dark', label: 'Dark', Icon: Moon, hint: 'Low-light operations' },
   { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Nautical map · gold & crimson' },
+  { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
+  { key: 'isptech', label: 'ISP Tech', Icon: Network, hint: 'Fiber-grid NOC console' },
 ];
 
 function ThemeIcon({ theme, size = 18 }: { theme: ThemeId; size?: number }) {
   if (theme === 'dark') return <Moon size={size} />;
   if (theme === 'onepiece') return <Anchor size={size} />;
+  if (theme === 'steampunk') return <Cog size={size} />;
+  if (theme === 'isptech') return <Network size={size} />;
   if (theme === 'light') return <Sun size={size} />;
   return <Palette size={size} />;
 }

@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-export type ThemeId = 'light' | 'dark' | 'onepiece';
+export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech';
+
+export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'];
 
 const STORAGE_KEY = 'mt_theme';
 
@@ -19,7 +21,7 @@ function applyTheme(theme: ThemeId) {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeId>(() => {
     const saved = localStorage.getItem(STORAGE_KEY) as ThemeId | null;
-    if (saved === 'light' || saved === 'dark' || saved === 'onepiece') return saved;
+    if (saved && THEME_IDS.includes(saved)) return saved;
     return 'light';
   });
 

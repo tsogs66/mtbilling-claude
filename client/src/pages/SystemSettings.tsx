@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
+  Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
 } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -9,7 +9,7 @@ import {
   StatusBadge, TabBar, Flash, LoadingPage, SettingsSection, Modal, ModalFooter, FormField,
 } from '../components/ui';
 import { api } from '../api';
-import { useTheme, type ThemeId } from '../context/ThemeContext';
+import { useTheme, THEME_IDS, type ThemeId } from '../context/ThemeContext';
 
 const TABS = [
   { key: 'panel', label: 'Panel Settings', icon: SettingsIcon },
@@ -85,6 +85,8 @@ function PanelSettings({ app, setA, save }: any) {
     { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
     { key: 'dark', label: 'Dark', Icon: Moon, hint: 'Low-light operations' },
     { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Nautical map art · gold & crimson' },
+    { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
+    { key: 'isptech', label: 'ISP Tech', Icon: Network, hint: 'Fiber-grid NOC console' },
   ];
   const selectTheme = (key: ThemeId) => {
     setA({ theme: key });
@@ -92,7 +94,7 @@ function PanelSettings({ app, setA, save }: any) {
   };
   // Sync saved theme into provider when settings load
   useEffect(() => {
-    if (app?.theme === 'light' || app?.theme === 'dark' || app?.theme === 'onepiece') {
+    if (THEME_IDS.includes(app?.theme)) {
       if (app.theme !== theme) setTheme(app.theme);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -103,7 +105,7 @@ function PanelSettings({ app, setA, save }: any) {
       <div className="space-y-5 max-w-2xl">
         <div>
           <span className="text-sm font-semibold text-slate-700 mb-1 block">Theme</span>
-          <div className="grid grid-cols-3 rounded-xl border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 rounded-xl border border-slate-200 overflow-hidden">
             {themes.map(({ key, label, Icon, hint }) => (
               <button
                 key={key}
