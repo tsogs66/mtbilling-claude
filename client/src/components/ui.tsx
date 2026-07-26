@@ -13,6 +13,7 @@ import {
   Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
   ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
+import { isNativeApp } from '../config';
 
 /** Prefer pinning username / customer / name columns on mobile (not checkbox/# columns). */
 const FREEZE_COLUMN_KEYS = [
@@ -470,8 +471,11 @@ export function DataTable({
   const tableRef = useRef<HTMLTableElement>(null);
   const [freezeLefts, setFreezeLefts] = useState<number[]>([]);
 
+  // Column freezing relies on horizontal scroll + sticky positioning, which
+  // fights the Android WebView's own scroll/fling handling (stuck/juddery
+  // columns). Skip it entirely in the native app.
   const freezeIdx = useMemo(
-    () => findFreezeColumnIndex(columns, freezeFirstColumn),
+    () => findFreezeColumnIndex(columns, freezeFirstColumn && !isNativeApp()),
     [columns, freezeFirstColumn]
   );
 

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2 } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
+import { fetchCurrentWeather, type WeatherNow } from '../lib/weather';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -289,6 +290,18 @@ function oltIcon(name: string, active = false, online?: boolean | null) {
   });
 }
 
+/** Floating current-weather chip overlaid above a server/OLT marker. */
+function weatherBadgeIcon(w: WeatherNow) {
+  return L.divIcon({
+    className: 'map-weather-marker',
+    html: `<div class="map-weather-chip" title="${escapeHtml(w.label)} · ${Math.round(w.humidityPct)}% humidity · wind ${Math.round(w.windKph)} km/h">
+      <span class="map-weather-emoji">${w.emoji}</span><span class="map-weather-temp">${Math.round(w.tempC)}°C</span>
+    </div>`,
+    iconSize: [64, 26],
+    iconAnchor: [32, 46],
+  });
+}
+
 /** NAP — fiber distribution / junction box icon */
 function napIcon(name: string, active = false) {
   const svg = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
@@ -556,6 +569,34 @@ export default function ClientsMap() {
   const olts = useMemo(() => naps.filter((n) => n.kind === 'olt'), [naps]);
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
+
+  const [weatherOn, setWeatherOn] = useState(true);
+  const [weather, setWeather] = useState<Record<string, WeatherNow | null>>({});
+  const weatherTargets = useMemo(
+    () => [
+      ...servers.map((s) => ({ key: `srv-${s.id}`, lat: s.lat, lng: s.lng })),
+      ...olts.map((o) => ({ key: `olt-${o.id}`, lat: o.lat, lng: o.lng })),
+    ],
+    [servers, olts]
+  );
+  useEffect(() => {
+    if (!weatherOn || weatherTargets.length === 0) return;
+    let cancelled = false;
+    const run = () => {
+      weatherTargets.forEach(({ key, lat, lng }) => {
+        fetchCurrentWeather(lat, lng).then((w) => {
+          if (!cancelled) setWeather((prev) => ({ ...prev, [key]: w }));
+        });
+      });
+    };
+    run();
+    const t = setInterval(run, 15 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weatherOn, JSON.stringify(weatherTargets)]);
 
   /** Topology-valid "From" options for the selected cable route type. */
   const routeFromOptions = useMemo(() => {
@@ -829,6 +870,14 @@ export default function ClientsMap() {
               onClick={() => setTopoOpen((v) => !v)}
             >
               <SlidersHorizontal size={15} /> Topology Config
+            </button>
+            <button
+              type="button"
+              title="Show current weather at each Server/OLT location"
+              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${weatherOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              onClick={() => setWeatherOn((v) => !v)}
+            >
+              <CloudSun size={15} /> Weather
             </button>
             <div className="relative">
               <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
@@ -1238,34 +1287,66 @@ export default function ClientsMap() {
               );
             })()}
 
-            {servers.map((s) => (
-              <Marker key={`srv-${s.id}`} position={[s.lat, s.lng]} icon={serverIcon(s.name, highlightChain?.serverId === s.id)}>
-                <Popup><b>{s.name}</b><br />Server</Popup>
-              </Marker>
-            ))}
+            {servers.map((s) => {
+              const w = weather[`srv-${s.id}`];
+              return (
+                <Marker key={`srv-${s.id}`} position={[s.lat, s.lng]} icon={serverIcon(s.name, highlightChain?.serverId === s.id)}>
+                  <Popup>
+                    <b>{s.name}</b><br />Server
+                    {w ? (
+                      <>
+                        <br />{w.emoji} {Math.round(w.tempC)}°C — {w.label}
+                        <br />Wind {Math.round(w.windKph)} km/h · Humidity {Math.round(w.humidityPct)}%
+                      </>
+                    ) : null}
+                  </Popup>
+                </Marker>
+              );
+            })}
 
-            {naps.map((n) => (
-              <Marker
-                key={n.id}
-                position={[n.lat, n.lng]}
-                icon={equipIcon(
-                  n.code || n.name,
-                  n.kind,
-                  highlightChain?.oltId === n.id || highlightChain?.napId === n.id,
-                  n.kind === 'olt' && n.host ? n.status === 'online' : null
-                )}
-              >
-                <Popup>
-                  <b>{n.name}</b><br />
-                  {n.kind === 'olt' ? 'OLT' : 'NAP'}
-                  {n.host ? <><br />IP: {n.host}</> : null}
-                  {n.kind === 'olt' && n.host ? (
-                    <><br />Status: <b style={{ color: n.status === 'online' ? '#16a34a' : '#dc2626' }}>{n.status === 'online' ? 'Online' : 'Offline'}</b></>
-                  ) : null}
-                  {n.vendor || n.model ? <><br />{[n.vendor, n.model].filter(Boolean).join(' · ')}</> : null}
-                </Popup>
-              </Marker>
-            ))}
+            {weatherOn && servers.map((s) => {
+              const w = weather[`srv-${s.id}`];
+              if (!w) return null;
+              return <Marker key={`srv-wx-${s.id}`} position={[s.lat, s.lng]} icon={weatherBadgeIcon(w)} interactive={false} />;
+            })}
+
+            {naps.map((n) => {
+              const w = n.kind === 'olt' ? weather[`olt-${n.id}`] : undefined;
+              return (
+                <Marker
+                  key={n.id}
+                  position={[n.lat, n.lng]}
+                  icon={equipIcon(
+                    n.code || n.name,
+                    n.kind,
+                    highlightChain?.oltId === n.id || highlightChain?.napId === n.id,
+                    n.kind === 'olt' && n.host ? n.status === 'online' : null
+                  )}
+                >
+                  <Popup>
+                    <b>{n.name}</b><br />
+                    {n.kind === 'olt' ? 'OLT' : 'NAP'}
+                    {n.host ? <><br />IP: {n.host}</> : null}
+                    {n.kind === 'olt' && n.host ? (
+                      <><br />Status: <b style={{ color: n.status === 'online' ? '#16a34a' : '#dc2626' }}>{n.status === 'online' ? 'Online' : 'Offline'}</b></>
+                    ) : null}
+                    {n.vendor || n.model ? <><br />{[n.vendor, n.model].filter(Boolean).join(' · ')}</> : null}
+                    {w ? (
+                      <>
+                        <br />{w.emoji} {Math.round(w.tempC)}°C — {w.label}
+                        <br />Wind {Math.round(w.windKph)} km/h · Humidity {Math.round(w.humidityPct)}%
+                      </>
+                    ) : null}
+                  </Popup>
+                </Marker>
+              );
+            })}
+
+            {weatherOn && olts.map((o) => {
+              const w = weather[`olt-${o.id}`];
+              if (!w) return null;
+              return <Marker key={`olt-wx-${o.id}`} position={[o.lat, o.lng]} icon={weatherBadgeIcon(w)} interactive={false} />;
+            })}
 
             {filteredClients.map((c) => {
               const state = clientState(c);
