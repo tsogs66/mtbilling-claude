@@ -5,7 +5,7 @@ import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
   Modal, ModalFooter, FormField, Card,
 } from '../components/ui';
-import { api, peso } from '../api';
+import { api, peso, currencySymbol } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair, UsagePair } from '../lib/traffic';
@@ -105,6 +105,7 @@ const SYSTEM_EXPIRE_PROFILES = ['non-payments', 'default'];
 
 export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; title: string }) {
   const [tab, setTab] = useState('users');
+  const [currency, setCurrency] = useState('PHP');
   const [users, setUsers] = useState<PUser[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [active, setActive] = useState<any[]>([]);
@@ -514,6 +515,22 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   };
 
   useEffect(() => {
+    api.get('/settings/app').then((r) => setCurrency(r.data?.currency || 'PHP')).catch(() => undefined);
+  }, []);
+
+  // Stable icon reference for the whole currency (regenerating per-row would remount it every render).
+  const CurrencyPayIcon = useMemo(() => {
+    const symbol = currencySymbol(currency);
+    return function CurrencyPayIconInner({ size = 16 }: { size?: number }) {
+      return (
+        <span style={{ fontSize: size * 0.85, lineHeight: 1 }} className="font-bold" aria-hidden>
+          {symbol}
+        </span>
+      );
+    };
+  }, [currency]);
+
+  useEffect(() => {
     // Drop previous router’s rows immediately so the UI never mixes devices.
     setUsers([]);
     setActive([]);
@@ -860,7 +877,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           <span key="due" className="text-slate-500">{u.subscriptionDue}</span>,
           <div key="a" className="flex items-center justify-end gap-1">
             <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />
-            <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
+            <IconAction icon={CurrencyPayIcon} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
             <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
             <IconAction
               icon={KeyRound}
@@ -1869,6 +1886,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [discountDays, setDiscountDays] = useState(0);
   const [sendReceipt, setSendReceipt] = useState(false);
+  const [sendSms, setSendSms] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [receiptPreview, setReceiptPreview] = useState<any | null>(null);
@@ -1878,6 +1896,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
   const total = Math.max(0, subtotal - discount);
   const hasEmail = !!user.email;
+  const hasContact = !!user.contact;
   const willRefreshSession = /non.?pay|expired|disabled/i.test(String(user.status || ''));
 
   const pay = async () => {
@@ -1891,6 +1910,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         payment_date: paymentDate,
         discount_days: discountDays,
         send_receipt: sendReceipt,
+        send_sms: sendSms,
       });
       const receipt = r.data.receipt;
       openReceiptForPrint(receipt, setReceiptPreview);
@@ -1898,7 +1918,8 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
       onPaid(
         `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +
           (bounced ? ' · MikroTik session refreshed (2s bounce)' : '') +
-          (r.data.emailed ? ' · receipt emailed' : '')
+          (r.data.emailed ? ' · receipt emailed' : '') +
+          (r.data.smsSent ? ' · SMS confirmation sent' : '')
       );
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Payment failed');
@@ -1976,6 +1997,14 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
             <span className="text-xs text-slate-400">{hasEmail ? user.email : 'No email set in account details.'}</span>
           </span>
           <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-500" disabled={!hasEmail} checked={sendReceipt && hasEmail} onChange={(e) => setSendReceipt(e.target.checked)} />
+        </label>
+
+        <label className="flex items-start justify-between gap-3">
+          <span>
+            <span className="text-sm font-medium text-slate-700 block">Send SMS confirmation</span>
+            <span className="text-xs text-slate-400">{hasContact ? user.contact : 'No phone number set in account details.'}</span>
+          </span>
+          <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-500" disabled={!hasContact} checked={sendSms && hasContact} onChange={(e) => setSendSms(e.target.checked)} />
         </label>
 
         <div className="border-t border-slate-100 pt-3 text-sm space-y-1 rounded-xl bg-slate-50 p-4">

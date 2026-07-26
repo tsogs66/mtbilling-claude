@@ -9,7 +9,10 @@ import {
   removePppActiveByName,
   buildPppSecretComment,
   ensurePppProfile,
+  scheduleExpiryOnRouter,
+  cancelExpiryScheduleOnRouter,
 } from './mikrotik.js';
+import { getSettings as getNotifySettings } from './notify.js';
 
 const SESSION_REFRESH_MS = 2000;
 
@@ -586,6 +589,44 @@ export async function bulkChangePppoeMikrotikProfiles(
   };
 }
 
+/**
+ * Provision RouterOS-side scheduler entries so grace/expiry take effect on the
+ * router itself even if this panel is offline or unreachable when they're due.
+ * Best-effort — a failure here never blocks the payment that was just recorded;
+ * the server-side poller (notify.ts executeBillingEnforcement) remains the
+ * fallback enforcement path whenever this can't reach the router right now.
+ */
+async function scheduleRouterExpiry(user: any, expirationProfile?: string | null): Promise<void> {
+  if (!user?.router_id || !user?.username || !user?.subscription_due) return;
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
+  if (!router?.host || !router?.api_user) return;
+  try {
+    const graceHours = Math.max(1, Number(getNotifySettings().autodisable_hours) || 24);
+    const dueDayUtc = Date.parse(`${String(user.subscription_due).slice(0, 10)}T00:00:00Z`);
+    if (!Number.isFinite(dueDayUtc)) return;
+    // Account remains valid through the due date; overdue clock starts at next midnight UTC
+    // (must match hoursPastDue()'s convention in notify.ts, or the router and the panel would disagree).
+    const graceAt = new Date(dueDayUtc + 24 * 3600000);
+    const disableAt = new Date(graceAt.getTime() + graceHours * 3600000);
+    const nonPaymentProfile = expirationProfile && expirationProfile !== 'default' ? expirationProfile : 'non-payments';
+    await scheduleExpiryOnRouter(router, { username: user.username, graceAt, disableAt, nonPaymentProfile });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Best-effort removal of any pending router-side grace/disable schedule for a user. */
+export async function cancelRouterExpirySchedule(user: any): Promise<void> {
+  if (!user?.router_id || !user?.username) return;
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
+  if (!router?.host || !router?.api_user) return;
+  try {
+    await cancelExpiryScheduleOnRouter(router, user.username);
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function syncUserToRouter(
   user: any,
   action: 'restore' | 'expire' | 'disable' | 'enable'
@@ -720,6 +761,13 @@ export async function recordPppoePayment(
   );
 
   const sync = await syncUserToRouter(updated, 'restore');
+
+  // Cancels any pending grace/disable schedule from before this payment and
+  // provisions a fresh one for the new due date — this is what makes "pay
+  // before it fires" work, and covers grace/expiry even if the panel is
+  // offline when they're due. Not awaited: best-effort, and a slow/unreachable
+  // router here shouldn't add latency on top of the sync call above.
+  scheduleRouterExpiry(updated, expirationProfile).catch(() => undefined);
 
   let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
   if (refreshSession && sync.ok && updated?.router_id) {

@@ -696,7 +696,7 @@ export function IconAction({
   onClick,
   tone = 'default',
 }: {
-  icon: LucideIcon;
+  icon: LucideIcon | ((props: { size?: number }) => ReactNode);
   title: string;
   onClick: () => void;
   tone?: 'default' | 'sky' | 'emerald' | 'rose' | 'brand';

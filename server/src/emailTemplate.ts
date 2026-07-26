@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { formatCurrency } from './currency.js';
 
 export type CompanyBrand = {
   name: string;
@@ -163,7 +164,7 @@ function stripTags(html: string): string {
 }
 
 function money(n: number): string {
-  return `\u20b1${Number(n || 0).toFixed(2)}`;
+  return formatCurrency(n);
 }
 
 /** HTML body for a payment receipt (placed inside branded wrapper). */

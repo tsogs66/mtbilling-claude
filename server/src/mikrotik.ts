@@ -1907,3 +1907,149 @@ export async function probeHttpUrlsFromRouter(
     { timeoutSec: opts?.timeoutSec ?? Math.min(600, 30 + urls.length * 8) }
   );
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Router-side grace/expiry enforcement (RouterOS /system scheduler).
+ *
+ * Billing enforcement normally runs from this panel's own 5-minute poller
+ * (see notify.ts executeBillingEnforcement), which requires the panel to be
+ * up and able to reach the router at the right moment. To guarantee grace
+ * and expiration still take effect even if the panel is offline or cut off
+ * from the router/cloud, we additionally provision two one-shot RouterOS
+ * scheduler entries per subscriber — the router fires these itself:
+ *   - "grace"   at the moment the account becomes overdue: switch the PPP
+ *               secret to the non-payment profile.
+ *   - "disable" at the moment the grace period ends: disable the secret
+ *               and drop any active session.
+ * Both are named deterministically so a later payment can find and remove
+ * them (re-provisioning fresh ones for the new due date), which is how
+ * "pay before it fires" cancellation works — no server-side timer to leak.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const SCHED_PREFIX = 'mtb-';
+const ROS_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+function schedName(kind: 'grace' | 'disable', username: string): string {
+  return `${SCHED_PREFIX}${kind}-${username}`;
+}
+
+/** Escape a value for safe interpolation inside a RouterOS script string literal. */
+function rosScriptEscape(s: string): string {
+  return String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** Parse RouterOS's own reported clock (either "mon/dd/yyyy" or "yyyy-mm-dd") as if it were UTC. */
+function parseRosClockAsUtc(dateStr?: string, timeStr?: string): number | null {
+  if (!dateStr || !timeStr) return null;
+  let y: number, mo: number, da: number;
+  const mon = /^([a-z]{3})\/(\d{2})\/(\d{4})$/i.exec(dateStr.trim());
+  if (mon) {
+    mo = ROS_MONTHS.indexOf(mon[1].toLowerCase());
+    da = Number(mon[2]);
+    y = Number(mon[3]);
+  } else {
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+    if (!iso) return null;
+    y = Number(iso[1]);
+    mo = Number(iso[2]) - 1;
+    da = Number(iso[3]);
+  }
+  if (mo < 0 || !y || !da) return null;
+  const [hh, mm, ss] = timeStr.trim().split(':').map(Number);
+  return Date.UTC(y, mo, da, hh || 0, mm || 0, ss || 0);
+}
+
+/** Router's wall-clock offset from this server's clock (handles routers set to a local timezone, not UTC). */
+async function getRouterClockOffsetMs(api: RouterOSAPI): Promise<number> {
+  try {
+    const rows = (await api.write('/system/clock/print')) as Record<string, string>[];
+    const routerAsUtc = parseRosClockAsUtc(rows?.[0]?.date, rows?.[0]?.time);
+    return routerAsUtc == null ? 0 : routerAsUtc - Date.now();
+  } catch {
+    return 0;
+  }
+}
+
+/** Render an absolute instant as RouterOS scheduler start-date/start-time, adjusted for the router's own clock. */
+function rosScheduleFields(at: Date, offsetMs: number): { date: string; time: string } {
+  const wall = new Date(at.getTime() + offsetMs);
+  const date = `${ROS_MONTHS[wall.getUTCMonth()]}/${String(wall.getUTCDate()).padStart(2, '0')}/${wall.getUTCFullYear()}`;
+  const time = `${String(wall.getUTCHours()).padStart(2, '0')}:${String(wall.getUTCMinutes()).padStart(2, '0')}:${String(wall.getUTCSeconds()).padStart(2, '0')}`;
+  return { date, time };
+}
+
+async function removeSchedulerByName(api: RouterOSAPI, name: string): Promise<void> {
+  const rows = (await api.write('/system/scheduler/print', [`?name=${name}`])) as Record<string, string>[];
+  for (const r of rows || []) {
+    if (!r['.id']) continue;
+    try {
+      await api.write('/system/scheduler/remove', [`=.id=${r['.id']}`]);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Remove any pending grace/disable scheduler entries for a username. Call
+ * this whenever an account is no longer heading toward disconnection on its
+ * own (payment processed, manually re-enabled, or deleted) so a stale
+ * schedule can't act on it later.
+ */
+export async function cancelExpiryScheduleOnRouter(conn: RouterConn, username: string): Promise<void> {
+  if (!username) return;
+  // Short timeout — this rides along with an already-latency-sensitive request
+  // (payment, manual toggle, delete) and is best-effort, not the primary action.
+  await withRouter(
+    conn,
+    async (api) => {
+      await removeSchedulerByName(api, schedName('grace', username));
+      await removeSchedulerByName(api, schedName('disable', username));
+    },
+    { timeoutSec: 8 }
+  );
+}
+
+/**
+ * Provision one-shot RouterOS scheduler entries so grace-switch and full
+ * disable happen on the router itself at the right time, independent of
+ * this panel's uptime. Always removes any existing entries for the
+ * username first, so re-running this (e.g. after a new payment) replaces
+ * the old schedule with one for the new due date.
+ */
+export async function scheduleExpiryOnRouter(
+  conn: RouterConn,
+  opts: { username: string; graceAt: Date; disableAt: Date; nonPaymentProfile: string }
+): Promise<void> {
+  const { username, graceAt, disableAt, nonPaymentProfile } = opts;
+  if (!username) return;
+  await withRouter(conn, async (api) => {
+    await removeSchedulerByName(api, schedName('grace', username));
+    await removeSchedulerByName(api, schedName('disable', username));
+
+    const offsetMs = await getRouterClockOffsetMs(api);
+    const u = rosScriptEscape(username);
+
+    const grace = rosScheduleFields(graceAt, offsetMs);
+    const graceScript = `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no`;
+    await api.write('/system/scheduler/add', [
+      `=name=${schedName('grace', username)}`,
+      `=start-date=${grace.date}`,
+      `=start-time=${grace.time}`,
+      '=interval=0',
+      `=on-event=${graceScript}`,
+      '=comment=MT-Billing auto grace-switch',
+    ]);
+
+    const disable = rosScheduleFields(disableAt, offsetMs);
+    const disableScript = `/ppp secret disable [find name="${u}"]; /ppp active remove [find name="${u}"]`;
+    await api.write('/system/scheduler/add', [
+      `=name=${schedName('disable', username)}`,
+      `=start-date=${disable.date}`,
+      `=start-time=${disable.time}`,
+      '=interval=0',
+      `=on-event=${disableScript}`,
+      '=comment=MT-Billing auto disable',
+    ]);
+  }, { timeoutSec: 8 });
+}

@@ -90,6 +90,12 @@ api.interceptors.response.use(
 export const peso = (n: number) =>
   `\u20b1${(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const CURRENCY_SYMBOLS: Record<string, string> = { PHP: '\u20b1', USD: '$', EUR: '\u20ac' };
+
+/** Symbol for a currency code from Settings \u2192 Panel Settings (defaults to PHP). */
+export const currencySymbol = (code?: string | null) =>
+  CURRENCY_SYMBOLS[String(code || 'PHP').toUpperCase()] || '\u20b1';
+
 /**
  * Extend an ISO date (YYYY-MM-DD) by whole months, anchored on the original
  * date and preserving its day-of-month (mirrors the server logic). Used to

@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { buildBrandedEmail, buildReceiptEmailBody, getCompanyBrand, parseLogoDataUrl } from './emailTemplate.js';
+import { formatCurrency } from './currency.js';
 
 export interface NotifySettings {
   reminder_enabled: number;
@@ -500,7 +501,7 @@ interface Client {
 // Personalize template tokens with the recipient's own details.
 function fillTemplate(text: string, client: Client): string {
   if (!text) return text;
-  const amount = client.price != null ? `\u20b1${Number(client.price).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
+  const amount = client.price != null ? formatCurrency(Number(client.price)) : '';
   const map: Record<string, string> = {
     name: client.customer_name || client.username || '',
     account: client.account_number || '',
@@ -581,6 +582,22 @@ export async function sendPaymentReceiptEmail(opts: {
     detail: r.detail,
   });
   return { sent: r.status === 'sent', detail: r.detail };
+}
+
+/** Send an SMS confirming a processed payment — same wording as the "Payment Confirmation" template on the Notifications page. */
+export async function sendPaymentConfirmationSms(
+  client: Client,
+  amountPaid: number
+): Promise<{ sent: boolean; detail: string }> {
+  if (!client?.contact) return { sent: false, detail: 'no phone number on file' };
+  const results = await notifyClient(
+    { ...client, price: amountPaid },
+    ['sms'],
+    'Payment Confirmation',
+    'Hi {name}, we have received your payment of {amount} for your {plan} plan (Account #{account}). Your service is active until {due}. Thank you for your payment!',
+    'payment_confirmation'
+  );
+  return { sent: results.includes('sms:sent'), detail: results.join(', ') };
 }
 
 /** Manual broadcast/one-off send initiated from the Notifications page. */
