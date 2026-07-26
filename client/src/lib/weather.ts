@@ -51,6 +51,22 @@ export function weatherIcon(code: number): { emoji: string; label: string } {
   return WMO_CODES[code] || { emoji: '🌡️', label: 'Unknown' };
 }
 
+export type WeatherCategory = 'clear' | 'cloud' | 'fog' | 'rain' | 'snow' | 'storm';
+
+/** Bucket a WMO code into an animation family (falling rain, drifting cloud, etc). */
+export function weatherCategory(code: number): WeatherCategory {
+  if (code === 95 || code === 96 || code === 99) return 'storm';
+  if (code === 71 || code === 73 || code === 75 || code === 77 || code === 85 || code === 86) return 'snow';
+  if (
+    code === 51 || code === 53 || code === 55 || code === 56 || code === 57 ||
+    code === 61 || code === 63 || code === 65 || code === 66 || code === 67 ||
+    code === 80 || code === 81 || code === 82
+  ) return 'rain';
+  if (code === 45 || code === 48) return 'fog';
+  if (code === 1 || code === 2 || code === 3) return 'cloud';
+  return 'clear';
+}
+
 /** ~1.1km buckets — enough to dedupe OLTs/servers on the same site without masking real distances. */
 function cacheKey(lat: number, lng: number): string {
   return `${lat.toFixed(2)},${lng.toFixed(2)}`;
@@ -99,4 +115,47 @@ export async function fetchCurrentWeather(lat: number, lng: number): Promise<Wea
   })();
   inFlight.set(key, p);
   return p;
+}
+
+/**
+ * Animated precipitation radar frames via RainViewer's free public API (no key,
+ * no auth — https://www.rainviewer.com/api.html). Client-side only, same as
+ * the current-weather lookup above.
+ */
+export interface RadarFrame {
+  time: number;
+  tileUrl: string;
+}
+
+let radarCache: { at: number; frames: RadarFrame[] } | null = null;
+let radarInFlight: Promise<RadarFrame[]> | null = null;
+const RADAR_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function fetchRadarFrames(): Promise<RadarFrame[]> {
+  if (radarCache && Date.now() - radarCache.at < RADAR_CACHE_TTL_MS) return radarCache.frames;
+  if (radarInFlight) return radarInFlight;
+
+  radarInFlight = (async () => {
+    try {
+      const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+      if (!res.ok) throw new Error(`radar ${res.status}`);
+      const json = await res.json();
+      const host: string = json?.host || 'https://tilecache.rainviewer.com';
+      const past: { time: number; path: string }[] = json?.radar?.past || [];
+      const nowcast: { time: number; path: string }[] = json?.radar?.nowcast || [];
+      // Recent past frames + nowcast, so the loop shows real motion then the forecast edge.
+      const frames = [...past.slice(-8), ...nowcast].map((f) => ({
+        time: f.time,
+        tileUrl: `${host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`,
+      }));
+      radarCache = { at: Date.now(), frames };
+      return frames;
+    } catch {
+      radarCache = { at: Date.now(), frames: [] };
+      return [];
+    } finally {
+      radarInFlight = null;
+    }
+  })();
+  return radarInFlight;
 }

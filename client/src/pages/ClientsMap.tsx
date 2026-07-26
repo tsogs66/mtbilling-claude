@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun, Radar } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
-import { fetchCurrentWeather, type WeatherNow } from '../lib/weather';
+import {
+  fetchCurrentWeather, weatherCategory, fetchRadarFrames,
+  type WeatherNow, type WeatherCategory, type RadarFrame,
+} from '../lib/weather';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -290,15 +293,47 @@ function oltIcon(name: string, active = false, online?: boolean | null) {
   });
 }
 
-/** Floating current-weather chip overlaid above a server/OLT marker. */
+/** Small CSS-animated rain/snow/sun/cloud/fog effect above a weather chip. */
+function weatherFxHtml(category: WeatherCategory): string {
+  const rand = (min: number, max: number) => (min + Math.random() * (max - min)).toFixed(2);
+  if (category === 'rain' || category === 'storm') {
+    const drops = Array.from({ length: 7 }, () =>
+      `<span class="wx-drop" style="left:${rand(2, 46)}px;animation-delay:${rand(0, 1.2)}s;animation-duration:${rand(0.55, 0.95)}s"></span>`
+    ).join('');
+    const flash = category === 'storm' ? '<span class="wx-flash"></span>' : '';
+    return `<div class="map-weather-fx">${drops}${flash}</div>`;
+  }
+  if (category === 'snow') {
+    const flakes = Array.from({ length: 7 }, () =>
+      `<span class="wx-flake" style="left:${rand(2, 46)}px;animation-delay:${rand(0, 2)}s;animation-duration:${rand(1.8, 2.8)}s"></span>`
+    ).join('');
+    return `<div class="map-weather-fx">${flakes}</div>`;
+  }
+  if (category === 'clear') {
+    return `<div class="map-weather-fx"><span class="wx-sun"></span></div>`;
+  }
+  if (category === 'cloud') {
+    return `<div class="map-weather-fx"><span class="wx-cloud wx-cloud-a"></span><span class="wx-cloud wx-cloud-b"></span></div>`;
+  }
+  if (category === 'fog') {
+    return `<div class="map-weather-fx"><span class="wx-fogband wx-fogband-a"></span><span class="wx-fogband wx-fogband-b"></span></div>`;
+  }
+  return '';
+}
+
+/** Floating current-weather chip overlaid above a server/OLT marker, with a small animated effect. */
 function weatherBadgeIcon(w: WeatherNow) {
+  const category = weatherCategory(w.code);
   return L.divIcon({
     className: 'map-weather-marker',
-    html: `<div class="map-weather-chip" title="${escapeHtml(w.label)} · ${Math.round(w.humidityPct)}% humidity · wind ${Math.round(w.windKph)} km/h">
-      <span class="map-weather-emoji">${w.emoji}</span><span class="map-weather-temp">${Math.round(w.tempC)}°C</span>
+    html: `<div class="map-weather-stack">
+      ${weatherFxHtml(category)}
+      <div class="map-weather-chip" title="${escapeHtml(w.label)} · ${Math.round(w.humidityPct)}% humidity · wind ${Math.round(w.windKph)} km/h">
+        <span class="map-weather-emoji">${w.emoji}</span><span class="map-weather-temp">${Math.round(w.tempC)}°C</span>
+      </div>
     </div>`,
-    iconSize: [64, 26],
-    iconAnchor: [32, 46],
+    iconSize: [64, 64],
+    iconAnchor: [32, 62],
   });
 }
 
@@ -598,6 +633,35 @@ export default function ClientsMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weatherOn, JSON.stringify(weatherTargets)]);
 
+  /** Animated precipitation radar loop (RainViewer) — off by default, opt-in via the toolbar. */
+  const [radarOn, setRadarOn] = useState(false);
+  const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
+  const [radarIdx, setRadarIdx] = useState(0);
+  useEffect(() => {
+    if (!radarOn) return;
+    let cancelled = false;
+    fetchRadarFrames().then((frames) => {
+      if (cancelled) return;
+      setRadarFrames(frames);
+      setRadarIdx(Math.max(0, frames.length - 1));
+    });
+    const refresh = setInterval(() => {
+      fetchRadarFrames().then((frames) => !cancelled && setRadarFrames(frames));
+    }, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(refresh);
+    };
+  }, [radarOn]);
+  useEffect(() => {
+    if (!radarOn || radarFrames.length === 0) return;
+    const t = setInterval(() => {
+      setRadarIdx((i) => (i + 1) % radarFrames.length);
+    }, 700);
+    return () => clearInterval(t);
+  }, [radarOn, radarFrames.length]);
+  const radarFrame = radarFrames[radarIdx];
+
   /** Topology-valid "From" options for the selected cable route type. */
   const routeFromOptions = useMemo(() => {
     if (routeKind === 'server-olt') return servers.map((s) => ({ id: s.id, label: s.name }));
@@ -878,6 +942,14 @@ export default function ClientsMap() {
               onClick={() => setWeatherOn((v) => !v)}
             >
               <CloudSun size={15} /> Weather
+            </button>
+            <button
+              type="button"
+              title="Animate a live precipitation radar loop over the map"
+              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${radarOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              onClick={() => setRadarOn((v) => !v)}
+            >
+              <Radar size={15} /> Radar
             </button>
             <div className="relative">
               <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
@@ -1192,6 +1264,13 @@ export default function ClientsMap() {
             <Maximize2 size={13} /> Fullscreen
           </button>
 
+          {radarOn && (
+            <div className="absolute top-3 left-3 z-[500] bg-slate-900/85 border border-white/20 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center gap-1.5 shadow-sm">
+              <Radar size={13} className="text-sky-400" />
+              {radarFrame ? `Radar ${new Date(radarFrame.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Radar loading…'}
+            </div>
+          )}
+
           <MapContainer
             center={center}
             zoom={16}
@@ -1208,6 +1287,15 @@ export default function ClientsMap() {
               maxZoom={22}
               maxNativeZoom={19}
             />
+            {radarOn && radarFrame && (
+              <TileLayer
+                key="rainviewer-radar"
+                attribution="Radar &copy; RainViewer"
+                url={radarFrame.tileUrl}
+                opacity={0.55}
+                zIndex={410}
+              />
+            )}
             <FitBounds points={allPoints} />
             <MapDrawClicks active={drawMode} onAdd={(lat, lng) => setDrawPoints((p) => [...p, [lat, lng]])} />
 

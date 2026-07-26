@@ -1277,11 +1277,20 @@ body {
   line-height: 1.3;
 }
 
-/* Current-weather chip overlaid above a Server/OLT marker */
+/* Current-weather chip + animated fx overlaid above a Server/OLT marker */
 .map-weather-marker {
   background: transparent !important;
   border: none !important;
   pointer-events: none;
+}
+.map-weather-stack {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
 }
 .map-weather-chip {
   display: inline-flex;
@@ -1304,6 +1313,122 @@ body {
 }
 .map-weather-temp {
   font-variant-numeric: tabular-nums;
+}
+
+/* Weather fx zone: small looping animation matching the marker's condition */
+.map-weather-fx {
+  position: relative;
+  width: 52px;
+  height: 34px;
+  overflow: hidden;
+  margin-bottom: 2px;
+  pointer-events: none;
+}
+.wx-drop {
+  position: absolute;
+  top: -10px;
+  width: 2px;
+  height: 9px;
+  border-radius: 2px;
+  background: linear-gradient(#38bdf8, rgba(56, 189, 248, 0));
+  animation-name: wx-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes wx-fall {
+  0% { transform: translateY(-6px); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(36px); opacity: 0; }
+}
+.wx-flake {
+  position: absolute;
+  top: -8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+  animation-name: wx-snow-fall;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+@keyframes wx-snow-fall {
+  0% { transform: translate(0, -6px); opacity: 0; }
+  15% { opacity: 1; }
+  50% { transform: translate(6px, 16px); }
+  100% { transform: translate(-4px, 36px); opacity: 0; }
+}
+.wx-sun {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, #fde047 0%, rgba(253, 224, 71, 0.35) 70%, transparent 100%);
+  animation: wx-pulse 2.4s ease-in-out infinite;
+}
+@keyframes wx-pulse {
+  0%, 100% { opacity: 0.65; transform: translateX(-50%) scale(0.88); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1.15); }
+}
+.wx-cloud {
+  position: absolute;
+  bottom: 6px;
+  width: 22px;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.75);
+  animation: wx-drift 4.5s ease-in-out infinite;
+}
+.wx-cloud-a {
+  left: 4px;
+  animation-delay: 0s;
+}
+.wx-cloud-b {
+  left: 20px;
+  bottom: 12px;
+  width: 16px;
+  height: 8px;
+  animation-delay: 1.2s;
+  opacity: 0.6;
+}
+@keyframes wx-drift {
+  0%, 100% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+}
+.wx-fogband {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(226, 232, 240, 0.55);
+  animation: wx-fog-drift 3.6s ease-in-out infinite;
+}
+.wx-fogband-a {
+  bottom: 6px;
+  animation-delay: 0s;
+}
+.wx-fogband-b {
+  bottom: 14px;
+  opacity: 0.7;
+  animation-delay: 0.8s;
+}
+@keyframes wx-fog-drift {
+  0%, 100% { transform: translateX(-6px); opacity: 0.5; }
+  50% { transform: translateX(6px); opacity: 0.85; }
+}
+.wx-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(250, 204, 21, 0.55);
+  border-radius: 6px;
+  animation: wx-flash 3.2s ease-in-out infinite;
+}
+@keyframes wx-flash {
+  0%, 88%, 100% { opacity: 0; }
+  90%, 94% { opacity: 0.85; }
 }
 .map-onu-round {
   display: inline-flex;
