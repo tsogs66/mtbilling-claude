@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Cable, Plus, Pencil, Trash2, RotateCcw, ArrowDownCircle } from 'lucide-react';
+import { Cable, Plus, Pencil, Trash2, RotateCcw, ArrowDownCircle, Boxes, Route } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, DataTable, Modal, ModalFooter, FormField, IconAction, TabPills } from '../components/ui';
 import { api } from '../api';
+import { computeNapChainDbm, type ChainNapLike } from '../lib/opticalBudget';
 
 type SplitterType = 'FBT' | 'PLC' | 'FBTC';
 
@@ -23,14 +24,33 @@ const TYPE_LABELS: Record<SplitterType, string> = {
   FBTC: 'FBTC (tap cassette)',
 };
 
+interface TopologyNap {
+  id: number;
+  name: string;
+  kind: string;
+  ports: number;
+  parentId: number | null;
+  code?: string | null;
+  splitterType?: 'FBT' | 'PLC' | null;
+  splitterRatio?: string | null;
+  txDbm?: number | null;
+  oltName?: string | null;
+  parentKind?: string | null;
+  usedPorts?: number;
+  availablePorts?: number;
+}
+
 export default function TechTools() {
   const [rows, setRows] = useState<SplitterRow[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const [typeTab, setTypeTab] = useState<SplitterType>('PLC');
+  const [naps, setNaps] = useState<TopologyNap[]>([]);
 
   const load = () => api.get('/tech-tools/splitters').then((r) => setRows(r.data));
+  const loadNaps = () => api.get('/naps?all=1').then((r) => setNaps(r.data));
   useEffect(() => {
     load();
+    loadNaps();
   }, []);
 
   const del = async (id: number) => {
@@ -110,8 +130,177 @@ export default function TechTools() {
         <BudgetCalculator rows={rows} />
       </div>
 
+      <div className="mt-5">
+        <AvailableNaps naps={naps} />
+      </div>
+
+      <div className="mt-5">
+        <TopologyDbmLookup naps={naps} rows={rows} />
+      </div>
+
       {edit && <SplitterModal row={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
     </Layout>
+  );
+}
+
+function AvailableNaps({ naps }: { naps: TopologyNap[] }) {
+  const [q, setQ] = useState('');
+  const boxes = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return naps
+      .filter((n) => n.kind === 'nap')
+      .filter((n) => !term || n.name.toLowerCase().includes(term) || (n.code || '').toLowerCase().includes(term))
+      .sort((a, b) => (b.availablePorts ?? 0) - (a.availablePorts ?? 0));
+  }, [naps, q]);
+
+  return (
+    <Card
+      title="Available NAPs"
+      icon={Boxes}
+      right={
+        <input
+          className="input w-56"
+          placeholder="Search NAP name or code…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      }
+    >
+      <p className="text-xs text-slate-400 mb-3">
+        Free ports per NAP box, computed from the live topology (splitter capacity minus assigned clients).
+        Sorted by most available first — use this to pick where a new subscriber should land.
+      </p>
+      <DataTable
+        columns={[
+          { key: 'name', label: 'NAP' },
+          { key: 'olt', label: 'Upstream' },
+          { key: 'splitter', label: 'Splitter' },
+          { key: 'used', label: 'Used', align: 'right' },
+          { key: 'avail', label: 'Available', align: 'right' },
+        ]}
+        rows={boxes.map((n) => {
+          const full = (n.availablePorts ?? 0) <= 0;
+          return {
+            key: n.id,
+            cells: [
+              <span className="font-medium text-slate-800">{n.code ? `${n.code} · ${n.name}` : n.name}</span>,
+              <span className="text-slate-500 text-xs">{n.oltName || '—'}</span>,
+              <span className="text-slate-600 text-xs">{n.splitterType && n.splitterRatio ? `${n.splitterType} ${n.splitterRatio}` : '—'}</span>,
+              <span className="text-slate-600">{n.usedPorts ?? 0} / {n.ports}</span>,
+              <span className={`font-semibold ${full ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {full ? 'Full' : n.availablePorts}
+              </span>,
+            ],
+          };
+        })}
+        emptyMessage="No NAPs in the topology yet — add them from the Topology map."
+      />
+    </Card>
+  );
+}
+
+function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: SplitterRow[] }) {
+  const napOnly = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
+  const [napId, setNapId] = useState<number | ''>('');
+  const [minDbm, setMinDbm] = useState('-28');
+  const [maxDbm, setMaxDbm] = useState('-8');
+
+  useEffect(() => {
+    if (napId === '' && napOnly.length > 0) setNapId(napOnly[0].id);
+  }, [napOnly, napId]);
+
+  const napsById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
+  const splitterRefs = useMemo(
+    () => rows.filter((r) => r.type === 'FBT' || r.type === 'PLC').map((r) => ({ type: r.type, ratio: r.ratio, throughLossDb: r.throughLossDb })),
+    [rows]
+  );
+  const result = useMemo(() => (napId ? computeNapChainDbm(Number(napId), napsById, splitterRefs) : null), [napId, napsById, splitterRefs]);
+  const nap = napId ? naps.find((n) => n.id === napId) : undefined;
+
+  const min = Number(minDbm);
+  const max = Number(maxDbm);
+  const inRange = !!result && Number.isFinite(min) && Number.isFinite(max) && result.receivedDbm >= min && result.receivedDbm <= max;
+  const marginal =
+    !!result && !inRange && Number.isFinite(min) && Number.isFinite(max) && result.receivedDbm >= min - 2 && result.receivedDbm <= max + 2;
+
+  return (
+    <Card title="Topology dBm Lookup" icon={Route}>
+      <p className="text-xs text-slate-400 mb-4">
+        Walks a NAP's upstream chain (OLT → intermediate NAPs → this NAP) using each hop's splitter type/ratio
+        set in the Topology map, and applies the matching loss from the reference table above.
+      </p>
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <FormField label="NAP">
+          <select className="input" value={napId} onChange={(e) => setNapId(e.target.value ? Number(e.target.value) : '')}>
+            <option value="">Select…</option>
+            {napOnly.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.code ? `${n.code} · ${n.name}` : n.name}
+              </option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="Acceptable min (dBm)">
+          <input className="input" type="number" step="0.1" value={minDbm} onChange={(e) => setMinDbm(e.target.value)} />
+        </FormField>
+        <FormField label="Acceptable max (dBm)">
+          <input className="input" type="number" step="0.1" value={maxDbm} onChange={(e) => setMaxDbm(e.target.value)} />
+        </FormField>
+      </div>
+
+      {!result ? (
+        <p className="text-sm text-slate-400">No topology chain found — set an upstream OLT/NAP for this box on the Topology map.</p>
+      ) : (
+        <>
+          <div className="rounded-xl border border-slate-200 overflow-hidden mb-4">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="text-left px-4 py-2 font-medium">Hop</th>
+                  <th className="text-right px-4 py-2 font-medium">Loss</th>
+                  <th className="text-right px-4 py-2 font-medium">Running power</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-slate-100">
+                  <td className="px-4 py-2 text-slate-500">{result.oltName || 'OLT'} (Tx)</td>
+                  <td className="px-4 py-2 text-right text-slate-400">—</td>
+                  <td className="px-4 py-2 text-right font-medium text-slate-700">{result.originDbm.toFixed(2)} dBm</td>
+                </tr>
+                {result.stages.map((s) => (
+                  <tr key={s.napId} className="border-t border-slate-100">
+                    <td className="px-4 py-2 text-slate-600">
+                      {s.name} {s.splitterType && s.splitterRatio ? `(${s.splitterType} ${s.splitterRatio})` : '(no splitter set)'}
+                    </td>
+                    <td className="px-4 py-2 text-right text-slate-500">{s.lossDb != null ? `−${s.lossDb.toFixed(1)} dB` : 'no ref'}</td>
+                    <td className="px-4 py-2 text-right font-medium text-slate-700">{s.after.toFixed(2)} dBm</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div
+            className={`rounded-xl border p-4 flex items-center justify-between ${
+              inRange ? 'border-emerald-200 bg-emerald-50' : marginal ? 'border-amber-200 bg-amber-50' : 'border-rose-200 bg-rose-50'
+            }`}
+          >
+            <div>
+              <div className="text-xs uppercase tracking-wide font-semibold text-slate-500">
+                Estimated received power at {nap?.name}
+              </div>
+              <div className="text-2xl font-bold text-slate-900">{result.receivedDbm.toFixed(2)} dBm</div>
+            </div>
+            <div
+              className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${
+                inRange ? 'bg-emerald-100 text-emerald-700' : marginal ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'
+              }`}
+            >
+              {inRange ? 'Within budget' : marginal ? 'Marginal — check' : 'Out of budget'}
+            </div>
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 
