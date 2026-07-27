@@ -456,7 +456,7 @@ async function deliver(
       return { status: 'failed', detail: 'gateway unreachable' };
     }
   }
-  return { status: 'sent', detail: `simulated (no ${channel} gateway configured)` };
+  return { status: 'simulated', detail: `not delivered — no ${channel} gateway configured` };
 }
 
 function record(n: {
@@ -590,14 +590,24 @@ export async function sendPaymentConfirmationSms(
   amountPaid: number
 ): Promise<{ sent: boolean; detail: string }> {
   if (!client?.contact) return { sent: false, detail: 'no phone number on file' };
-  const results = await notifyClient(
-    { ...client, price: amountPaid },
-    ['sms'],
-    'Payment Confirmation',
+  const subject = 'Payment Confirmation';
+  const message = fillTemplate(
     'Hi {name}, we have received your payment of {amount} for your {plan} plan (Account #{account}). Your service is active until {due}. Thank you for your payment!',
-    'payment_confirmation'
+    { ...client, price: amountPaid }
   );
-  return { sent: results.includes('sms:sent'), detail: results.join(', ') };
+  const r = await deliver('sms', client.contact, subject, message);
+  record({
+    channel: 'sms',
+    recipient: client.contact,
+    client_id: client.id,
+    customer_name: client.customer_name,
+    subject,
+    message: formatSmsMessage(message),
+    type: 'payment_confirmation',
+    status: r.status,
+    detail: r.detail,
+  });
+  return { sent: r.status === 'sent', detail: r.detail };
 }
 
 /** Manual broadcast/one-off send initiated from the Notifications page. */

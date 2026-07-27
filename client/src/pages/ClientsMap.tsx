@@ -294,15 +294,15 @@ function oltIcon(name: string, active = false, online?: boolean | null) {
 function weatherFxHtml(category: WeatherCategory): string {
   const rand = (min: number, max: number) => (min + Math.random() * (max - min)).toFixed(2);
   if (category === 'rain' || category === 'storm') {
-    const drops = Array.from({ length: 7 }, () =>
-      `<span class="wx-drop" style="left:${rand(2, 46)}px;animation-delay:${rand(0, 1.2)}s;animation-duration:${rand(0.55, 0.95)}s"></span>`
+    const drops = Array.from({ length: 11 }, () =>
+      `<span class="wx-drop" style="left:${rand(2, 54)}px;animation-delay:${rand(0, 1.2)}s;animation-duration:${rand(0.55, 0.95)}s"></span>`
     ).join('');
     const flash = category === 'storm' ? '<span class="wx-flash"></span>' : '';
     return `<div class="map-weather-fx">${drops}${flash}</div>`;
   }
   if (category === 'snow') {
-    const flakes = Array.from({ length: 7 }, () =>
-      `<span class="wx-flake" style="left:${rand(2, 46)}px;animation-delay:${rand(0, 2)}s;animation-duration:${rand(1.8, 2.8)}s"></span>`
+    const flakes = Array.from({ length: 11 }, () =>
+      `<span class="wx-flake" style="left:${rand(2, 54)}px;animation-delay:${rand(0, 2)}s;animation-duration:${rand(1.8, 2.8)}s"></span>`
     ).join('');
     return `<div class="map-weather-fx">${flakes}</div>`;
   }
@@ -392,12 +392,12 @@ function equipIcon(name: string, kind: string, active = false, online?: boolean 
 function MapWeatherOverlay({ category }: { category: WeatherCategory }) {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
   const drops = useMemo(
-    () => Array.from({ length: 40 }, () => ({ left: rand(0, 100), delay: rand(0, 1.5), duration: rand(0.7, 1.3) })),
+    () => Array.from({ length: 70 }, () => ({ left: rand(0, 100), delay: rand(0, 1.5), duration: rand(0.7, 1.3) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [category]
   );
   const flakes = useMemo(
-    () => Array.from({ length: 28 }, () => ({ left: rand(0, 100), delay: rand(0, 4), duration: rand(3.5, 6), size: rand(3, 6) })),
+    () => Array.from({ length: 45 }, () => ({ left: rand(0, 100), delay: rand(0, 4), duration: rand(3.5, 6), size: rand(5, 9) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [category]
   );
