@@ -46,6 +46,9 @@ function fmtGB(gb?: number): string {
   return `${v >= 100 ? v.toFixed(1) : v.toFixed(2)} GB`;
 }
 
+/** Physical FBTC cassette tray sizes — a client NAP running FBTC must use one of these. */
+const FBTC_PORT_OPTIONS = [8, 16, 32];
+
 /** Distinct ratio strings available for a splitter type, in reference-table order. */
 function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC' | 'FBTC'): string[] {
   const seen = new Set<string>();
@@ -1698,8 +1701,20 @@ export default function ClientsMap() {
                   <FormField label="PON Port">
                     <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />
                   </FormField>
-                  <FormField label="Splitter Ports (capacity)" hint="Subscriber ports available on this box.">
-                    <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
+                  <FormField label="Splitter Ports (capacity)" hint={editNap.splitterType === 'FBTC' ? 'FBTC cassette tray size.' : 'Subscriber ports available on this box.'}>
+                    {editNap.splitterType === 'FBTC' ? (
+                      <select
+                        className="input"
+                        value={FBTC_PORT_OPTIONS.includes(Number(editNap.ports)) ? editNap.ports : 8}
+                        onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })}
+                      >
+                        {FBTC_PORT_OPTIONS.map((p) => (
+                          <option key={p} value={p}>{p} ports</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
+                    )}
                   </FormField>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -1711,7 +1726,8 @@ export default function ClientsMap() {
                         const t = e.target.value as 'FBT' | 'PLC' | 'FBTC';
                         const opts = splitterRatioOptions(splitterRows, t);
                         const ratio = opts.includes(editNap.splitterRatio || '') ? editNap.splitterRatio : opts[0] || '';
-                        setEditNap({ ...editNap, splitterType: t, splitterRatio: ratio });
+                        const ports = t === 'FBTC' && !FBTC_PORT_OPTIONS.includes(Number(editNap.ports)) ? 8 : editNap.ports;
+                        setEditNap({ ...editNap, splitterType: t, splitterRatio: ratio, ports });
                       }}
                     >
                       <option value="PLC">PLC</option>
