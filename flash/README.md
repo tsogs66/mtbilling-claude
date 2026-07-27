@@ -56,6 +56,19 @@ ssh mtadmin@<device-ip>
 
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 
+### Staying up to date
+
+Firstboot enables a systemd timer that polls GitHub `main` every 10 minutes and applies
+updates automatically (`systemctl status mt-billing-auto-update.timer`). Set
+`MT_AUTO_UPDATE=0` before flashing/first boot to opt out, or trigger "Update from GitHub"
+from the panel's Application Updater page at any time.
+
+Retrofitting a device flashed before this existed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --enable-timer
+```
+
 ### Orange Pi One notes
 
 - 512 MB RAM — first-boot creates swap and can take a long time (even hours) for the Node build.
