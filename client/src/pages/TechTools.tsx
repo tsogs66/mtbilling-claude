@@ -3,7 +3,7 @@ import { Cable, Plus, Pencil, Trash2, RotateCcw, ArrowDownCircle, Boxes, Route }
 import Layout from '../components/Layout';
 import { Card, DataTable, Modal, ModalFooter, FormField, IconAction, TabPills } from '../components/ui';
 import { api } from '../api';
-import { computeNapChainDbm, isAsymmetricType, type ChainNapLike, type SplitterLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, isAsymmetricType, ratioLegLabel, type ChainNapLike, type SplitterLike } from '../lib/opticalBudget';
 
 type SplitterType = 'FBT' | 'PLC' | 'FBTC';
 
@@ -492,15 +492,15 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
               </div>
               {isFbtcRow && (
                 <div className="w-40">
-                  <FormField label="Leg">
+                  <FormField label="Split">
                     <select
                       className="input"
                       disabled={disabled}
                       value={s.leg}
                       onChange={(e) => updateStage(s.id, { leg: e.target.value as 'through' | 'tap' })}
                     >
-                      <option value="through">Through (continue trunk)</option>
-                      <option value="tap">Tap (subscriber drop)</option>
+                      <option value="through">{ratioLegLabel(row?.ratio, 'through')} — continue trunk</option>
+                      <option value="tap">{ratioLegLabel(row?.ratio, 'tap')} — subscriber drop</option>
                     </select>
                   </FormField>
                 </div>

@@ -8,7 +8,7 @@ import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
 import { fetchCurrentWeather, weatherCategory, type WeatherNow, type WeatherCategory } from '../lib/weather';
-import { computeNapChainDbm, resolveSplitterInputDbm, isAsymmetricType, type ChainNapLike, type SplitterRefLike, type SplitterLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, resolveSplitterInputDbm, isAsymmetricType, ratioLegLabel, type ChainNapLike, type SplitterRefLike, type SplitterLike } from '../lib/opticalBudget';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -64,21 +64,6 @@ function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC' | 'FB
     out.push(r.ratio);
   }
   return out;
-}
-
-/**
- * Label a through/tap leg choice by the splitter's own ratio numbers (e.g.
- * ratio "95:5" -> "95" for through, "5" for tap) instead of generic
- * trunk/subscriber wording, since that's what's printed on the hardware.
- * Falls back to the generic label if the ratio isn't in "NN:MM" form.
- */
-function ratioLegLabel(ratio: string | null | undefined, leg: 'through' | 'tap'): string {
-  const parts = (ratio || '').split(':');
-  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
-    return leg === 'through' ? 'Through (trunk continue)' : 'Tap (subscriber drop)';
-  }
-  const [throughPct, tapPct] = parts;
-  return leg === 'through' ? `${throughPct.trim()} (through)` : `${tapPct.trim()} (tap)`;
 }
 
 function clientState(c: Client): ClientState {
