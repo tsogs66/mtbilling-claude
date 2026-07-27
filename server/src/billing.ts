@@ -15,6 +15,43 @@ import {
 import { getSettings as getNotifySettings } from './notify.js';
 
 const SESSION_REFRESH_MS = 2000;
+/** Cap how long any single request will wait on a router call before responding anyway. */
+const ROUTER_CALL_BUDGET_MS = 8000;
+
+/**
+ * Race a promise against a timeout, resolving to `fallback` if it doesn't
+ * settle in time. The original promise is never cancelled — it keeps running
+ * and its eventual result/error is still observable to whoever awaits it
+ * separately (e.g. for background logging) — this just stops it from
+ * blocking the caller indefinitely.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
+    promise.then(
+      (v) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      }
+    );
+  });
+}
 
 function needsSessionRefresh(status?: string | null): boolean {
   const s = String(status || '').toLowerCase();
@@ -760,7 +797,40 @@ export async function recordPppoePayment(
     `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}`
   );
 
-  const sync = await syncUserToRouter(updated, 'restore');
+  // The payment itself (DB update above) is already committed at this point.
+  // A slow/unreachable router must never hold up the HTTP response for it —
+  // that previously took up to ~35s (two sequential router-call timeouts),
+  // long enough to trip an intermediary proxy's own timeout (nginx, Cloudflare
+  // Tunnel, ngrok...), which then shows the admin "payment failed" even though
+  // the subscription was already extended. Bound the wait instead; the router
+  // call keeps running in the background regardless, and its outcome (if it
+  // arrives after we've already responded) is logged for later review.
+  let respondedAlready = false;
+  const syncPromise = syncUserToRouter(updated, 'restore');
+  syncPromise
+    .then((r) => {
+      if (respondedAlready && !r.ok) {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'mikrotik',
+          `Payment for ${updated.username}: MikroTik restore sync finished after the response had already returned (router was slow) — ${r.error || 'failed'}. Verify the account's MikroTik state or use Recheck Expiry.`
+        );
+      }
+    })
+    .catch((e: any) => {
+      if (respondedAlready) {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'mikrotik',
+          `Payment for ${updated.username}: MikroTik restore sync threw after the response had already returned — ${e?.message || e}.`
+        );
+      }
+    });
+  const sync = await withTimeout(syncPromise, ROUTER_CALL_BUDGET_MS, {
+    ok: false,
+    error: 'Router is slow to respond — continuing in the background. Check Logs shortly, or use Recheck Expiry.',
+  });
+  respondedAlready = true;
 
   // Cancels any pending grace/disable schedule from before this payment and
   // provisions a fresh one for the new due date — this is what makes "pay
