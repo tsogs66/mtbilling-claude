@@ -31,6 +31,7 @@ import SubscriberPay from './pages/SubscriberPay';
 import PayPortal from './pages/PayPortal';
 import UsageStats from './pages/UsageStats';
 import FairUseAlerts from './pages/FairUseAlerts';
+import TechTools from './pages/TechTools';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -119,6 +120,7 @@ export default function App() {
                 <Route path="/roles" element={<PanelRoles />} />
                 <Route path="/updater" element={<Updater />} />
                 <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
+                <Route path="/tech-tools" element={<TechTools />} />
                 <Route path="/license" element={<License />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

@@ -461,9 +461,72 @@ export function migrate() {
       next_attempt_at TEXT DEFAULT CURRENT_TIMESTAMP,
       UNIQUE (router_id, pppoe_user_id)
     );
+
+    -- Fiber splitter insertion-loss reference (Tech Tools optical budget
+    -- calculator). through_loss_db is the per-leg loss for a symmetric
+    -- splitter (FBT/PLC) or the trunk-continue leg of an asymmetric tap
+    -- cassette (FBTC); tap_loss_db is only set for FBTC rows (the leg that
+    -- drops off to a subscriber). ports is informational — for FBT/PLC it's
+    -- the split count itself (1:8 = 8 ports); for FBTC it's the physical
+    -- cassette tray size, which doesn't change the per-tap dB math but
+    -- matters for matching the actual hardware a tech is holding.
+    CREATE TABLE IF NOT EXISTS splitter_loss_reference (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      ratio TEXT NOT NULL,
+      ports INTEGER,
+      through_loss_db REAL NOT NULL,
+      tap_loss_db REAL,
+      notes TEXT,
+      sort_order INTEGER DEFAULT 0
+    );
   `);
   if (!(db.prepare('SELECT 1 FROM fair_use_settings WHERE id = 1').get())) {
     db.prepare('INSERT INTO fair_use_settings (id) VALUES (1)').run();
+  }
+
+  if ((db.prepare('SELECT COUNT(*) AS c FROM splitter_loss_reference').get() as any).c === 0) {
+    const insSplitter = db.prepare(
+      `INSERT INTO splitter_loss_reference (type, ratio, ports, through_loss_db, tap_loss_db, notes, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    // Typical/reference values from common vendor datasheets — verify against
+    // your actual hardware's spec sheet for precision-critical budgets; every
+    // row here is editable from the Tech Tools page.
+    let order = 0;
+    const plc: [string, number, number][] = [
+      ['1:2', 2, 3.7],
+      ['1:4', 4, 7.3],
+      ['1:8', 8, 10.5],
+      ['1:16', 16, 13.6],
+      ['1:32', 32, 17.6],
+      ['1:64', 64, 21.5],
+    ];
+    for (const [ratio, ports, loss] of plc) {
+      insSplitter.run('PLC', ratio, ports, loss, null, 'Typical PLC splitter insertion loss', order++);
+    }
+    const fbt: [string, number, number][] = [
+      ['1:2', 2, 3.9],
+      ['1:4', 4, 7.4],
+      ['1:8', 8, 11.0],
+    ];
+    for (const [ratio, ports, loss] of fbt) {
+      insSplitter.run('FBT', ratio, ports, loss, null, 'Typical FBT splitter insertion loss', order++);
+    }
+    const fbtc: [string, number, number][] = [
+      ['95:5', 0.3, 13.2],
+      ['90:10', 0.6, 10.3],
+      ['85:15', 0.9, 8.4],
+      ['80:20', 1.2, 7.2],
+      ['70:30', 1.8, 5.4],
+      ['60:40', 2.4, 4.2],
+      ['50:50', 3.6, 3.6],
+    ];
+    for (const ports of [8, 16]) {
+      for (const [ratio, through, tap] of fbtc) {
+        insSplitter.run('FBTC', ratio, ports, through, tap, 'Through = trunk continue, Tap = subscriber drop', order++);
+      }
+    }
   }
 
   const payLinkCols: [string, string][] = [
