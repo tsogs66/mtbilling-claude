@@ -1918,12 +1918,8 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
       onPaid(
         `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +
           (bounced ? ' · MikroTik session refreshed (2s bounce)' : '') +
-          (r.data.emailed ? ' · receipt emailed' : '') +
-          (sendSms
-            ? r.data.smsSent
-              ? ' · SMS confirmation sent'
-              : ` · SMS not sent${r.data.smsDetail ? ` (${r.data.smsDetail})` : ''} — check SMS gateway in Notifications settings`
-            : '')
+          (r.data.emailPending ? ' · receipt emailing (see Notifications for delivery status)' : '') +
+          (r.data.smsPending ? ' · SMS sending (see Notifications for delivery status)' : '')
       );
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Payment failed');
