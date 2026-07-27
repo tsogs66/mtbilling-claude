@@ -695,6 +695,7 @@ export default function ClientsMap() {
       parentId: editNap.parentId ?? null,
       splitterType: editNap.splitterType,
       splitterRatio: editNap.splitterRatio,
+      ports: editNap.ports,
     });
     return computeNapChainDbm(previewId, merged, splitterRows);
   }, [editNap, napChainById, splitterRows]);

@@ -9,14 +9,32 @@ export interface ChainNapLike {
   parentId: number | null;
   splitterType?: string | null;
   splitterRatio?: string | null;
+  /** Cassette/split port count — only affects the lookup for FBTC (see refKey). */
+  ports?: number | null;
   txDbm?: number | null;
 }
 
 export interface SplitterRefLike {
   type: string;
   ratio: string;
+  /** Cassette tray size — only meaningful (and only part of the lookup key) for FBTC. */
+  ports?: number | null;
   throughLossDb: number;
   tapLossDb?: number | null;
+}
+
+/**
+ * FBTC loss scales with cassette size (an 8/16/32-port tray cascades that many
+ * individual tap couplers internally, so the cumulative through-loss and the
+ * worst-case tap-loss both grow with port count) — so its lookup key includes
+ * ports. FBT/PLC are single symmetric splitters where ratio alone determines
+ * the loss, so their key stays type+ratio (a NAP's "capacity" field isn't
+ * necessarily the same number as the split count, and shouldn't affect the
+ * lookup for those types).
+ */
+function refKey(type?: string | null, ratio?: string | null, ports?: number | null): string {
+  if (!type || !ratio) return '';
+  return type === 'FBTC' ? `${type}|${ratio}|${ports ?? ''}` : `${type}|${ratio}`;
 }
 
 export interface ChainStage {
@@ -54,9 +72,9 @@ export function computeNapChainDbm(
   napsById: Map<number, ChainNapLike>,
   splitterRows: SplitterRefLike[]
 ): ChainResult | null {
-  const throughMap = new Map(splitterRows.map((r) => [`${r.type}|${r.ratio}`, r.throughLossDb]));
+  const throughMap = new Map(splitterRows.map((r) => [refKey(r.type, r.ratio, r.ports), r.throughLossDb]));
   const tapMap = new Map(
-    splitterRows.filter((r) => r.tapLossDb != null).map((r) => [`${r.type}|${r.ratio}`, r.tapLossDb as number])
+    splitterRows.filter((r) => r.tapLossDb != null).map((r) => [refKey(r.type, r.ratio, r.ports), r.tapLossDb as number])
   );
   const chain: ChainNapLike[] = [];
   let cur: ChainNapLike | undefined = napsById.get(napId);
@@ -70,7 +88,7 @@ export function computeNapChainDbm(
   let running = originDbm;
   const stages: ChainStage[] = chain.map((n, i) => {
     const isTerminal = i === chain.length - 1;
-    const key = n.splitterType && n.splitterRatio ? `${n.splitterType}|${n.splitterRatio}` : '';
+    const key = refKey(n.splitterType, n.splitterRatio, n.ports);
     const useTap = isTerminal && n.splitterType === 'FBTC' && key !== '' && tapMap.has(key);
     const lossDb = key
       ? useTap

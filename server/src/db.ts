@@ -254,6 +254,83 @@ function columnExists(table: string, col: string): boolean {
   return cols.some((c) => c.name === col);
 }
 
+/**
+ * Per-tap-coupler baseline for FBTC (ratio -> [single-coupler through-loss,
+ * single-coupler tap-loss]). A real FBTC cassette cascades one of these
+ * couplers per port internally — the trunk passes through every coupler in
+ * turn, tapping a little off at each one — so both loss figures scale with
+ * cassette size: through-loss is cumulative across the whole tray, and
+ * tap-loss is worst-case (the last/furthest port, after already passing
+ * through every upstream coupler).
+ */
+const FBTC_SINGLE_COUPLER: [string, number, number][] = [
+  ['95:5', 0.3, 13.2],
+  ['90:10', 0.6, 10.3],
+  ['85:15', 0.9, 8.4],
+  ['80:20', 1.2, 7.2],
+  ['70:30', 1.8, 5.4],
+  ['60:40', 2.4, 4.2],
+  ['50:50', 3.6, 3.6],
+];
+const FBTC_PORT_SIZES = [8, 16, 32];
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** [ratio, ports, throughLossDb, tapLossDb] for every FBTC ratio × cassette size. */
+function fbtcScaledRows(): [string, number, number, number][] {
+  const out: [string, number, number, number][] = [];
+  for (const ports of FBTC_PORT_SIZES) {
+    for (const [ratio, singleThrough, singleTap] of FBTC_SINGLE_COUPLER) {
+      out.push([ratio, ports, round1(ports * singleThrough), round1((ports - 1) * singleThrough + singleTap)]);
+    }
+  }
+  return out;
+}
+
+const FBTC_MIGRATION_NOTES =
+  'Through = trunk continue (cumulative across the cassette), Tap = worst-case subscriber drop (last port)';
+
+/**
+ * FBTC used to be seeded with identical through/tap loss regardless of
+ * cassette size (and no 32-port rows at all), so changing a NAP's FBTC port
+ * count in the Topology map had no effect on computed dBm. This scales
+ * already-seeded rows to the port-aware values above and adds the missing
+ * 32-port rows. Runs once per install (flagged via
+ * app_settings.fbtc_loss_scaled) and never touches a row whose through/tap
+ * values don't match the old flat defaults exactly — i.e. anything a tech
+ * has since customized from the Tech Tools page is left alone.
+ */
+function migrateFbtcLossReferenceScaling() {
+  const already = (db.prepare('SELECT fbtc_loss_scaled FROM app_settings WHERE id = 1').get() as { fbtc_loss_scaled: number } | undefined)
+    ?.fbtc_loss_scaled;
+  if (already) return;
+
+  const scaled = fbtcScaledRows();
+  const updateStmt = db.prepare('UPDATE splitter_loss_reference SET through_loss_db = ?, tap_loss_db = ?, notes = ? WHERE id = ?');
+  for (const [oldRatio, oldSingleThrough, oldSingleTap] of FBTC_SINGLE_COUPLER) {
+    for (const ports of [8, 16]) {
+      const row = db
+        .prepare('SELECT id, through_loss_db AS through, tap_loss_db AS tap FROM splitter_loss_reference WHERE type = ? AND ratio = ? AND ports = ?')
+        .get('FBTC', oldRatio, ports) as { id: number; through: number; tap: number } | undefined;
+      if (!row || row.through !== oldSingleThrough || row.tap !== oldSingleTap) continue; // missing or tech-edited
+      const fixed = scaled.find(([ratio, p]) => ratio === oldRatio && p === ports);
+      if (fixed) updateStmt.run(fixed[2], fixed[3], FBTC_MIGRATION_NOTES, row.id);
+    }
+  }
+
+  const maxOrder = (db.prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM splitter_loss_reference WHERE type = 'FBTC'").get() as { m: number }).m;
+  let order = maxOrder + 1;
+  const insSplitter = db.prepare(
+    `INSERT INTO splitter_loss_reference (type, ratio, ports, through_loss_db, tap_loss_db, notes, sort_order)
+     VALUES ('FBTC', ?, ?, ?, ?, ?, ?)`
+  );
+  for (const [ratio, ports, through, tap] of scaled) {
+    const exists = db.prepare('SELECT 1 FROM splitter_loss_reference WHERE type = ? AND ratio = ? AND ports = ?').get('FBTC', ratio, ports);
+    if (!exists) insSplitter.run(ratio, ports, through, tap, FBTC_MIGRATION_NOTES, order++);
+  }
+
+  db.prepare('UPDATE app_settings SET fbtc_loss_scaled = 1 WHERE id = 1').run();
+}
+
 /** Idempotent migrations for databases created before a column existed. */
 export function migrate() {
   if (!columnExists('pppoe_users', 'online')) {
@@ -330,6 +407,9 @@ export function migrate() {
     // Default map picker / topology center (Batangas area)
     ['map_default_lat', 'REAL DEFAULT 13.918665341879885'],
     ['map_default_lng', 'REAL DEFAULT 120.93887161534413'],
+    // One-time flag: has the FBTC splitter_loss_reference migration to
+    // port-scaled through/tap values run yet?
+    ['fbtc_loss_scaled', 'INTEGER DEFAULT 0'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
@@ -515,21 +595,19 @@ export function migrate() {
     for (const [ratio, ports, loss] of fbt) {
       insSplitter.run('FBT', ratio, ports, loss, null, 'Typical FBT splitter insertion loss', order++);
     }
-    const fbtc: [string, number, number][] = [
-      ['95:5', 0.3, 13.2],
-      ['90:10', 0.6, 10.3],
-      ['85:15', 0.9, 8.4],
-      ['80:20', 1.2, 7.2],
-      ['70:30', 1.8, 5.4],
-      ['60:40', 2.4, 4.2],
-      ['50:50', 3.6, 3.6],
-    ];
-    for (const ports of [8, 16]) {
-      for (const [ratio, through, tap] of fbtc) {
-        insSplitter.run('FBTC', ratio, ports, through, tap, 'Through = trunk continue, Tap = subscriber drop', order++);
-      }
+    for (const [ratio, ports, through, tap] of fbtcScaledRows()) {
+      insSplitter.run(
+        'FBTC',
+        ratio,
+        ports,
+        through,
+        tap,
+        'Through = trunk continue (cumulative across the cassette), Tap = worst-case subscriber drop (last port)',
+        order++
+      );
     }
   }
+  migrateFbtcLossReferenceScaling();
 
   const payLinkCols: [string, string][] = [
     ['pay_channel', 'TEXT'],
