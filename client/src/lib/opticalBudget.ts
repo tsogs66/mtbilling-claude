@@ -11,6 +11,13 @@ export interface ChainNapLike {
   splitterRatio?: string | null;
   /** Cassette/split port count — only affects the lookup for FBTC (see refKey). */
   ports?: number | null;
+  /**
+   * Which leg of the PARENT's splitter this NAP is plugged into — 'through'
+   * (trunk continue, the default) or 'tap' (subscriber drop, for a NAP
+   * deliberately cascaded off a tap port instead). Only meaningful when the
+   * parent's splitterType is 'FBTC'; ignored otherwise.
+   */
+  fbtcLeg?: 'through' | 'tap' | null;
   txDbm?: number | null;
 }
 
@@ -60,12 +67,15 @@ export const DEFAULT_ORIGIN_DBM = 5;
 
 /**
  * Walks a NAP's parent chain up to its OLT, subtracting each hop's splitter
- * loss. FBTC (asymmetric tap cassette) hops use their through-loss (trunk
- * continue) when the chain passes through them on the way to a further-down
- * NAP, and their tap-loss (subscriber drop) for the terminal NAP — the one
- * clients actually attach to — matching the manual budget calculator's
- * through/tap leg semantics. FBT/PLC (symmetric splitters) always use the
- * single per-leg loss value regardless of position.
+ * loss. For an FBTC (asymmetric tap cassette) ancestor that feeds the next
+ * NAP in the chain, the loss applied is whichever leg *that child* selects
+ * via its own `fbtcLeg` — 'through' (trunk continue, the default) or 'tap'
+ * (subscriber drop, for a NAP deliberately cascaded off a tap port instead).
+ * The terminal NAP itself — i.e. whichever NAP's own directly-attached
+ * clients this call is answering "what do they receive" for — always draws
+ * from its own tap ports when it's FBTC, since that's what a subscriber
+ * port is. FBT/PLC (symmetric splitters) always use the single per-leg loss
+ * value regardless of position.
  */
 export function computeNapChainDbm(
   napId: number,
@@ -88,8 +98,10 @@ export function computeNapChainDbm(
   let running = originDbm;
   const stages: ChainStage[] = chain.map((n, i) => {
     const isTerminal = i === chain.length - 1;
+    const child = isTerminal ? null : chain[i + 1];
+    const wantsTap = isTerminal ? true : (child?.fbtcLeg ?? 'through') === 'tap';
     const key = refKey(n.splitterType, n.splitterRatio, n.ports);
-    const useTap = isTerminal && n.splitterType === 'FBTC' && key !== '' && tapMap.has(key);
+    const useTap = n.splitterType === 'FBTC' && wantsTap && key !== '' && tapMap.has(key);
     const lossDb = key
       ? useTap
         ? (tapMap.get(key) as number)
