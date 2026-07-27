@@ -12,21 +12,19 @@ export interface ChainNapLike {
   /** Cassette/split port count — only affects the lookup for FBTC (see refKey). */
   ports?: number | null;
   /**
-   * Which leg of the PARENT's splitter this NAP is plugged into — 'through'
-   * (trunk continue, the default) or 'tap' (subscriber drop, for a NAP
-   * deliberately cascaded off a tap port instead). Only meaningful when the
-   * parent's splitterType is 'FBTC'; ignored otherwise.
+   * Which leg this NAP draws from — of its parent NAP's splitter (default
+   * path), or of its origin splitter when `originSplitterId` is set. 'through'
+   * (trunk continue, the default) or 'tap' (subscriber drop). Only meaningful
+   * when that origin is FBTC-typed; ignored otherwise.
    */
   fbtcLeg?: 'through' | 'tap' | null;
   /**
-   * Optional secondary FBT/PLC splitter fitted inside this NAP box, further
-   * dividing this NAP's own local output — separate from (and applied after)
-   * the box's own primary splitterType/splitterRatio. Only applies to this
-   * NAP's own directly-attached clients, not to anything cascaded further
-   * downstream via another NAP.
+   * When set, this NAP's origin is a standalone splitter (see SplitterLike)
+   * instead of its OLT/NAP parent (parentId) — a splitter can sit between an
+   * OLT/NAP and several downstream NAP boxes, dividing the signal before any
+   * of them see it.
    */
-  secondarySplitterType?: 'FBT' | 'PLC' | null;
-  secondarySplitterRatio?: string | null;
+  originSplitterId?: number | null;
   txDbm?: number | null;
 }
 
@@ -37,6 +35,19 @@ export interface SplitterRefLike {
   ports?: number | null;
   throughLossDb: number;
   tapLossDb?: number | null;
+}
+
+/** A standalone splitter unit — its own origin (OLT/NAP/another splitter), managed independently of any NAP box. */
+export interface SplitterLike {
+  id: number;
+  name: string;
+  type: 'FBT' | 'PLC' | 'FBTC';
+  ratio: string;
+  ports?: number | null;
+  originKind: 'olt' | 'nap' | 'splitter';
+  originId: number | null;
+  /** Which leg of ITS OWN origin (if that origin is FBTC-typed) this splitter draws from. */
+  fbtcLeg?: 'through' | 'tap' | null;
 }
 
 /**
@@ -53,6 +64,59 @@ function refKey(type?: string | null, ratio?: string | null, ports?: number | nu
   return type === 'FBTC' ? `${type}|${ratio}|${ports ?? ''}` : `${type}|${ratio}`;
 }
 
+function buildLossMaps(splitterRows: SplitterRefLike[]) {
+  const throughMap = new Map(splitterRows.map((r) => [refKey(r.type, r.ratio, r.ports), r.throughLossDb]));
+  const tapMap = new Map(
+    splitterRows.filter((r) => r.tapLossDb != null).map((r) => [refKey(r.type, r.ratio, r.ports), r.tapLossDb as number])
+  );
+  return { throughMap, tapMap };
+}
+
+/** The dBm at one output leg of a splitter, given the power arriving at its input. Null if no reference match. */
+function splitterLegOutput(
+  s: SplitterLike,
+  inputDbm: number,
+  leg: 'through' | 'tap' | null | undefined,
+  splitterRows: SplitterRefLike[]
+): number | null {
+  const { throughMap, tapMap } = buildLossMaps(splitterRows);
+  const key = refKey(s.type, s.ratio, s.ports);
+  if (!key) return null;
+  const wantTap = s.type === 'FBTC' && leg === 'tap';
+  const loss = wantTap ? tapMap.get(key) : throughMap.get(key);
+  return loss != null ? inputDbm - loss : null;
+}
+
+/** Power arriving at a splitter's own input, resolved recursively through its origin (OLT / NAP / another splitter). */
+export function resolveSplitterInputDbm(
+  splitterId: number,
+  splittersById: Map<number, SplitterLike>,
+  napsById: Map<number, ChainNapLike>,
+  splitterRows: SplitterRefLike[],
+  visited: Set<number> = new Set()
+): number | null {
+  const s = splittersById.get(splitterId);
+  if (!s || visited.has(splitterId)) return null; // missing or cyclic origin chain
+  visited.add(splitterId);
+  if (s.originKind === 'olt') {
+    const olt = s.originId != null ? napsById.get(s.originId) : undefined;
+    return olt?.txDbm != null ? Number(olt.txDbm) : DEFAULT_ORIGIN_DBM;
+  }
+  if (s.originKind === 'nap') {
+    if (s.originId == null) return null;
+    const result = computeNapChainDbm(s.originId, napsById, splitterRows, splittersById);
+    return result ? result.receivedDbm : null;
+  }
+  if (s.originKind === 'splitter') {
+    if (s.originId == null) return null;
+    const parent = splittersById.get(s.originId);
+    const parentInput = resolveSplitterInputDbm(s.originId, splittersById, napsById, splitterRows, visited);
+    if (!parent || parentInput == null) return null;
+    return splitterLegOutput(parent, parentInput, s.fbtcLeg, splitterRows);
+  }
+  return null;
+}
+
 export interface ChainStage {
   napId: number;
   name: string;
@@ -62,8 +126,6 @@ export interface ChainStage {
   leg: 'through' | 'tap';
   lossDb: number | null;
   after: number;
-  /** True for the synthetic stage representing a NAP's secondary in-box splitter. */
-  secondary?: boolean;
 }
 
 export interface ChainResult {
@@ -77,35 +139,53 @@ export interface ChainResult {
 export const DEFAULT_ORIGIN_DBM = 5;
 
 /**
- * Walks a NAP's parent chain up to its OLT, subtracting each hop's splitter
- * loss. For an FBTC (asymmetric tap cassette) ancestor that feeds the next
- * NAP in the chain, the loss applied is whichever leg *that child* selects
- * via its own `fbtcLeg` — 'through' (trunk continue, the default) or 'tap'
- * (subscriber drop, for a NAP deliberately cascaded off a tap port instead).
- * The terminal NAP itself — i.e. whichever NAP's own directly-attached
- * clients this call is answering "what do they receive" for — always draws
- * from its own tap ports when it's FBTC, since that's what a subscriber
- * port is. FBT/PLC (symmetric splitters) always use the single per-leg loss
- * value regardless of position.
+ * Walks a NAP's parent chain up to its OLT (or up to a standalone splitter
+ * origin, if `originSplitterId` is set on the bottom-most NAP), subtracting
+ * each hop's splitter loss. For an FBTC (asymmetric tap cassette) ancestor
+ * that feeds the next NAP in the chain, the loss applied is whichever leg
+ * *that child* selects via its own `fbtcLeg` — 'through' (trunk continue, the
+ * default) or 'tap' (subscriber drop, for a NAP deliberately cascaded off a
+ * tap port instead). The terminal NAP itself — i.e. whichever NAP's own
+ * directly-attached clients this call is answering "what do they receive"
+ * for — always draws from its own tap ports when it's FBTC, since that's
+ * what a subscriber port is. FBT/PLC (symmetric splitters) always use the
+ * single per-leg loss value regardless of position.
  */
 export function computeNapChainDbm(
   napId: number,
   napsById: Map<number, ChainNapLike>,
-  splitterRows: SplitterRefLike[]
+  splitterRows: SplitterRefLike[],
+  splittersById?: Map<number, SplitterLike>
 ): ChainResult | null {
-  const throughMap = new Map(splitterRows.map((r) => [refKey(r.type, r.ratio, r.ports), r.throughLossDb]));
-  const tapMap = new Map(
-    splitterRows.filter((r) => r.tapLossDb != null).map((r) => [refKey(r.type, r.ratio, r.ports), r.tapLossDb as number])
-  );
+  const { throughMap, tapMap } = buildLossMaps(splitterRows);
   const chain: ChainNapLike[] = [];
   let cur: ChainNapLike | undefined = napsById.get(napId);
   if (!cur) return null;
-  while (cur && cur.kind === 'nap') {
-    chain.unshift(cur);
-    cur = cur.parentId != null ? napsById.get(cur.parentId) : undefined;
+
+  let originDbm = DEFAULT_ORIGIN_DBM;
+  let oltId: number | null = null;
+  let oltName: string | null = null;
+  let root: ChainNapLike | undefined = cur;
+  while (root && root.kind === 'nap') {
+    chain.unshift(root);
+    if (root.originSplitterId != null && splittersById) {
+      const splitter = splittersById.get(root.originSplitterId);
+      if (splitter) {
+        const inputDbm = resolveSplitterInputDbm(splitter.id, splittersById, napsById, splitterRows);
+        originDbm = inputDbm != null ? (splitterLegOutput(splitter, inputDbm, root.fbtcLeg, splitterRows) ?? DEFAULT_ORIGIN_DBM) : DEFAULT_ORIGIN_DBM;
+        oltName = `${splitter.name} (splitter)`;
+      }
+      root = undefined;
+      break;
+    }
+    root = root.parentId != null ? napsById.get(root.parentId) : undefined;
   }
-  const olt = cur && cur.kind === 'olt' ? cur : null;
-  const originDbm = olt?.txDbm != null ? Number(olt.txDbm) : DEFAULT_ORIGIN_DBM;
+  if (root && root.kind === 'olt') {
+    oltId = root.id;
+    oltName = root.name;
+    originDbm = root.txDbm != null ? Number(root.txDbm) : DEFAULT_ORIGIN_DBM;
+  }
+
   let running = originDbm;
   const stages: ChainStage[] = chain.map((n, i) => {
     const isTerminal = i === chain.length - 1;
@@ -132,24 +212,5 @@ export function computeNapChainDbm(
     };
   });
 
-  // A secondary in-box FBT/PLC splitter only applies to the NAP actually being
-  // queried — i.e. its own local clients — never to a descendant cascaded off it.
-  const target = chain[chain.length - 1];
-  if (target?.secondarySplitterType && target?.secondarySplitterRatio) {
-    const key2 = refKey(target.secondarySplitterType, target.secondarySplitterRatio, null);
-    const lossDb2 = throughMap.has(key2) ? (throughMap.get(key2) as number) : null;
-    if (lossDb2 != null) running -= lossDb2;
-    stages.push({
-      napId: target.id,
-      name: `${target.name} — secondary splitter`,
-      splitterType: target.secondarySplitterType,
-      splitterRatio: target.secondarySplitterRatio,
-      leg: 'through',
-      lossDb: lossDb2,
-      after: running,
-      secondary: true,
-    });
-  }
-
-  return { oltId: olt?.id ?? null, oltName: olt?.name ?? null, originDbm, stages, receivedDbm: running };
+  return { oltId, oltName, originDbm, stages, receivedDbm: running };
 }

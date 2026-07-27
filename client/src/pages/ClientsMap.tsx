@@ -8,7 +8,7 @@ import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
 import { fetchCurrentWeather, weatherCategory, type WeatherNow, type WeatherCategory } from '../lib/weather';
-import { computeNapChainDbm, type ChainNapLike, type SplitterRefLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, resolveSplitterInputDbm, type ChainNapLike, type SplitterRefLike, type SplitterLike } from '../lib/opticalBudget';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -18,11 +18,15 @@ interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
   splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; fbtcLeg?: 'through' | 'tap' | null; txDbm?: number | null;
-  secondarySplitterType?: 'FBT' | 'PLC' | null; secondarySplitterRatio?: string | null;
+  originSplitterId?: number | null;
   ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
   usedPorts?: number; availablePorts?: number;
+}
+interface Splitter {
+  id: number; name: string; type: 'FBT' | 'PLC' | 'FBTC'; ratio: string; ports?: number | null;
+  originKind: 'olt' | 'nap' | 'splitter'; originId: number | null; fbtcLeg?: 'through' | 'tap' | null;
 }
 interface Connector { id: number; kind: string; fromId: number; toId: number; points: [number, number][] }
 interface Client {
@@ -645,6 +649,7 @@ const emptyNap = (
     splitterRatio: kind === 'nap' ? '1:8' : '',
     splitterType: kind === 'nap' ? 'PLC' : null,
     fbtcLeg: kind === 'nap' ? 'through' : null,
+    originSplitterId: null,
     txDbm: kind === 'olt' ? 5 : null,
     ponPort: kind === 'nap' ? 1 : null,
   };
@@ -660,8 +665,10 @@ export default function ClientsMap() {
   const [search, setSearch] = useState('');
   const [topoOpen, setTopoOpen] = useState(false);
   const [editNap, setEditNap] = useState<Partial<Nap> | null>(null);
-  /** NAP form: upstream from OLT or from another NAP (parentId). */
-  const [napUpstream, setNapUpstream] = useState<'olt' | 'nap'>('olt');
+  /** NAP form: upstream from OLT, from another NAP (parentId), or from a standalone Splitter. */
+  const [napUpstream, setNapUpstream] = useState<'olt' | 'nap' | 'splitter'>('olt');
+  const [splitters, setSplitters] = useState<Splitter[]>([]);
+  const [editSplitter, setEditSplitter] = useState<Partial<Splitter> | null>(null);
   const [editServer, setEditServer] = useState<Partial<ServerNode> | null>(null);
   const [mapPickServer, setMapPickServer] = useState<ServerNode | null>(null);
   const [pickFor, setPickFor] = useState<'nap' | 'server' | null>(null);
@@ -679,11 +686,14 @@ export default function ClientsMap() {
   const [defaultMsg, setDefaultMsg] = useState('');
   const [splitterRows, setSplitterRows] = useState<SplitterRefLike[]>([]);
 
+  const loadSplitters = () => api.get('/splitters').then((r) => setSplitters(r.data || []));
   useEffect(() => {
     api.get('/tech-tools/splitters').then((r) => setSplitterRows(r.data || []));
+    loadSplitters();
   }, []);
 
   const napChainById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
+  const splittersById = useMemo(() => new Map(splitters.map((s) => [s.id, s as SplitterLike])), [splitters]);
 
   /** Live dBm-received preview for the NAP modal — overlays the in-progress edit onto the loaded chain. */
   const napPreview = useMemo(() => {
@@ -695,15 +705,14 @@ export default function ClientsMap() {
       name: editNap.name || 'New NAP',
       kind: 'nap',
       parentId: editNap.parentId ?? null,
+      originSplitterId: editNap.originSplitterId ?? null,
       splitterType: editNap.splitterType,
       splitterRatio: editNap.splitterRatio,
       fbtcLeg: editNap.fbtcLeg,
-      secondarySplitterType: editNap.secondarySplitterType,
-      secondarySplitterRatio: editNap.secondarySplitterRatio,
       ports: editNap.ports,
     });
-    return computeNapChainDbm(previewId, merged, splitterRows);
-  }, [editNap, napChainById, splitterRows]);
+    return computeNapChainDbm(previewId, merged, splitterRows, splittersById);
+  }, [editNap, napChainById, splitterRows, splittersById]);
 
   const load = useCallback(() => {
     const q = current?.id ? `?routerId=${current.id}` : '';
@@ -851,8 +860,12 @@ export default function ClientsMap() {
   };
 
   const openEditNap = (n: Nap) => {
-    const parent = n.parentId ? napsById[n.parentId] : null;
-    setNapUpstream(parent?.kind === 'nap' ? 'nap' : 'olt');
+    if (n.originSplitterId) {
+      setNapUpstream('splitter');
+    } else {
+      const parent = n.parentId ? napsById[n.parentId] : null;
+      setNapUpstream(parent?.kind === 'nap' ? 'nap' : 'olt');
+    }
     setEditNap({ ...n });
   };
 
@@ -1129,7 +1142,7 @@ export default function ClientsMap() {
               </div>
               {defaultMsg && <p className="text-xs text-slate-500 mt-2">{defaultMsg}</p>}
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-3">
               <TopoPanel
                 title="Server Configuration"
                 action={<span className="text-[11px] text-slate-400">Map location</span>}
@@ -1204,9 +1217,12 @@ export default function ClientsMap() {
                   ) : (
                     napNodes.map((n) => {
                       const parent = n.parentId ? napsById[n.parentId] : null;
-                      const fromLabel = parent
-                        ? `${parent.kind === 'nap' ? 'NAP' : 'OLT'} ${parent.name}`
-                        : null;
+                      const originSplitter = n.originSplitterId ? splittersById.get(n.originSplitterId) : null;
+                      const fromLabel = originSplitter
+                        ? `Splitter ${originSplitter.name}`
+                        : parent
+                          ? `${parent.kind === 'nap' ? 'NAP' : 'OLT'} ${parent.name}`
+                          : null;
                       return (
                       <TopoRow
                         key={n.id}
@@ -1220,6 +1236,72 @@ export default function ClientsMap() {
                         }
                       />
                     );
+                    })
+                  )}
+                </div>
+              </TopoPanel>
+              <TopoPanel
+                title="Splitter Configuration"
+                action={
+                  <button
+                    type="button"
+                    className="text-xs text-brand-600 hover:underline"
+                    onClick={() => setEditSplitter({ type: 'PLC', ratio: '1:8', originKind: 'olt', originId: olt?.id || olts[0]?.id || null, fbtcLeg: 'through' })}
+                  >
+                    <Plus size={12} className="inline" /> New Splitter
+                  </button>
+                }
+              >
+                <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                  {splitters.length === 0 ? (
+                    <p className="text-sm text-slate-400 py-4 text-center">No splitters.</p>
+                  ) : (
+                    splitters.map((s) => {
+                      const originLabel =
+                        s.originKind === 'olt'
+                          ? `OLT ${olts.find((o) => o.id === s.originId)?.name || '—'}`
+                          : s.originKind === 'nap'
+                            ? `NAP ${napsById[s.originId || -1]?.name || '—'}`
+                            : `Splitter ${splittersById.get(s.originId || -1)?.name || '—'}`;
+                      const inputDbm = resolveSplitterInputDbm(s.id, splittersById, napChainById, splitterRows);
+                      const outThrough = inputDbm != null ? (() => {
+                        const ref = splitterRows.find((r) => r.type === s.type && r.ratio === s.ratio && (s.type !== 'FBTC' || Number(r.ports) === Number(s.ports)));
+                        return ref ? inputDbm - ref.throughLossDb : null;
+                      })() : null;
+                      const outTap = inputDbm != null && s.type === 'FBTC' ? (() => {
+                        const ref = splitterRows.find((r) => r.type === s.type && r.ratio === s.ratio && Number(r.ports) === Number(s.ports));
+                        return ref?.tapLossDb != null ? inputDbm - ref.tapLossDb : null;
+                      })() : null;
+                      const outLabel = s.type === 'FBTC'
+                        ? `Through ${outThrough != null ? outThrough.toFixed(1) : '—'} / Tap ${outTap != null ? outTap.toFixed(1) : '—'} dBm`
+                        : `Out ${outThrough != null ? outThrough.toFixed(1) : '—'} dBm`;
+                      return (
+                        <TopoRow
+                          key={s.id}
+                          name={`${s.name} — ${s.type} ${s.ratio}`}
+                          sub={`From: ${originLabel} · ${outLabel}`}
+                          right={
+                            <div className="flex gap-2">
+                              <button type="button" className="text-xs text-sky-600" onClick={() => setEditSplitter({ ...s })}>Edit</button>
+                              <button
+                                type="button"
+                                className="text-xs text-rose-600"
+                                onClick={async () => {
+                                  if (!confirm('Delete this splitter?')) return;
+                                  try {
+                                    await api.delete(`/splitters/${s.id}`);
+                                    loadSplitters();
+                                  } catch (e: any) {
+                                    alert(e?.response?.data?.error || 'Could not delete splitter');
+                                  }
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          }
+                        />
+                      );
                     })
                   )}
                 </div>
@@ -1507,7 +1589,7 @@ export default function ClientsMap() {
 
             {naps.map((n) => {
               const w = n.kind === 'olt' ? weather[`olt-${n.id}`] : undefined;
-              const chain = n.kind === 'nap' ? computeNapChainDbm(n.id, napChainById, splitterRows) : null;
+              const chain = n.kind === 'nap' ? computeNapChainDbm(n.id, napChainById, splitterRows, splittersById) : null;
               return (
                 <Marker
                   key={n.id}
@@ -1530,11 +1612,13 @@ export default function ClientsMap() {
                     {n.kind === 'nap' && n.splitterType && n.splitterRatio ? (
                       <><br />Splitter: {n.splitterType} {n.splitterRatio}</>
                     ) : null}
-                    {n.kind === 'nap' && n.parentId && napsById[n.parentId]?.splitterType === 'FBTC' ? (
-                      <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
+                    {n.kind === 'nap' && n.originSplitterId ? (
+                      <><br />Origin: splitter {splittersById.get(n.originSplitterId)?.name || `#${n.originSplitterId}`}</>
                     ) : null}
-                    {n.kind === 'nap' && n.secondarySplitterType && n.secondarySplitterRatio ? (
-                      <><br />Secondary splitter: {n.secondarySplitterType} {n.secondarySplitterRatio}</>
+                    {n.kind === 'nap' &&
+                    ((n.parentId && napsById[n.parentId]?.splitterType === 'FBTC') ||
+                      (n.originSplitterId && splittersById.get(n.originSplitterId)?.type === 'FBTC')) ? (
+                      <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
                     ) : null}
                     {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
                     {n.ports != null ? (
@@ -1627,6 +1711,21 @@ export default function ClientsMap() {
         </Modal>
       )}
 
+      {editSplitter && (
+        <SplitterModal
+          splitter={editSplitter}
+          splitters={splitters}
+          splitterRows={splitterRows}
+          olts={olts}
+          napNodes={napNodes}
+          onClose={() => setEditSplitter(null)}
+          onSaved={() => {
+            setEditSplitter(null);
+            loadSplitters();
+          }}
+        />
+      )}
+
       {editNap && (
         <Modal
           title={editNap.id ? `Edit ${editNap.kind === 'olt' ? 'OLT' : 'NAP'}` : `New ${editNap.kind === 'olt' ? 'OLT' : 'NAP'}`}
@@ -1657,17 +1756,19 @@ export default function ClientsMap() {
                       className="input"
                       value={napUpstream}
                       onChange={(e) => {
-                        const v = e.target.value === 'nap' ? 'nap' : 'olt';
+                        const v = e.target.value === 'nap' ? 'nap' : e.target.value === 'splitter' ? 'splitter' : 'olt';
                         setNapUpstream(v);
-                        const defaultParent =
-                          v === 'olt'
-                            ? olt?.id || olts[0]?.id || null
-                            : parentNapOptions[0]?.id || null;
-                        setEditNap({ ...editNap, parentId: defaultParent });
+                        if (v === 'splitter') {
+                          setEditNap({ ...editNap, parentId: null, originSplitterId: splitters[0]?.id || null });
+                        } else {
+                          const defaultParent = v === 'olt' ? olt?.id || olts[0]?.id || null : parentNapOptions[0]?.id || null;
+                          setEditNap({ ...editNap, parentId: defaultParent, originSplitterId: null });
+                        }
                       }}
                     >
                       <option value="olt">From OLT</option>
                       <option value="nap">From NAP</option>
+                      <option value="splitter">From Splitter</option>
                     </select>
                   </FormField>
                   <button type="button" className="btn-secondary text-sm inline-flex items-center justify-center gap-1.5 h-[42px]" onClick={() => setPickFor('nap')}>
@@ -1690,7 +1791,7 @@ export default function ClientsMap() {
                       <p className="text-xs text-amber-700 mt-1">No OLT configured yet — add one under OLT Configuration.</p>
                     )}
                   </FormField>
-                ) : (
+                ) : napUpstream === 'nap' ? (
                   <FormField label="Parent NAP" required hint="Upstream NAP this box feeds from.">
                     <select
                       className="input"
@@ -1708,11 +1809,32 @@ export default function ClientsMap() {
                       <p className="text-xs text-amber-700 mt-1">No other NAPs available — add a NAP from an OLT first.</p>
                     )}
                   </FormField>
+                ) : (
+                  <FormField label="Splitter" required hint="Standalone splitter this box feeds from — manage the list under Splitter Configuration.">
+                    <select
+                      className="input"
+                      value={editNap.originSplitterId || ''}
+                      onChange={(e) => setEditNap({ ...editNap, originSplitterId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">— Select Splitter —</option>
+                      {splitters.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.type} {s.ratio})</option>
+                      ))}
+                    </select>
+                    {splitters.length === 0 && (
+                      <p className="text-xs text-amber-700 mt-1">No splitters configured yet — add one under Splitter Configuration.</p>
+                    )}
+                  </FormField>
                 )}
-                {napUpstream === 'nap' && editNap.parentId && napsById[editNap.parentId]?.splitterType === 'FBTC' && (
+                {((napUpstream === 'nap' && editNap.parentId && napsById[editNap.parentId]?.splitterType === 'FBTC') ||
+                  (napUpstream === 'splitter' && editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.type === 'FBTC')) && (
                   <FormField
                     label="Upstream Connection"
-                    hint={`Which leg of ${napsById[editNap.parentId]?.name || 'the parent NAP'}'s splitter this box is plugged into.`}
+                    hint={
+                      napUpstream === 'splitter'
+                        ? `Which leg of ${(editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.name) || 'the splitter'} this box is plugged into.`
+                        : `Which leg of ${napsById[editNap.parentId!]?.name || 'the parent NAP'}'s splitter this box is plugged into.`
+                    }
                   >
                     <select
                       className="input"
@@ -1782,10 +1904,9 @@ export default function ClientsMap() {
                       r.ratio === editNap.splitterRatio &&
                       (!isFbtc || Number(r.ports) === Number(editNap.ports))
                   );
-                  // Power arriving at this NAP's own primary splitter input — i.e. the
+                  // Power arriving at this NAP's own splitter input — i.e. the
                   // origin/parent chain's output before this box's own split is applied.
-                  // Exclude the synthetic secondary-splitter stage (if any) from this walk.
-                  const primaryStages = (napPreview?.stages ?? []).filter((s) => !s.secondary);
+                  const primaryStages = napPreview?.stages ?? [];
                   const incomingDbm = napPreview
                     ? primaryStages.length >= 2
                       ? primaryStages[primaryStages.length - 2].after
@@ -1821,44 +1942,10 @@ export default function ClientsMap() {
                     </div>
                   );
                 })()}
-                <FormField label="Internal Secondary Splitter" hint="Optional — an extra FBT/PLC splitter fitted inside this box, further dividing its own local output.">
-                  <div className="flex gap-2">
-                    <select
-                      className="input"
-                      value={editNap.secondarySplitterType || ''}
-                      onChange={(e) => {
-                        const t = e.target.value as '' | 'FBT' | 'PLC';
-                        if (!t) {
-                          setEditNap({ ...editNap, secondarySplitterType: null, secondarySplitterRatio: null });
-                          return;
-                        }
-                        const opts = splitterRatioOptions(splitterRows, t);
-                        const ratio = opts.includes(editNap.secondarySplitterRatio || '') ? editNap.secondarySplitterRatio : opts[0] || '';
-                        setEditNap({ ...editNap, secondarySplitterType: t, secondarySplitterRatio: ratio });
-                      }}
-                    >
-                      <option value="">None</option>
-                      <option value="PLC">PLC</option>
-                      <option value="FBT">FBT</option>
-                    </select>
-                    {editNap.secondarySplitterType && (
-                      <select
-                        className="input"
-                        value={editNap.secondarySplitterRatio || ''}
-                        onChange={(e) => setEditNap({ ...editNap, secondarySplitterRatio: e.target.value })}
-                      >
-                        {splitterRatioOptions(splitterRows, editNap.secondarySplitterType).map((r) => (
-                          <option key={r} value={r}>{r}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </FormField>
                 {napPreview && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
                     <span>
                       Est. received power {napPreview.oltName ? `from ${napPreview.oltName}` : ''}
-                      {editNap.secondarySplitterType ? ' (incl. secondary splitter)' : ''}
                       {napPreview.stages.some((s) => s.lossDb == null) && (
                         <span className="text-amber-600"> — some hops missing a reference match</span>
                       )}
@@ -2014,5 +2101,147 @@ function TopoRow({ name, sub, right }: { name: string; sub: string; right?: Reac
       </div>
       <div className="shrink-0">{right}</div>
     </div>
+  );
+}
+
+function SplitterModal({
+  splitter,
+  splitters,
+  splitterRows,
+  olts,
+  napNodes,
+  onClose,
+  onSaved,
+}: {
+  splitter: Partial<Splitter>;
+  splitters: Splitter[];
+  splitterRows: SplitterRefLike[];
+  olts: Nap[];
+  napNodes: Nap[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<Partial<Splitter>>({ ...splitter });
+  const [busy, setBusy] = useState(false);
+  const isEdit = !!splitter.id;
+  const set = (patch: Partial<Splitter>) => setForm((f) => ({ ...f, ...patch }));
+
+  const originNap = form.originKind === 'nap' && form.originId ? napNodes.find((n) => n.id === form.originId) : null;
+  const originSplitter = form.originKind === 'splitter' && form.originId ? splitters.find((s) => s.id === form.originId) : null;
+  const originIsFbtc = originNap?.splitterType === 'FBTC' || originSplitter?.type === 'FBTC';
+
+  const save = async () => {
+    if (!form.name?.trim() || !form.ratio?.trim()) return;
+    setBusy(true);
+    try {
+      if (isEdit) await api.put(`/splitters/${splitter.id}`, form);
+      else await api.post('/splitters', form);
+      onSaved();
+    } catch (e: any) {
+      alert(e?.response?.data?.error || 'Could not save splitter');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={isEdit ? 'Edit Splitter' : 'New Splitter'}
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel="Save Splitter" busy={busy} />}
+    >
+      <div className="space-y-3">
+        <FormField label="Name" required>
+          <input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} placeholder="e.g. Splitter — Main St. pole 4" />
+        </FormField>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Type">
+            <select
+              className="input"
+              value={form.type || 'PLC'}
+              onChange={(e) => {
+                const t = e.target.value as 'FBT' | 'PLC' | 'FBTC';
+                const opts = splitterRatioOptions(splitterRows, t);
+                const ratio = opts.includes(form.ratio || '') ? form.ratio : opts[0] || '';
+                const ports = t === 'FBTC' && !FBTC_PORT_OPTIONS.includes(Number(form.ports)) ? 8 : form.ports;
+                set({ type: t, ratio, ports });
+              }}
+            >
+              <option value="PLC">PLC</option>
+              <option value="FBT">FBT</option>
+              <option value="FBTC">FBTC (tap cassette)</option>
+            </select>
+          </FormField>
+          <FormField label="Ratio">
+            <select className="input" value={form.ratio || ''} onChange={(e) => set({ ratio: e.target.value })}>
+              {splitterRatioOptions(splitterRows, (form.type as 'FBT' | 'PLC' | 'FBTC') || 'PLC').map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </FormField>
+        </div>
+        {form.type === 'FBTC' && (
+          <FormField label="Cassette Ports">
+            <select className="input" value={FBTC_PORT_OPTIONS.includes(Number(form.ports)) ? (form.ports ?? 8) : 8} onChange={(e) => set({ ports: Number(e.target.value) })}>
+              {FBTC_PORT_OPTIONS.map((p) => (
+                <option key={p} value={p}>{p} ports</option>
+              ))}
+            </select>
+          </FormField>
+        )}
+        <FormField label="Origin">
+          <select
+            className="input"
+            value={form.originKind || 'olt'}
+            onChange={(e) => {
+              const kind = e.target.value as 'olt' | 'nap' | 'splitter';
+              const defaultId =
+                kind === 'olt' ? olts[0]?.id || null : kind === 'nap' ? napNodes[0]?.id || null : splitters.filter((s) => s.id !== splitter.id)[0]?.id || null;
+              set({ originKind: kind, originId: defaultId });
+            }}
+          >
+            <option value="olt">From OLT</option>
+            <option value="nap">From NAP</option>
+            <option value="splitter">From another Splitter</option>
+          </select>
+        </FormField>
+        {form.originKind === 'olt' ? (
+          <FormField label="OLT" required>
+            <select className="input" value={form.originId || ''} onChange={(e) => set({ originId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">— Select OLT —</option>
+              {olts.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          </FormField>
+        ) : form.originKind === 'nap' ? (
+          <FormField label="NAP" required>
+            <select className="input" value={form.originId || ''} onChange={(e) => set({ originId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">— Select NAP —</option>
+              {napNodes.map((n) => (
+                <option key={n.id} value={n.id}>{n.code ? `${n.code} · ${n.name}` : n.name}</option>
+              ))}
+            </select>
+          </FormField>
+        ) : (
+          <FormField label="Splitter" required hint="Cascade this splitter off another splitter's output.">
+            <select className="input" value={form.originId || ''} onChange={(e) => set({ originId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">— Select Splitter —</option>
+              {splitters.filter((s) => s.id !== splitter.id).map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.type} {s.ratio})</option>
+              ))}
+            </select>
+          </FormField>
+        )}
+        {originIsFbtc && (
+          <FormField label="Origin Connection" hint="Which leg of the origin's splitter this splitter is plugged into.">
+            <select className="input" value={form.fbtcLeg || 'through'} onChange={(e) => set({ fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}>
+              <option value="through">Through (trunk continue)</option>
+              <option value="tap">Tap (subscriber drop)</option>
+            </select>
+          </FormField>
+        )}
+      </div>
+    </Modal>
   );
 }

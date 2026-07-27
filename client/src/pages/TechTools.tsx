@@ -3,7 +3,7 @@ import { Cable, Plus, Pencil, Trash2, RotateCcw, ArrowDownCircle, Boxes, Route }
 import Layout from '../components/Layout';
 import { Card, DataTable, Modal, ModalFooter, FormField, IconAction, TabPills } from '../components/ui';
 import { api } from '../api';
-import { computeNapChainDbm, type ChainNapLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, type ChainNapLike, type SplitterLike } from '../lib/opticalBudget';
 
 type SplitterType = 'FBT' | 'PLC' | 'FBTC';
 
@@ -34,8 +34,7 @@ interface TopologyNap {
   splitterType?: 'FBT' | 'PLC' | 'FBTC' | null;
   splitterRatio?: string | null;
   fbtcLeg?: 'through' | 'tap' | null;
-  secondarySplitterType?: 'FBT' | 'PLC' | null;
-  secondarySplitterRatio?: string | null;
+  originSplitterId?: number | null;
   txDbm?: number | null;
   oltName?: string | null;
   parentKind?: string | null;
@@ -48,12 +47,15 @@ export default function TechTools() {
   const [edit, setEdit] = useState<any>(null);
   const [typeTab, setTypeTab] = useState<SplitterType>('PLC');
   const [naps, setNaps] = useState<TopologyNap[]>([]);
+  const [splitters, setSplitters] = useState<SplitterLike[]>([]);
 
   const load = () => api.get('/tech-tools/splitters').then((r) => setRows(r.data));
   const loadNaps = () => api.get('/naps?all=1').then((r) => setNaps(r.data));
+  const loadSplitters = () => api.get('/splitters').then((r) => setSplitters(r.data));
   useEffect(() => {
     load();
     loadNaps();
+    loadSplitters();
   }, []);
 
   const del = async (id: number) => {
@@ -138,7 +140,7 @@ export default function TechTools() {
       </div>
 
       <div className="mt-5">
-        <TopologyDbmLookup naps={naps} rows={rows} />
+        <TopologyDbmLookup naps={naps} rows={rows} splitters={splitters} />
       </div>
 
       {edit && <SplitterModal row={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
@@ -202,7 +204,7 @@ function AvailableNaps({ naps }: { naps: TopologyNap[] }) {
   );
 }
 
-function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: SplitterRow[] }) {
+function TopologyDbmLookup({ naps, rows, splitters }: { naps: TopologyNap[]; rows: SplitterRow[]; splitters: SplitterLike[] }) {
   const napOnly = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const [napId, setNapId] = useState<number | ''>('');
   const [minDbm, setMinDbm] = useState('-28');
@@ -213,11 +215,15 @@ function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: Splitter
   }, [napOnly, napId]);
 
   const napsById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
+  const splittersById = useMemo(() => new Map(splitters.map((s) => [s.id, s])), [splitters]);
   const splitterRefs = useMemo(
     () => rows.map((r) => ({ type: r.type, ratio: r.ratio, ports: r.ports, throughLossDb: r.throughLossDb, tapLossDb: r.tapLossDb })),
     [rows]
   );
-  const result = useMemo(() => (napId ? computeNapChainDbm(Number(napId), napsById, splitterRefs) : null), [napId, napsById, splitterRefs]);
+  const result = useMemo(
+    () => (napId ? computeNapChainDbm(Number(napId), napsById, splitterRefs, splittersById) : null),
+    [napId, napsById, splitterRefs, splittersById]
+  );
   const nap = napId ? naps.find((n) => n.id === napId) : undefined;
 
   const min = Number(minDbm);
