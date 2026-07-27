@@ -17,7 +17,7 @@ interface ServerNode {
 interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
-  splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | null; txDbm?: number | null;
+  splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; txDbm?: number | null;
   ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
@@ -47,7 +47,7 @@ function fmtGB(gb?: number): string {
 }
 
 /** Distinct ratio strings available for a splitter type, in reference-table order. */
-function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC'): string[] {
+function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC' | 'FBTC'): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const r of rows) {
@@ -1708,7 +1708,7 @@ export default function ClientsMap() {
                       className="input"
                       value={editNap.splitterType || 'PLC'}
                       onChange={(e) => {
-                        const t = e.target.value as 'FBT' | 'PLC';
+                        const t = e.target.value as 'FBT' | 'PLC' | 'FBTC';
                         const opts = splitterRatioOptions(splitterRows, t);
                         const ratio = opts.includes(editNap.splitterRatio || '') ? editNap.splitterRatio : opts[0] || '';
                         setEditNap({ ...editNap, splitterType: t, splitterRatio: ratio });
@@ -1716,20 +1716,27 @@ export default function ClientsMap() {
                     >
                       <option value="PLC">PLC</option>
                       <option value="FBT">FBT</option>
+                      <option value="FBTC">FBTC (tap cassette)</option>
                     </select>
                   </FormField>
-                  <FormField label="Splitter Ratio">
+                  <FormField label="Splitter Ratio" hint={editNap.splitterType === 'FBTC' ? 'through:tap' : undefined}>
                     <select
                       className="input"
                       value={editNap.splitterRatio || ''}
                       onChange={(e) => setEditNap({ ...editNap, splitterRatio: e.target.value })}
                     >
-                      {splitterRatioOptions(splitterRows, (editNap.splitterType as 'FBT' | 'PLC') || 'PLC').map((r) => (
+                      {splitterRatioOptions(splitterRows, (editNap.splitterType as 'FBT' | 'PLC' | 'FBTC') || 'PLC').map((r) => (
                         <option key={r} value={r}>{r}</option>
                       ))}
                     </select>
                   </FormField>
                 </div>
+                {editNap.splitterType === 'FBTC' && (
+                  <p className="text-xs text-slate-400 -mt-1">
+                    This box's own clients use the tap leg (subscriber drop); any cascaded NAP downstream of it
+                    uses the through leg (trunk continue).
+                  </p>
+                )}
                 {napPreview && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
                     <span>

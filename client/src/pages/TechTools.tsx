@@ -31,7 +31,7 @@ interface TopologyNap {
   ports: number;
   parentId: number | null;
   code?: string | null;
-  splitterType?: 'FBT' | 'PLC' | null;
+  splitterType?: 'FBT' | 'PLC' | 'FBTC' | null;
   splitterRatio?: string | null;
   txDbm?: number | null;
   oltName?: string | null;
@@ -211,7 +211,7 @@ function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: Splitter
 
   const napsById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
   const splitterRefs = useMemo(
-    () => rows.filter((r) => r.type === 'FBT' || r.type === 'PLC').map((r) => ({ type: r.type, ratio: r.ratio, throughLossDb: r.throughLossDb })),
+    () => rows.map((r) => ({ type: r.type, ratio: r.ratio, throughLossDb: r.throughLossDb, tapLossDb: r.tapLossDb })),
     [rows]
   );
   const result = useMemo(() => (napId ? computeNapChainDbm(Number(napId), napsById, splitterRefs) : null), [napId, napsById, splitterRefs]);
@@ -270,7 +270,10 @@ function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: Splitter
                 {result.stages.map((s) => (
                   <tr key={s.napId} className="border-t border-slate-100">
                     <td className="px-4 py-2 text-slate-600">
-                      {s.name} {s.splitterType && s.splitterRatio ? `(${s.splitterType} ${s.splitterRatio})` : '(no splitter set)'}
+                      {s.name}{' '}
+                      {s.splitterType && s.splitterRatio
+                        ? `(${s.splitterType} ${s.splitterRatio}${s.splitterType === 'FBTC' ? ` · ${s.leg}` : ''})`
+                        : '(no splitter set)'}
                     </td>
                     <td className="px-4 py-2 text-right text-slate-500">{s.lossDb != null ? `−${s.lossDb.toFixed(1)} dB` : 'no ref'}</td>
                     <td className="px-4 py-2 text-right font-medium text-slate-700">{s.after.toFixed(2)} dBm</td>
