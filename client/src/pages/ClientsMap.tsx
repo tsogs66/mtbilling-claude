@@ -18,6 +18,7 @@ interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
   splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; fbtcLeg?: 'through' | 'tap' | null; txDbm?: number | null;
+  secondarySplitterType?: 'FBT' | 'PLC' | null; secondarySplitterRatio?: string | null;
   ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
@@ -697,6 +698,8 @@ export default function ClientsMap() {
       splitterType: editNap.splitterType,
       splitterRatio: editNap.splitterRatio,
       fbtcLeg: editNap.fbtcLeg,
+      secondarySplitterType: editNap.secondarySplitterType,
+      secondarySplitterRatio: editNap.secondarySplitterRatio,
       ports: editNap.ports,
     });
     return computeNapChainDbm(previewId, merged, splitterRows);
@@ -1530,6 +1533,9 @@ export default function ClientsMap() {
                     {n.kind === 'nap' && n.parentId && napsById[n.parentId]?.splitterType === 'FBTC' ? (
                       <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
                     ) : null}
+                    {n.kind === 'nap' && n.secondarySplitterType && n.secondarySplitterRatio ? (
+                      <><br />Secondary splitter: {n.secondarySplitterType} {n.secondarySplitterRatio}</>
+                    ) : null}
                     {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
                     {n.ports != null ? (
                       <>
@@ -1776,12 +1782,13 @@ export default function ClientsMap() {
                       r.ratio === editNap.splitterRatio &&
                       (!isFbtc || Number(r.ports) === Number(editNap.ports))
                   );
-                  // Power arriving at this NAP's own splitter input — i.e. the origin/parent
-                  // chain's output before this box's own through/tap split is applied.
-                  const stages = napPreview?.stages ?? [];
+                  // Power arriving at this NAP's own primary splitter input — i.e. the
+                  // origin/parent chain's output before this box's own split is applied.
+                  // Exclude the synthetic secondary-splitter stage (if any) from this walk.
+                  const primaryStages = (napPreview?.stages ?? []).filter((s) => !s.secondary);
                   const incomingDbm = napPreview
-                    ? stages.length >= 2
-                      ? stages[stages.length - 2].after
+                    ? primaryStages.length >= 2
+                      ? primaryStages[primaryStages.length - 2].after
                       : napPreview.originDbm
                     : null;
                   const throughDbm = ref && incomingDbm != null ? incomingDbm - ref.throughLossDb : null;
@@ -1814,10 +1821,44 @@ export default function ClientsMap() {
                     </div>
                   );
                 })()}
+                <FormField label="Internal Secondary Splitter" hint="Optional — an extra FBT/PLC splitter fitted inside this box, further dividing its own local output.">
+                  <div className="flex gap-2">
+                    <select
+                      className="input"
+                      value={editNap.secondarySplitterType || ''}
+                      onChange={(e) => {
+                        const t = e.target.value as '' | 'FBT' | 'PLC';
+                        if (!t) {
+                          setEditNap({ ...editNap, secondarySplitterType: null, secondarySplitterRatio: null });
+                          return;
+                        }
+                        const opts = splitterRatioOptions(splitterRows, t);
+                        const ratio = opts.includes(editNap.secondarySplitterRatio || '') ? editNap.secondarySplitterRatio : opts[0] || '';
+                        setEditNap({ ...editNap, secondarySplitterType: t, secondarySplitterRatio: ratio });
+                      }}
+                    >
+                      <option value="">None</option>
+                      <option value="PLC">PLC</option>
+                      <option value="FBT">FBT</option>
+                    </select>
+                    {editNap.secondarySplitterType && (
+                      <select
+                        className="input"
+                        value={editNap.secondarySplitterRatio || ''}
+                        onChange={(e) => setEditNap({ ...editNap, secondarySplitterRatio: e.target.value })}
+                      >
+                        {splitterRatioOptions(splitterRows, editNap.secondarySplitterType).map((r) => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </FormField>
                 {napPreview && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
                     <span>
                       Est. received power {napPreview.oltName ? `from ${napPreview.oltName}` : ''}
+                      {editNap.secondarySplitterType ? ' (incl. secondary splitter)' : ''}
                       {napPreview.stages.some((s) => s.lossDb == null) && (
                         <span className="text-amber-600"> — some hops missing a reference match</span>
                       )}
