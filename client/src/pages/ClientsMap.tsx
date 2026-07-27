@@ -66,6 +66,21 @@ function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC' | 'FB
   return out;
 }
 
+/**
+ * Label a through/tap leg choice by the splitter's own ratio numbers (e.g.
+ * ratio "95:5" -> "95" for through, "5" for tap) instead of generic
+ * trunk/subscriber wording, since that's what's printed on the hardware.
+ * Falls back to the generic label if the ratio isn't in "NN:MM" form.
+ */
+function ratioLegLabel(ratio: string | null | undefined, leg: 'through' | 'tap'): string {
+  const parts = (ratio || '').split(':');
+  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
+    return leg === 'through' ? 'Through (trunk continue)' : 'Tap (subscriber drop)';
+  }
+  const [throughPct, tapPct] = parts;
+  return leg === 'through' ? `${throughPct.trim()} (through)` : `${tapPct.trim()} (tap)`;
+}
+
 function clientState(c: Client): ClientState {
   const s = (c.status || '').toLowerCase().replace(/\s+/g, '-');
   if (s === 'expired') return 'expired';
@@ -1616,7 +1631,13 @@ export default function ClientsMap() {
                     {n.kind === 'nap' &&
                     ((n.parentId && isAsymmetricType(napsById[n.parentId]?.splitterType)) ||
                       (n.originSplitterId && isAsymmetricType(splittersById.get(n.originSplitterId)?.type))) ? (
-                      <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
+                      <>
+                        <br />Upstream port:{' '}
+                        {ratioLegLabel(
+                          n.originSplitterId ? splittersById.get(n.originSplitterId)?.ratio : n.parentId ? napsById[n.parentId]?.splitterRatio : null,
+                          n.fbtcLeg === 'tap' ? 'tap' : 'through'
+                        )}
+                      </>
                     ) : null}
                     {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
                     {n.ports != null ? (
@@ -1825,25 +1846,28 @@ export default function ClientsMap() {
                   </FormField>
                 )}
                 {((napUpstream === 'nap' && editNap.parentId && isAsymmetricType(napsById[editNap.parentId]?.splitterType)) ||
-                  (napUpstream === 'splitter' && editNap.originSplitterId && isAsymmetricType(splittersById.get(editNap.originSplitterId)?.type))) && (
-                  <FormField
-                    label="Upstream Connection"
-                    hint={
-                      napUpstream === 'splitter'
-                        ? `Which leg of ${(editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.name) || 'the splitter'} this box is plugged into.`
-                        : `Which leg of ${napsById[editNap.parentId!]?.name || 'the parent NAP'}'s splitter this box is plugged into.`
-                    }
-                  >
-                    <select
-                      className="input"
-                      value={editNap.fbtcLeg || 'through'}
-                      onChange={(e) => setEditNap({ ...editNap, fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}
-                    >
-                      <option value="through">Through (trunk continue) — typical for cascading another box</option>
-                      <option value="tap">Tap (subscriber drop) — this box is plugged into a client port instead</option>
-                    </select>
-                  </FormField>
-                )}
+                  (napUpstream === 'splitter' && editNap.originSplitterId && isAsymmetricType(splittersById.get(editNap.originSplitterId)?.type))) && (() => {
+                  const originRatio =
+                    napUpstream === 'splitter'
+                      ? (editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.ratio) || null
+                      : napsById[editNap.parentId!]?.splitterRatio || null;
+                  const originName =
+                    napUpstream === 'splitter'
+                      ? (editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.name) || 'the splitter'
+                      : napsById[editNap.parentId!]?.name || 'the parent NAP';
+                  return (
+                    <FormField label="Upstream Connection" hint={`Which port of ${originName} (ratio ${originRatio || '—'}) this box is plugged into.`}>
+                      <select
+                        className="input"
+                        value={editNap.fbtcLeg || 'through'}
+                        onChange={(e) => setEditNap({ ...editNap, fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}
+                      >
+                        <option value="through">{ratioLegLabel(originRatio, 'through')} — typical for cascading another box</option>
+                        <option value="tap">{ratioLegLabel(originRatio, 'tap')} — this box is plugged into a client port instead</option>
+                      </select>
+                    </FormField>
+                  );
+                })()}
                 <div className="grid grid-cols-2 gap-3">
                   <FormField label="PON Port">
                     <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />
@@ -2233,10 +2257,10 @@ function SplitterModal({
           </FormField>
         )}
         {originIsAsymmetric && (
-          <FormField label="Origin Connection" hint="Which leg of the origin's splitter this splitter is plugged into.">
+          <FormField label="Origin Connection" hint={`Which port of the origin (ratio ${(originNap?.splitterRatio || originSplitter?.ratio) || '—'}) this splitter is plugged into.`}>
             <select className="input" value={form.fbtcLeg || 'through'} onChange={(e) => set({ fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}>
-              <option value="through">Through (trunk continue)</option>
-              <option value="tap">Tap (subscriber drop)</option>
+              <option value="through">{ratioLegLabel(originNap?.splitterRatio || originSplitter?.ratio, 'through')}</option>
+              <option value="tap">{ratioLegLabel(originNap?.splitterRatio || originSplitter?.ratio, 'tap')}</option>
             </select>
           </FormField>
         )}
