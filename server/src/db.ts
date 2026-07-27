@@ -95,6 +95,23 @@ export function initSchema() {
       parent_id INTEGER
     );
 
+    -- Standalone splitter units, managed separately from NAP boxes. Each one
+    -- has its own power origin (an OLT, a NAP, or another splitter) and a
+    -- NAP can pick one of these as ITS OWN origin instead of an OLT/NAP —
+    -- e.g. a splitter fitted between the OLT/NAP and several downstream NAP
+    -- boxes to divide the signal further before it reaches any of them.
+    CREATE TABLE IF NOT EXISTS splitters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      ratio TEXT NOT NULL,
+      ports INTEGER,
+      origin_kind TEXT NOT NULL DEFAULT 'olt',
+      origin_id INTEGER,
+      fbtc_leg TEXT DEFAULT 'through',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pppoe_user_id INTEGER,
@@ -446,8 +463,14 @@ export function migrate() {
     // Optional secondary FBT/PLC splitter fitted inside this NAP box —
     // further divides this NAP's own local output, separate from (and
     // applied after) the box's own primary splitter_type/splitter_ratio.
+    // Superseded by origin_splitter_id (a NAP can now originate from a
+    // standalone splitter instead) but left in place for any existing rows.
     ['secondary_splitter_type', 'TEXT'],
     ['secondary_splitter_ratio', 'TEXT'],
+    // When set, this NAP's origin is a standalone splitter (see the
+    // `splitters` table) instead of parent_id's OLT/NAP — fbtc_leg then
+    // selects which leg of *that splitter* this NAP draws from.
+    ['origin_splitter_id', 'INTEGER'],
     ['tx_dbm', 'REAL'],
     ['pon_port', 'INTEGER'],
     ['host', 'TEXT'],

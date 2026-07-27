@@ -3131,8 +3131,8 @@ app.get('/api/map', async (req, res) => {
   const naps = db.prepare(
     `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId,
             code, status, address, splitter_ratio AS splitterRatio, splitter_type AS splitterType,
-            fbtc_leg AS fbtcLeg, secondary_splitter_type AS secondarySplitterType,
-            secondary_splitter_ratio AS secondarySplitterRatio, tx_dbm AS txDbm, pon_port AS ponPort,
+            fbtc_leg AS fbtcLeg, origin_splitter_id AS originSplitterId,
+            tx_dbm AS txDbm, pon_port AS ponPort,
             host, snmp_port AS snmpPort, snmp_community AS snmpCommunity,
             vendor, model, sys_name AS sysName, firmware, last_probe_at AS lastProbeAt, probe_error AS probeError
      FROM naps`
@@ -3443,8 +3443,8 @@ app.get('/api/naps', (req, res) => {
     .prepare(
       `SELECT n.id, n.name, n.kind, n.ports, n.lat, n.lng, n.parent_id AS parentId,
               n.code, n.status, n.address, n.splitter_ratio AS splitterRatio, n.splitter_type AS splitterType,
-              n.fbtc_leg AS fbtcLeg, n.secondary_splitter_type AS secondarySplitterType,
-              n.secondary_splitter_ratio AS secondarySplitterRatio, n.tx_dbm AS txDbm, n.pon_port AS ponPort,
+              n.fbtc_leg AS fbtcLeg, n.origin_splitter_id AS originSplitterId,
+              n.tx_dbm AS txDbm, n.pon_port AS ponPort,
               (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName,
               (SELECT kind FROM naps o WHERE o.id = n.parent_id) AS parentKind
        FROM naps n ${where} ORDER BY n.kind DESC, n.id`
@@ -3459,8 +3459,8 @@ app.post('/api/naps', (req, res) => {
   if (!b.name?.trim()) return res.status(400).json({ error: 'name is required' });
   const info = db
     .prepare(
-      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, splitter_type, fbtc_leg, secondary_splitter_type, secondary_splitter_ratio, tx_dbm, pon_port, host, snmp_port, snmp_community)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, splitter_type, fbtc_leg, origin_splitter_id, tx_dbm, pon_port, host, snmp_port, snmp_community)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       String(b.name).trim(),
@@ -3468,15 +3468,14 @@ app.post('/api/naps', (req, res) => {
       b.lat != null ? Number(b.lat) : null,
       b.lng != null ? Number(b.lng) : null,
       Number(b.ports) || 8,
-      b.parentId ? Number(b.parentId) : null,
+      b.originSplitterId ? null : b.parentId ? Number(b.parentId) : null,
       b.code ? String(b.code).trim() : null,
       b.status || 'active',
       b.address ? String(b.address).trim() : null,
       b.splitterRatio ? String(b.splitterRatio).trim() : null,
       b.splitterType ? String(b.splitterType).trim() : null,
       b.fbtcLeg === 'tap' ? 'tap' : 'through',
-      b.secondarySplitterType ? String(b.secondarySplitterType).trim() : null,
-      b.secondarySplitterRatio ? String(b.secondarySplitterRatio).trim() : null,
+      b.originSplitterId != null && b.originSplitterId !== '' ? Number(b.originSplitterId) : null,
       b.txDbm != null && b.txDbm !== '' ? Number(b.txDbm) : null,
       b.ponPort != null && b.ponPort !== '' ? Number(b.ponPort) : null,
       b.host ? String(b.host).trim() : null,
@@ -3488,7 +3487,7 @@ app.post('/api/naps', (req, res) => {
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
                 splitter_ratio AS splitterRatio, splitter_type AS splitterType, fbtc_leg AS fbtcLeg,
-                secondary_splitter_type AS secondarySplitterType, secondary_splitter_ratio AS secondarySplitterRatio,
+                origin_splitter_id AS originSplitterId,
                 tx_dbm AS txDbm, pon_port AS ponPort, host, snmp_port AS snmpPort,
                 snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
                 last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
@@ -3502,8 +3501,22 @@ app.put('/api/naps/:id', (req, res) => {
   const ex = db.prepare('SELECT * FROM naps WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
+  const originSplitterId =
+    b.originSplitterId !== undefined
+      ? b.originSplitterId != null && b.originSplitterId !== ''
+        ? Number(b.originSplitterId)
+        : null
+      : ex.origin_splitter_id;
+  // A NAP's origin is either an OLT/NAP (parent_id) or a standalone splitter — never both.
+  const parentId = originSplitterId
+    ? null
+    : b.parentId !== undefined
+      ? b.parentId
+        ? Number(b.parentId)
+        : null
+      : ex.parent_id;
   db.prepare(
-    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, splitter_type=?, fbtc_leg=?, secondary_splitter_type=?, secondary_splitter_ratio=?, tx_dbm=?, pon_port=?,
+    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, splitter_type=?, fbtc_leg=?, origin_splitter_id=?, tx_dbm=?, pon_port=?,
       host=?, snmp_port=?, snmp_community=? WHERE id=?`
   ).run(
     b.name ?? ex.name,
@@ -3511,7 +3524,7 @@ app.put('/api/naps/:id', (req, res) => {
     b.lat != null ? Number(b.lat) : ex.lat,
     b.lng != null ? Number(b.lng) : ex.lng,
     b.ports != null ? Number(b.ports) : ex.ports,
-    b.parentId !== undefined ? (b.parentId ? Number(b.parentId) : null) : ex.parent_id,
+    parentId,
     b.code !== undefined ? (b.code ? String(b.code).trim() : null) : ex.code,
     b.status ?? ex.status ?? 'active',
     b.address !== undefined ? (b.address ? String(b.address).trim() : null) : ex.address,
@@ -3526,16 +3539,7 @@ app.put('/api/naps/:id', (req, res) => {
         : null
       : ex.splitter_type,
     b.fbtcLeg !== undefined ? (b.fbtcLeg === 'tap' ? 'tap' : 'through') : ex.fbtc_leg ?? 'through',
-    b.secondarySplitterType !== undefined
-      ? b.secondarySplitterType
-        ? String(b.secondarySplitterType).trim()
-        : null
-      : ex.secondary_splitter_type,
-    b.secondarySplitterRatio !== undefined
-      ? b.secondarySplitterRatio
-        ? String(b.secondarySplitterRatio).trim()
-        : null
-      : ex.secondary_splitter_ratio,
+    originSplitterId,
     b.txDbm !== undefined
       ? b.txDbm != null && b.txDbm !== ''
         ? Number(b.txDbm)
@@ -3556,7 +3560,7 @@ app.put('/api/naps/:id', (req, res) => {
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
                 splitter_ratio AS splitterRatio, splitter_type AS splitterType, fbtc_leg AS fbtcLeg,
-                secondary_splitter_type AS secondarySplitterType, secondary_splitter_ratio AS secondarySplitterRatio,
+                origin_splitter_id AS originSplitterId,
                 tx_dbm AS txDbm, pon_port AS ponPort, host, snmp_port AS snmpPort,
                 snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
                 last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
@@ -3576,6 +3580,84 @@ app.delete('/api/naps/:id', (req, res) => {
     `DELETE FROM map_connectors WHERE
       (kind IN ('olt-nap','nap-nap','nap-client') AND (from_id = ? OR to_id = ?))`
   ).run(id, id);
+  res.json({ ok: true });
+});
+
+// ---- Standalone splitters (Topology setup — origin can be an OLT, a NAP, or another splitter) ----
+const SPLITTER_SELECT = `SELECT id, name, type, ratio, ports, origin_kind AS originKind, origin_id AS originId,
+  fbtc_leg AS fbtcLeg, created_at AS createdAt FROM splitters`;
+
+app.get('/api/splitters', (_req, res) => {
+  res.json(db.prepare(`${SPLITTER_SELECT} ORDER BY id`).all());
+});
+
+app.post('/api/splitters', (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const type = String(b.type || '').trim();
+  const ratio = String(b.ratio || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!['FBT', 'PLC', 'FBTC'].includes(type)) return res.status(400).json({ error: 'type must be FBT, PLC, or FBTC' });
+  if (!ratio) return res.status(400).json({ error: 'ratio is required' });
+  const originKind = ['olt', 'nap', 'splitter'].includes(b.originKind) ? b.originKind : 'olt';
+  const info = db
+    .prepare(
+      `INSERT INTO splitters (name, type, ratio, ports, origin_kind, origin_id, fbtc_leg)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      name,
+      type,
+      ratio,
+      b.ports != null && b.ports !== '' ? Number(b.ports) : null,
+      originKind,
+      b.originId != null && b.originId !== '' ? Number(b.originId) : null,
+      b.fbtcLeg === 'tap' ? 'tap' : 'through'
+    );
+  res.status(201).json(db.prepare(`${SPLITTER_SELECT} WHERE id = ?`).get(info.lastInsertRowid));
+});
+
+app.put('/api/splitters/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM splitters WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  // A splitter can't originate from itself, directly or via a cycle through other splitters.
+  if (b.originKind === 'splitter' && b.originId != null) {
+    let cur = Number(b.originId);
+    const seen = new Set<number>([id]);
+    while (cur != null) {
+      if (seen.has(cur)) return res.status(400).json({ error: 'That origin would create a splitter loop.' });
+      seen.add(cur);
+      const row = db.prepare('SELECT origin_kind AS originKind, origin_id AS originId FROM splitters WHERE id = ?').get(cur) as any;
+      if (!row || row.originKind !== 'splitter') break;
+      cur = row.originId;
+    }
+  }
+  const type = b.type !== undefined ? String(b.type).trim() : ex.type;
+  if (!['FBT', 'PLC', 'FBTC'].includes(type)) return res.status(400).json({ error: 'type must be FBT, PLC, or FBTC' });
+  db.prepare(
+    `UPDATE splitters SET name=?, type=?, ratio=?, ports=?, origin_kind=?, origin_id=?, fbtc_leg=? WHERE id=?`
+  ).run(
+    b.name !== undefined ? String(b.name).trim() : ex.name,
+    type,
+    b.ratio !== undefined ? String(b.ratio).trim() : ex.ratio,
+    b.ports !== undefined ? (b.ports != null && b.ports !== '' ? Number(b.ports) : null) : ex.ports,
+    ['olt', 'nap', 'splitter'].includes(b.originKind) ? b.originKind : ex.origin_kind,
+    b.originId !== undefined ? (b.originId != null && b.originId !== '' ? Number(b.originId) : null) : ex.origin_id,
+    b.fbtcLeg !== undefined ? (b.fbtcLeg === 'tap' ? 'tap' : 'through') : ex.fbtc_leg ?? 'through',
+    id
+  );
+  res.json(db.prepare(`${SPLITTER_SELECT} WHERE id = ?`).get(id));
+});
+
+app.delete('/api/splitters/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const usedByNap = (db.prepare('SELECT COUNT(*) AS c FROM naps WHERE origin_splitter_id = ?').get(id) as any).c;
+  if (usedByNap > 0) return res.status(400).json({ error: 'A NAP originates from this splitter. Reassign it first.' });
+  const usedBySplitter = (db.prepare("SELECT COUNT(*) AS c FROM splitters WHERE origin_kind = 'splitter' AND origin_id = ?").get(id) as any).c;
+  if (usedBySplitter > 0) return res.status(400).json({ error: 'Another splitter originates from this one. Reassign it first.' });
+  db.prepare('DELETE FROM splitters WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
