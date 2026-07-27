@@ -3,7 +3,7 @@ import { Cable, Plus, Pencil, Trash2, RotateCcw, ArrowDownCircle, Boxes, Route }
 import Layout from '../components/Layout';
 import { Card, DataTable, Modal, ModalFooter, FormField, IconAction, TabPills } from '../components/ui';
 import { api } from '../api';
-import { computeNapChainDbm, type ChainNapLike, type SplitterLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, isAsymmetricType, type ChainNapLike, type SplitterLike } from '../lib/opticalBudget';
 
 type SplitterType = 'FBT' | 'PLC' | 'FBTC';
 
@@ -65,6 +65,7 @@ export default function TechTools() {
 
   const filtered = rows.filter((r) => r.type === typeTab);
   const isFbtc = typeTab === 'FBTC';
+  const isAsymmetric = isAsymmetricType(typeTab);
 
   return (
     <Layout title="Tech Tools">
@@ -101,8 +102,8 @@ export default function TechTools() {
           columns={[
             { key: 'ratio', label: 'Ratio' },
             { key: 'ports', label: isFbtc ? 'Cassette Ports' : 'Ports', align: 'right' },
-            { key: 'through', label: isFbtc ? 'Through Loss (dB)' : 'Loss (dB)', align: 'right' },
-            ...(isFbtc ? [{ key: 'tap', label: 'Tap Loss (dB)', align: 'right' as const }] : []),
+            { key: 'through', label: isAsymmetric ? 'Through Loss (dB)' : 'Loss (dB)', align: 'right' },
+            ...(isAsymmetric ? [{ key: 'tap', label: 'Tap Loss (dB)', align: 'right' as const }] : []),
             { key: 'notes', label: 'Notes' },
             { key: 'actions', label: 'Actions', align: 'right' },
           ]}
@@ -112,7 +113,7 @@ export default function TechTools() {
               <span className="font-medium text-slate-800">{r.ratio}</span>,
               <span className="text-slate-600">{r.ports ?? '—'}</span>,
               <span className="text-slate-700">{r.throughLossDb.toFixed(1)}</span>,
-              ...(isFbtc
+              ...(isAsymmetric
                 ? [<span className="text-slate-700">{r.tapLossDb != null ? r.tapLossDb.toFixed(1) : '—'}</span>]
                 : []),
               <span className="text-slate-500 text-xs">{r.notes}</span>,
@@ -281,7 +282,7 @@ function TopologyDbmLookup({ naps, rows, splitters }: { naps: TopologyNap[]; row
                     <td className="px-4 py-2 text-slate-600">
                       {s.name}{' '}
                       {s.splitterType && s.splitterRatio
-                        ? `(${s.splitterType} ${s.splitterRatio}${s.splitterType === 'FBTC' ? ` · ${s.leg}` : ''})`
+                        ? `(${s.splitterType} ${s.splitterRatio}${isAsymmetricType(s.splitterType) ? ` · ${s.leg}` : ''})`
                         : '(no splitter set)'}
                     </td>
                     <td className="px-4 py-2 text-right text-slate-500">{s.lossDb != null ? `−${s.lossDb.toFixed(1)} dB` : 'no ref'}</td>
@@ -321,6 +322,7 @@ function SplitterModal({ row, onClose, onSaved }: any) {
   const [busy, setBusy] = useState(false);
   const isEdit = !!row.id;
   const isFbtc = form.type === 'FBTC';
+  const isAsymmetric = isAsymmetricType(form.type);
   const set = (patch: any) => setForm((f: any) => ({ ...f, ...patch }));
 
   const save = async () => {
@@ -350,7 +352,7 @@ function SplitterModal({ row, onClose, onSaved }: any) {
               <option value="FBTC">FBTC (tap cassette)</option>
             </select>
           </FormField>
-          <FormField label="Ratio" required hint={isFbtc ? 'e.g. 95:5 (through:tap)' : 'e.g. 1:8'}>
+          <FormField label="Ratio" required hint={isAsymmetric ? 'e.g. 95:5 (through:tap)' : 'e.g. 1:8'}>
             <input className="input" value={form.ratio || ''} onChange={(e) => set({ ratio: e.target.value })} />
           </FormField>
         </div>
@@ -363,7 +365,7 @@ function SplitterModal({ row, onClose, onSaved }: any) {
               onChange={(e) => set({ ports: e.target.value })}
             />
           </FormField>
-          <FormField label={isFbtc ? 'Through Loss (dB)' : 'Loss (dB)'} required>
+          <FormField label={isAsymmetric ? 'Through Loss (dB)' : 'Loss (dB)'} required>
             <input
               className="input"
               type="number"
@@ -373,7 +375,7 @@ function SplitterModal({ row, onClose, onSaved }: any) {
             />
           </FormField>
         </div>
-        {isFbtc && (
+        {isAsymmetric && (
           <FormField label="Tap Loss (dB)" hint="Subscriber-drop leg">
             <input
               className="input"
@@ -410,7 +412,7 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
   const lastIsTerminalTap = !!(
     lastStage &&
     lastStage.splitterId &&
-    byId.get(Number(lastStage.splitterId))?.type === 'FBTC' &&
+    isAsymmetricType(byId.get(Number(lastStage.splitterId))?.type) &&
     lastStage.leg === 'tap'
   );
 
@@ -423,7 +425,7 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
     return stages.map((s) => {
       const row = s.splitterId ? byId.get(Number(s.splitterId)) : undefined;
       if (!row) return { stage: s, row: undefined, loss: 0, after: running };
-      const loss = row.type === 'FBTC' ? (s.leg === 'tap' ? row.tapLossDb ?? 0 : row.throughLossDb) : row.throughLossDb;
+      const loss = isAsymmetricType(row.type) ? (s.leg === 'tap' ? row.tapLossDb ?? 0 : row.throughLossDb) : row.throughLossDb;
       running = running - loss;
       return { stage: s, row, loss, after: running };
     });
@@ -456,10 +458,10 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
       <div className="space-y-2 mb-4">
         {stages.map((s, i) => {
           const row = s.splitterId ? byId.get(Number(s.splitterId)) : undefined;
-          const isFbtcRow = row?.type === 'FBTC';
+          const isFbtcRow = isAsymmetricType(row?.type);
           const disabled = i > 0 && stages.slice(0, i).some((prev) => {
             const prevRow = prev.splitterId ? byId.get(Number(prev.splitterId)) : undefined;
-            return prevRow?.type === 'FBTC' && prev.leg === 'tap';
+            return isAsymmetricType(prevRow?.type) && prev.leg === 'tap';
           });
           return (
             <div key={s.id} className={`flex flex-wrap items-end gap-2 p-3 rounded-xl border border-slate-200 ${disabled ? 'opacity-40' : ''}`}>

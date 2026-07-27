@@ -8,7 +8,7 @@ import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
 import { fetchCurrentWeather, weatherCategory, type WeatherNow, type WeatherCategory } from '../lib/weather';
-import { computeNapChainDbm, resolveSplitterInputDbm, type ChainNapLike, type SplitterRefLike, type SplitterLike } from '../lib/opticalBudget';
+import { computeNapChainDbm, resolveSplitterInputDbm, isAsymmetricType, type ChainNapLike, type SplitterRefLike, type SplitterLike } from '../lib/opticalBudget';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -1264,15 +1264,13 @@ export default function ClientsMap() {
                             ? `NAP ${napsById[s.originId || -1]?.name || '—'}`
                             : `Splitter ${splittersById.get(s.originId || -1)?.name || '—'}`;
                       const inputDbm = resolveSplitterInputDbm(s.id, splittersById, napChainById, splitterRows);
-                      const outThrough = inputDbm != null ? (() => {
-                        const ref = splitterRows.find((r) => r.type === s.type && r.ratio === s.ratio && (s.type !== 'FBTC' || Number(r.ports) === Number(s.ports)));
-                        return ref ? inputDbm - ref.throughLossDb : null;
-                      })() : null;
-                      const outTap = inputDbm != null && s.type === 'FBTC' ? (() => {
-                        const ref = splitterRows.find((r) => r.type === s.type && r.ratio === s.ratio && Number(r.ports) === Number(s.ports));
-                        return ref?.tapLossDb != null ? inputDbm - ref.tapLossDb : null;
-                      })() : null;
-                      const outLabel = s.type === 'FBTC'
+                      const isAsymmetric = isAsymmetricType(s.type);
+                      const splitterRef = splitterRows.find(
+                        (r) => r.type === s.type && r.ratio === s.ratio && (s.type !== 'FBTC' || Number(r.ports) === Number(s.ports))
+                      );
+                      const outThrough = inputDbm != null && splitterRef ? inputDbm - splitterRef.throughLossDb : null;
+                      const outTap = inputDbm != null && isAsymmetric && splitterRef?.tapLossDb != null ? inputDbm - splitterRef.tapLossDb : null;
+                      const outLabel = isAsymmetric
                         ? `Through ${outThrough != null ? outThrough.toFixed(1) : '—'} / Tap ${outTap != null ? outTap.toFixed(1) : '—'} dBm`
                         : `Out ${outThrough != null ? outThrough.toFixed(1) : '—'} dBm`;
                       return (
@@ -1616,8 +1614,8 @@ export default function ClientsMap() {
                       <><br />Origin: splitter {splittersById.get(n.originSplitterId)?.name || `#${n.originSplitterId}`}</>
                     ) : null}
                     {n.kind === 'nap' &&
-                    ((n.parentId && napsById[n.parentId]?.splitterType === 'FBTC') ||
-                      (n.originSplitterId && splittersById.get(n.originSplitterId)?.type === 'FBTC')) ? (
+                    ((n.parentId && isAsymmetricType(napsById[n.parentId]?.splitterType)) ||
+                      (n.originSplitterId && isAsymmetricType(splittersById.get(n.originSplitterId)?.type))) ? (
                       <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
                     ) : null}
                     {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
@@ -1826,8 +1824,8 @@ export default function ClientsMap() {
                     )}
                   </FormField>
                 )}
-                {((napUpstream === 'nap' && editNap.parentId && napsById[editNap.parentId]?.splitterType === 'FBTC') ||
-                  (napUpstream === 'splitter' && editNap.originSplitterId && splittersById.get(editNap.originSplitterId)?.type === 'FBTC')) && (
+                {((napUpstream === 'nap' && editNap.parentId && isAsymmetricType(napsById[editNap.parentId]?.splitterType)) ||
+                  (napUpstream === 'splitter' && editNap.originSplitterId && isAsymmetricType(splittersById.get(editNap.originSplitterId)?.type))) && (
                   <FormField
                     label="Upstream Connection"
                     hint={
@@ -1884,7 +1882,7 @@ export default function ClientsMap() {
                       <option value="FBTC">FBTC (tap cassette)</option>
                     </select>
                   </FormField>
-                  <FormField label="Splitter Ratio" hint={editNap.splitterType === 'FBTC' ? 'through:tap' : undefined}>
+                  <FormField label="Splitter Ratio" hint={isAsymmetricType(editNap.splitterType) ? 'through:tap' : undefined}>
                     <select
                       className="input"
                       value={editNap.splitterRatio || ''}
@@ -1897,12 +1895,13 @@ export default function ClientsMap() {
                   </FormField>
                 </div>
                 {editNap.splitterType && (() => {
-                  const isFbtc = editNap.splitterType === 'FBTC';
+                  const isAsymmetric = isAsymmetricType(editNap.splitterType);
+                  const isFbtcPorts = editNap.splitterType === 'FBTC';
                   const ref = splitterRows.find(
                     (r) =>
                       r.type === editNap.splitterType &&
                       r.ratio === editNap.splitterRatio &&
-                      (!isFbtc || Number(r.ports) === Number(editNap.ports))
+                      (!isFbtcPorts || Number(r.ports) === Number(editNap.ports))
                   );
                   // Power arriving at this NAP's own splitter input — i.e. the
                   // origin/parent chain's output before this box's own split is applied.
@@ -1917,7 +1916,7 @@ export default function ClientsMap() {
                   return (
                     <div className="-mt-1 space-y-1.5">
                       <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                        {isFbtc ? (
+                        {isAsymmetric ? (
                           <>
                             <span className="text-slate-500">
                               Through (trunk continue): <span className="font-semibold text-slate-800">{throughDbm != null ? `${throughDbm.toFixed(2)} dBm` : '—'}</span>
@@ -1932,10 +1931,10 @@ export default function ClientsMap() {
                           </span>
                         )}
                       </div>
-                      {isFbtc && (
+                      {isAsymmetric && (
                         <p className="text-xs text-slate-400">
-                          This box's own clients draw from its tap ports; a NAP cascaded off its through port
-                          continues the trunk. If a downstream NAP is instead wired into a tap port, set that on
+                          This box's own clients draw from its tap leg; a NAP cascaded off its through leg
+                          continues the trunk. If a downstream NAP is instead wired into a tap leg, set that on
                           the downstream NAP's own "Upstream Connection" field.
                         </p>
                       )}
@@ -2128,7 +2127,7 @@ function SplitterModal({
 
   const originNap = form.originKind === 'nap' && form.originId ? napNodes.find((n) => n.id === form.originId) : null;
   const originSplitter = form.originKind === 'splitter' && form.originId ? splitters.find((s) => s.id === form.originId) : null;
-  const originIsFbtc = originNap?.splitterType === 'FBTC' || originSplitter?.type === 'FBTC';
+  const originIsAsymmetric = isAsymmetricType(originNap?.splitterType) || isAsymmetricType(originSplitter?.type);
 
   const save = async () => {
     if (!form.name?.trim() || !form.ratio?.trim()) return;
@@ -2233,7 +2232,7 @@ function SplitterModal({
             </select>
           </FormField>
         )}
-        {originIsFbtc && (
+        {originIsAsymmetric && (
           <FormField label="Origin Connection" hint="Which leg of the origin's splitter this splitter is plugged into.">
             <select className="input" value={form.fbtcLeg || 'through'} onChange={(e) => set({ fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}>
               <option value="through">Through (trunk continue)</option>
