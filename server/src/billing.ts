@@ -58,6 +58,100 @@ function needsSessionRefresh(status?: string | null): boolean {
   return s === 'non-payment' || s === 'nonpayment' || s === 'expired' || s === 'disabled';
 }
 
+// Errors that mean "this router will never sync until an admin fixes the
+// config" — not worth queuing for retry, unlike a plain unreachable/timeout.
+const ROUTER_SYNC_PERMANENT_ERRORS = new Set(['no router', 'router-not-configured']);
+
+/**
+ * Remember that a user's MikroTik state (payment restore, non-payment
+ * expire, disable...) couldn't be pushed because the router was slow or
+ * unreachable, so the background poller (see startRouterSyncScheduler) can
+ * retry once it's back. Upserts on (router_id, pppoe_user_id) — multiple
+ * failures for the same user just bump the retry time rather than stacking
+ * up duplicate entries, since the poller always re-derives the *current*
+ * desired state from pppoe_users rather than replaying a stored action.
+ */
+export function enqueueRouterSync(routerId: number | null | undefined, pppoeUserId: number, reason: string): void {
+  if (!routerId) return;
+  if (ROUTER_SYNC_PERMANENT_ERRORS.has(reason)) return;
+  db.prepare(
+    `INSERT INTO router_sync_queue (router_id, pppoe_user_id, reason, next_attempt_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(router_id, pppoe_user_id) DO UPDATE SET reason = excluded.reason, next_attempt_at = CURRENT_TIMESTAMP`
+  ).run(routerId, pppoeUserId, reason);
+}
+
+/** Clear a pending retry once a user's MikroTik state is confirmed in sync (any path, not just the poller). */
+export function resolveRouterSync(routerId: number | null | undefined, pppoeUserId: number): void {
+  if (!routerId) return;
+  db.prepare('DELETE FROM router_sync_queue WHERE router_id = ? AND pppoe_user_id = ?').run(routerId, pppoeUserId);
+}
+
+/** Map a user's current billing status to the MikroTik action that should reflect it. */
+function deriveRouterActionForUser(user: any): 'restore' | 'expire' | 'disable' | null {
+  const status = String(user?.status || '').toLowerCase();
+  if (status === 'active') return 'restore';
+  if (status === 'non-payment' || status === 'nonpayment') return 'expire';
+  if (status === 'disabled' || status === 'expired') return 'disable';
+  return null;
+}
+
+/**
+ * Retry every queued sync whose router is now configured and due for
+ * another attempt. Re-reads each user's current status rather than
+ * replaying whatever originally failed, so it always converges on the
+ * latest intent even if several changes queued up while offline.
+ */
+export async function processRouterSyncQueue(): Promise<{ attempted: number; succeeded: number }> {
+  const due = db
+    .prepare(`SELECT * FROM router_sync_queue WHERE next_attempt_at <= CURRENT_TIMESTAMP ORDER BY id`)
+    .all() as any[];
+  let succeeded = 0;
+  for (const job of due) {
+    const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(job.pppoe_user_id) as any;
+    if (!user) {
+      db.prepare('DELETE FROM router_sync_queue WHERE id = ?').run(job.id);
+      continue;
+    }
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(job.router_id) as any;
+    if (!router?.host || !router?.api_user) continue; // still not configured — leave queued
+
+    const action = deriveRouterActionForUser(user);
+    if (!action) {
+      db.prepare('DELETE FROM router_sync_queue WHERE id = ?').run(job.id);
+      continue;
+    }
+
+    const result = await syncUserToRouter(user, action);
+    if (result.ok) {
+      succeeded++;
+      db.prepare('DELETE FROM router_sync_queue WHERE id = ?').run(job.id);
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'mikrotik',
+        `Router sync caught up for ${user.username} (router back online) — applied ${action}`
+      );
+    } else {
+      const attempts = (job.attempts || 0) + 1;
+      const backoffMin = Math.min(30, 2 ** attempts); // 2, 4, 8, 16, 30, 30...
+      db.prepare(
+        `UPDATE router_sync_queue SET attempts = ?, last_error = ?, last_attempt_at = CURRENT_TIMESTAMP,
+         next_attempt_at = datetime('now', ?) WHERE id = ?`
+      ).run(attempts, result.error || 'unknown error', `+${backoffMin} minutes`, job.id);
+    }
+  }
+  return { attempted: due.length, succeeded };
+}
+
+let routerSyncPollerStarted = false;
+/** Poll for pending router syncs and retry the ones that are due. */
+export function startRouterSyncScheduler(intervalMs = 3 * 60 * 1000) {
+  if (routerSyncPollerStarted) return;
+  routerSyncPollerStarted = true;
+  processRouterSyncQueue().catch(() => undefined);
+  setInterval(() => processRouterSyncQueue().catch(() => undefined), intervalMs);
+}
+
 /**
  * Briefly disable then re-enable the PPP secret so MikroTik drops and refreshes
  * any active session (picks up restored plan after non-payment / expiry).
@@ -441,6 +535,11 @@ export async function changePppoeUserPlan(
     `Plan change for ${updated.username}: ${previousPlan || '—'} → ${plan} (MT profile ${prof.pppProfile})` +
       (sessionRefresh?.bounced ? ' (2s session bounce)' : sync.error ? ` (router: ${sync.error})` : '')
   );
+  if (sync.ok) {
+    resolveRouterSync(updated.router_id, userId);
+  } else {
+    enqueueRouterSync(updated.router_id, userId, sync.error || 'Plan change sync failed');
+  }
 
   return {
     ok: true,
@@ -809,20 +908,26 @@ export async function recordPppoePayment(
   const syncPromise = syncUserToRouter(updated, 'restore');
   syncPromise
     .then((r) => {
+      if (r.ok) {
+        resolveRouterSync(updated.router_id, updated.id);
+      } else {
+        enqueueRouterSync(updated.router_id, updated.id, r.error || 'Payment restore failed');
+      }
       if (respondedAlready && !r.ok) {
         db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
           'warning',
           'mikrotik',
-          `Payment for ${updated.username}: MikroTik restore sync finished after the response had already returned (router was slow) — ${r.error || 'failed'}. Verify the account's MikroTik state or use Recheck Expiry.`
+          `Payment for ${updated.username}: MikroTik restore sync finished after the response had already returned (router was slow) — ${r.error || 'failed'}. Queued for automatic retry once the router is reachable.`
         );
       }
     })
     .catch((e: any) => {
+      enqueueRouterSync(updated.router_id, updated.id, e?.message || String(e));
       if (respondedAlready) {
         db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
           'warning',
           'mikrotik',
-          `Payment for ${updated.username}: MikroTik restore sync threw after the response had already returned — ${e?.message || e}.`
+          `Payment for ${updated.username}: MikroTik restore sync threw after the response had already returned — ${e?.message || e}. Queued for automatic retry once the router is reachable.`
         );
       }
     });

@@ -442,6 +442,25 @@ export function migrate() {
       router_id INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (day, service_id, router_id)
     );
+
+    -- A user/router pair whose last-known state (payment restore, manual
+    -- enable/disable, plan/profile change...) could not be pushed to the
+    -- MikroTik because the router was unreachable. The background poller
+    -- re-derives the *current* desired state from pppoe_users and retries —
+    -- it does not replay a stored action, so multiple pending changes for
+    -- the same user naturally coalesce into one final resync.
+    CREATE TABLE IF NOT EXISTS router_sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER NOT NULL,
+      pppoe_user_id INTEGER NOT NULL,
+      reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      last_attempt_at TEXT,
+      next_attempt_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (router_id, pppoe_user_id)
+    );
   `);
   if (!(db.prepare('SELECT 1 FROM fair_use_settings WHERE id = 1').get())) {
     db.prepare('INSERT INTO fair_use_settings (id) VALUES (1)').run();
