@@ -17,7 +17,7 @@ interface ServerNode {
 interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
-  splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; txDbm?: number | null;
+  splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; fbtcLeg?: 'through' | 'tap' | null; txDbm?: number | null;
   ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
@@ -643,6 +643,7 @@ const emptyNap = (
     address: '',
     splitterRatio: kind === 'nap' ? '1:8' : '',
     splitterType: kind === 'nap' ? 'PLC' : null,
+    fbtcLeg: kind === 'nap' ? 'through' : null,
     txDbm: kind === 'olt' ? 5 : null,
     ponPort: kind === 'nap' ? 1 : null,
   };
@@ -695,6 +696,7 @@ export default function ClientsMap() {
       parentId: editNap.parentId ?? null,
       splitterType: editNap.splitterType,
       splitterRatio: editNap.splitterRatio,
+      fbtcLeg: editNap.fbtcLeg,
       ports: editNap.ports,
     });
     return computeNapChainDbm(previewId, merged, splitterRows);
@@ -1525,6 +1527,9 @@ export default function ClientsMap() {
                     {n.kind === 'nap' && n.splitterType && n.splitterRatio ? (
                       <><br />Splitter: {n.splitterType} {n.splitterRatio}</>
                     ) : null}
+                    {n.kind === 'nap' && n.parentId && napsById[n.parentId]?.splitterType === 'FBTC' ? (
+                      <><br />Upstream leg: {n.fbtcLeg === 'tap' ? 'tap' : 'through'}</>
+                    ) : null}
                     {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
                     {n.ports != null ? (
                       <>
@@ -1698,6 +1703,21 @@ export default function ClientsMap() {
                     )}
                   </FormField>
                 )}
+                {napUpstream === 'nap' && editNap.parentId && napsById[editNap.parentId]?.splitterType === 'FBTC' && (
+                  <FormField
+                    label="Upstream Connection"
+                    hint={`Which leg of ${napsById[editNap.parentId]?.name || 'the parent NAP'}'s splitter this box is plugged into.`}
+                  >
+                    <select
+                      className="input"
+                      value={editNap.fbtcLeg || 'through'}
+                      onChange={(e) => setEditNap({ ...editNap, fbtcLeg: e.target.value === 'tap' ? 'tap' : 'through' })}
+                    >
+                      <option value="through">Through (trunk continue) — typical for cascading another box</option>
+                      <option value="tap">Tap (subscriber drop) — this box is plugged into a client port instead</option>
+                    </select>
+                  </FormField>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <FormField label="PON Port">
                     <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />
@@ -1748,9 +1768,13 @@ export default function ClientsMap() {
                     </select>
                   </FormField>
                 </div>
-                {editNap.splitterType === 'FBTC' && (() => {
+                {editNap.splitterType && (() => {
+                  const isFbtc = editNap.splitterType === 'FBTC';
                   const ref = splitterRows.find(
-                    (r) => r.type === 'FBTC' && r.ratio === editNap.splitterRatio && Number(r.ports) === Number(editNap.ports)
+                    (r) =>
+                      r.type === editNap.splitterType &&
+                      r.ratio === editNap.splitterRatio &&
+                      (!isFbtc || Number(r.ports) === Number(editNap.ports))
                   );
                   // Power arriving at this NAP's own splitter input — i.e. the origin/parent
                   // chain's output before this box's own through/tap split is applied.
@@ -1765,17 +1789,28 @@ export default function ClientsMap() {
                   return (
                     <div className="-mt-1 space-y-1.5">
                       <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                        <span className="text-slate-500">
-                          Through (trunk continue): <span className="font-semibold text-slate-800">{throughDbm != null ? `${throughDbm.toFixed(2)} dBm` : '—'}</span>
-                        </span>
-                        <span className="text-slate-500">
-                          Tap (subscriber drop): <span className="font-semibold text-slate-800">{tapDbm != null ? `${tapDbm.toFixed(2)} dBm` : '—'}</span>
-                        </span>
+                        {isFbtc ? (
+                          <>
+                            <span className="text-slate-500">
+                              Through (trunk continue): <span className="font-semibold text-slate-800">{throughDbm != null ? `${throughDbm.toFixed(2)} dBm` : '—'}</span>
+                            </span>
+                            <span className="text-slate-500">
+                              Tap (subscriber drop): <span className="font-semibold text-slate-800">{tapDbm != null ? `${tapDbm.toFixed(2)} dBm` : '—'}</span>
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-slate-500">
+                            Output: <span className="font-semibold text-slate-800">{throughDbm != null ? `${throughDbm.toFixed(2)} dBm` : '—'}</span>
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-400">
-                        This box's own clients use the tap leg (subscriber drop); any cascaded NAP downstream of it
-                        uses the through leg (trunk continue).
-                      </p>
+                      {isFbtc && (
+                        <p className="text-xs text-slate-400">
+                          This box's own clients draw from its tap ports; a NAP cascaded off its through port
+                          continues the trunk. If a downstream NAP is instead wired into a tap port, set that on
+                          the downstream NAP's own "Upstream Connection" field.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}

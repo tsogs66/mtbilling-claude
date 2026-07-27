@@ -438,6 +438,11 @@ export function migrate() {
     ['address', 'TEXT'],
     ['splitter_ratio', 'TEXT'],
     ['splitter_type', 'TEXT'],
+    // Which leg of the PARENT's FBTC splitter this NAP is plugged into —
+    // 'through' (trunk continue, the default cascade assumption) or 'tap'
+    // (subscriber drop, for a NAP deliberately cascaded off a tap port
+    // instead). Only meaningful when the parent's splitter_type = 'FBTC'.
+    ['fbtc_leg', "TEXT DEFAULT 'through'"],
     ['tx_dbm', 'REAL'],
     ['pon_port', 'INTEGER'],
     ['host', 'TEXT'],

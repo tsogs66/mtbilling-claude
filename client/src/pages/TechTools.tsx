@@ -33,6 +33,7 @@ interface TopologyNap {
   code?: string | null;
   splitterType?: 'FBT' | 'PLC' | 'FBTC' | null;
   splitterRatio?: string | null;
+  fbtcLeg?: 'through' | 'tap' | null;
   txDbm?: number | null;
   oltName?: string | null;
   parentKind?: string | null;
