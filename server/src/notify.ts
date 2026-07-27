@@ -771,7 +771,9 @@ export async function executeBillingEnforcement(opts?: {
     disabledUsers: [] as BillingCandidate[],
   };
 
-  const { resolvePublicBaseUrl, ensureFreshPayLink, syncUserToRouter } = await import('./billing.js');
+  const { resolvePublicBaseUrl, ensureFreshPayLink, syncUserToRouter, enqueueRouterSync, resolveRouterSync } = await import(
+    './billing.js'
+  );
   const { baseUrl } = resolvePublicBaseUrl();
   const service = opts?.service ? String(opts.service).toLowerCase() : null;
 
@@ -837,8 +839,13 @@ export async function executeBillingEnforcement(opts?: {
       summary.markedNonPayment++;
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
       const sync = await syncUserToRouter(full, 'expire');
-      if (sync.ok) summary.profileSwitched++;
-      else summary.routerErrors++;
+      if (sync.ok) {
+        summary.profileSwitched++;
+        resolveRouterSync(full.router_id, full.id);
+      } else {
+        summary.routerErrors++;
+        enqueueRouterSync(full.router_id, full.id, sync.error || 'Non-payment expire failed');
+      }
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
@@ -867,7 +874,12 @@ export async function executeBillingEnforcement(opts?: {
       db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
       const sync = await syncUserToRouter(full, 'disable');
-      if (!sync.ok) summary.routerErrors++;
+      if (sync.ok) {
+        resolveRouterSync(full.router_id, full.id);
+      } else {
+        summary.routerErrors++;
+        enqueueRouterSync(full.router_id, full.id, sync.error || 'Disable failed');
+      }
 
       summary.disabled++;
       summary.disabledUsers.push({

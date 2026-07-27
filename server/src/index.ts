@@ -92,6 +92,10 @@ import {
   mikrotikProfileForPlan,
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
+  withTimeout,
+  enqueueRouterSync,
+  resolveRouterSync,
+  startRouterSyncScheduler,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -146,6 +150,23 @@ function addMonthsPreserveDay(iso: string, months: number): string {
   target.setUTCDate(Math.min(day, daysInTarget));
   return target.toISOString().slice(0, 10);
 }
+
+// Cap how long a GET endpoint will wait on live MikroTik data before falling
+// back to the cached DB rows. These endpoints (dashboard, PPPoE list, active
+// sessions, map) are read constantly — mobile clients especially — and the
+// underlying node-routeros calls default to a 15-20s connect+read timeout,
+// which made the panel feel like it had hung whenever a router was slow or
+// unreachable. The DB is always kept in sync from the last successful poll,
+// so a short race here just means "possibly a few seconds stale" instead of
+// "blocked for 15+ seconds", with `live: false` in the response marking it.
+const LIVE_READ_BUDGET_MS = 4000;
+
+// Cap how long a manual write (enable/disable a user, etc.) will wait on the
+// router before recording the intent anyway and queuing it for the
+// background router-sync poller to retry — same "commit the intent, sync
+// later" reasoning as recordPppoePayment, just with a more generous budget
+// than reads since a write is worth waiting a bit longer for.
+const WRITE_SYNC_BUDGET_MS = 8000;
 
 const app = express();
 // Standard deployment puts nginx directly in front (see README); trust exactly
@@ -539,10 +560,23 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
     )
     .all(r.id) as Row[];
 
+  // Kick off in parallel with the PPP secrets/active fetch below — both hit
+  // the same router independently, no reason to pay their timeouts twice.
+  const statsPromise = withTimeout(fetchRouterDashboardStats(r), LIVE_READ_BUDGET_MS, {
+    live: false,
+    board: null,
+    uptime: null,
+    cpuLoad: 0,
+    memPct: 0,
+    memTotalMb: 0,
+  });
+
   let liveSessions = false;
   if (r.host && r.api_user) {
     try {
-      const [secrets, sessions] = await Promise.all([fetchPppSecrets(r), fetchPppActive(r)]);
+      const live = await withTimeout(Promise.all([fetchPppSecrets(r), fetchPppActive(r)]), LIVE_READ_BUDGET_MS, null);
+      if (!live) throw new Error('router timed out');
+      const [secrets, sessions] = live;
       const enriched = enrichPppUsersFromLive(users, secrets, sessions);
       const markNp = db.prepare(
         `UPDATE pppoe_users
@@ -623,7 +657,7 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
   const offline = activeUsers.filter((u) => !u.online).length;
   const expired = users.filter((u) => isExpiredAccount(classify(u))).length;
 
-  const liveStats = await fetchRouterDashboardStats(r);
+  const liveStats = await statsPromise;
 
   res.json({
     name: r.name,
@@ -649,7 +683,8 @@ app.get('/api/dashboard/queues', async (req, res) => {
     const router = getRouter(routerId);
     if (router?.host && router?.api_user) {
       try {
-        const queues = await fetchRouterQueues(router);
+        const queues = await withTimeout(fetchRouterQueues(router), LIVE_READ_BUDGET_MS, null);
+        if (!queues) throw new Error('Router is slow to respond — check its connection and try again.');
         return res.json({ live: true, queues });
       } catch (e: any) {
         return res.json({
@@ -704,7 +739,9 @@ app.get('/api/dashboard/status', async (req, res) => {
     const router = getRouter(rid);
     if (!router?.host || !router?.api_user || !subset.length) return;
     try {
-      const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
+      const liveData = await withTimeout(Promise.all([fetchPppSecrets(router), fetchPppActive(router)]), LIVE_READ_BUDGET_MS, null);
+      if (!liveData) return;
+      const [secrets, sessions] = liveData;
       const enriched = enrichPppUsersFromLive(subset, secrets, sessions);
       const markNp = db.prepare(
         `UPDATE pppoe_users
@@ -1047,7 +1084,9 @@ app.get('/api/pppoe/users', async (req, res) => {
   if (router?.host && router?.api_user) {
     try {
       // One TCP session for secrets + active (avoids double connect on 1–Ns polls).
-      const { secrets, sessions } = await fetchPppSecretsAndActive(router);
+      const liveData = await withTimeout(fetchPppSecretsAndActive(router), LIVE_READ_BUDGET_MS, null);
+      if (!liveData) throw new Error('router timed out');
+      const { secrets, sessions } = liveData;
       rows = enrichPppUsersFromLive(rows, secrets, sessions).map((u) => ({ ...u, live: true }));
       live = true;
       if (wantTraffic) {
@@ -1058,7 +1097,8 @@ app.get('/api/pppoe/users', async (req, res) => {
             for (const s of sessions) {
               if (s.name && s.address && s.address !== '-') addresses[s.name] = s.address;
             }
-            const traffic = await fetchPppActiveTraffic(router, onlineNames, { addresses });
+            const traffic = await withTimeout(fetchPppActiveTraffic(router, onlineNames, { addresses }), LIVE_READ_BUDGET_MS, null);
+            if (!traffic) throw new Error('traffic timed out');
             const byKey = new Map<string, { download: number; upload: number }>();
             for (const [name, t] of Object.entries(traffic)) byKey.set(pppNameKey(name), t);
             rows = rows.map((u) => {
@@ -1368,26 +1408,16 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
 });
 
 // Enable/disable the client account on MikroTik (/ppp/secret) and in the DB.
+// The DB status always commits — a slow/unreachable router must never block
+// an admin's intent from being recorded (same reasoning as the payment
+// route). If the live push fails, it's queued and retried automatically by
+// the router-sync poller once the router is reachable again.
 app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   const id = Number(req.params.id);
   const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!u) return res.status(404).json({ error: 'not found' });
   const disabling = u.status !== 'disabled';
-  const router = getRouterById(u.router_id);
-  if (router?.host && router?.api_user) {
-    try {
-      await setPppSecretEnabled(router, u.username, !disabling);
-      if (disabling) {
-        try {
-          await removePppActiveByName(router, u.username);
-        } catch {
-          /* session drop is best-effort */
-        }
-      }
-    } catch (e: any) {
-      return res.status(502).json({ error: e?.message || 'Could not update PPP secret on MikroTik' });
-    }
-  }
+
   // A manual toggle overrides whatever the automatic grace/expiry schedule had
   // queued on the router — cancel it so it can't act against this override later.
   cancelRouterExpirySchedule(u).catch(() => undefined);
@@ -1396,19 +1426,70 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   } else {
     db.prepare("UPDATE pppoe_users SET status = 'Active', online = 0, nonpayment_since = NULL WHERE id = ?").run(id);
   }
+
+  const router = getRouterById(u.router_id);
+  let routerSynced = false;
+  let routerError: string | null = null;
+  if (router?.host && router?.api_user) {
+    try {
+      const ok = await withTimeout(
+        (async () => {
+          await setPppSecretEnabled(router, u.username, !disabling);
+          if (disabling) {
+            try {
+              await removePppActiveByName(router, u.username);
+            } catch {
+              /* session drop is best-effort */
+            }
+          }
+          return true;
+        })(),
+        WRITE_SYNC_BUDGET_MS,
+        null
+      );
+      if (!ok) throw new Error('Router is slow to respond');
+      routerSynced = true;
+      resolveRouterSync(u.router_id, id);
+    } catch (e: any) {
+      routerError = e?.message || 'Could not update PPP secret on MikroTik';
+      enqueueRouterSync(u.router_id, id, routerError || 'unknown error');
+    }
+  }
+
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-    'info',
+    routerSynced || !router?.host ? 'info' : 'warning',
     'mikrotik',
-    `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}`
+    `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}` +
+      (router?.host && !routerSynced ? ` — router sync failed (${routerError}), queued for automatic retry` : '')
   );
   res.json({
     ok: true,
     status: disabling ? 'disabled' : 'Active',
     action: disabling ? 'disabled' : 'enabled',
+    routerSynced,
+    routerError,
     username: u.username,
     customer: u.customer_name,
     user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
   });
+});
+
+// Users/routers with a MikroTik state change that couldn't be pushed live —
+// queued for the background router-sync poller (startRouterSyncScheduler).
+app.get('/api/router-sync-queue', (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT q.id, q.router_id AS routerId, r.name AS routerName,
+              q.pppoe_user_id AS pppoeUserId, u.username, u.customer_name AS customer,
+              q.reason, q.attempts, q.last_error AS lastError,
+              q.created_at AS createdAt, q.last_attempt_at AS lastAttemptAt, q.next_attempt_at AS nextAttemptAt
+       FROM router_sync_queue q
+       JOIN pppoe_users u ON u.id = q.pppoe_user_id
+       LEFT JOIN routers r ON r.id = q.router_id
+       ORDER BY q.created_at DESC`
+    )
+    .all();
+  res.json({ pending: rows });
 });
 
 app.delete('/api/pppoe/users/:id', async (req, res) => {
@@ -2055,7 +2136,8 @@ app.get('/api/pppoe/profiles', async (req, res) => {
     return res.json({ profiles: dbProfiles, live: false });
   }
   try {
-    const live = await fetchPppProfiles(router);
+    const live = await withTimeout(fetchPppProfiles(router), LIVE_READ_BUDGET_MS, null);
+    if (!live) throw new Error('router timed out');
     const byName = new Map(dbProfiles.map((p) => [p.name, p]));
     const merged = live
       .filter(
@@ -2235,7 +2317,9 @@ app.get('/api/pppoe/active', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', sessions: [], live: false });
   }
   try {
-    const { secrets, sessions } = await fetchPppSecretsAndActive(router);
+    const liveData = await withTimeout(fetchPppSecretsAndActive(router), LIVE_READ_BUDGET_MS, null);
+    if (!liveData) throw new Error('Router is slow to respond — check its connection and try again.');
+    const { secrets, sessions } = liveData;
     const users = db
       .prepare(
         `SELECT username, customer_name AS customer, profile FROM pppoe_users WHERE service = ? AND router_id = ?`
@@ -2254,7 +2338,13 @@ app.get('/api/pppoe/active', async (req, res) => {
         for (const s of filtered) {
           if (s.name && s.address && s.address !== '-') addresses[s.name] = s.address;
         }
-        traffic = await fetchPppActiveTraffic(router, filtered.map((s) => s.name), { addresses, fast });
+        const trafficResult = await withTimeout(
+          fetchPppActiveTraffic(router, filtered.map((s) => s.name), { addresses, fast }),
+          LIVE_READ_BUDGET_MS,
+          null
+        );
+        if (!trafficResult) throw new Error('traffic timed out');
+        traffic = trafficResult;
         trafficOk = true;
       } catch {
         /* traffic optional — omit rates so the UI keeps the previous reading */
@@ -2334,7 +2424,8 @@ app.get('/api/pppoe/servers', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', servers: [], live: false });
   }
   try {
-    const servers = await fetchPppoeServers(router);
+    const servers = await withTimeout(fetchPppoeServers(router), LIVE_READ_BUDGET_MS, null);
+    if (!servers) throw new Error('Router is slow to respond — check its connection and try again.');
     res.json({ servers, live: true, routerId: router.id, routerName: router.name });
   } catch (e: any) {
     res.status(502).json({
@@ -2519,7 +2610,8 @@ async function loadIpoeLeaseBillingState(routerId: number | null) {
   const router = getRouterById(routerId);
   if (router?.host && router?.api_user) {
     try {
-      const leases = await fetchDhcpLeases(router);
+      const leases = await withTimeout(fetchDhcpLeases(router), LIVE_READ_BUDGET_MS, null);
+      if (!leases) throw new Error('router timed out');
       liveByMac = new Map(
         leases.map((l) => [
           normalizeMac(l.macAddress || l.activeMac),
@@ -2644,7 +2736,8 @@ app.get('/api/ipoe/leases', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', leases: [], live: false });
   }
   try {
-    const leases = await fetchDhcpLeases(router);
+    const leases = await withTimeout(fetchDhcpLeases(router), LIVE_READ_BUDGET_MS, null);
+    if (!leases) throw new Error('Router is slow to respond — check its connection and try again.');
     const plans = db.prepare('SELECT * FROM ipoe_plans').all() as any[];
     const profiles = db.prepare('SELECT * FROM ipoe_profiles').all() as any[];
     const metaRows = db.prepare('SELECT * FROM ipoe_lease_meta').all() as any[];
@@ -2689,7 +2782,8 @@ app.get('/api/ipoe/leases', async (req, res) => {
     const onlineIps = mapped.filter((x) => x.online && x.address && x.address !== '—').map((x) => x.address);
     if (onlineIps.length) {
       try {
-        const traffic = await fetchLeaseTrafficByIp(router, onlineIps);
+        const traffic = await withTimeout(fetchLeaseTrafficByIp(router, onlineIps), LIVE_READ_BUDGET_MS, null);
+        if (!traffic) throw new Error('traffic timed out');
         for (const row of mapped) {
           const t = traffic[row.address];
           if (t) {
@@ -2799,7 +2893,8 @@ app.get('/api/ipoe/servers', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', servers: [], live: false });
   }
   try {
-    const servers = await fetchDhcpServers(router);
+    const servers = await withTimeout(fetchDhcpServers(router), LIVE_READ_BUDGET_MS, null);
+    if (!servers) throw new Error('Router is slow to respond — check its connection and try again.');
     res.json({
       servers: servers.map((s) => ({
         id: s.id,
@@ -3046,7 +3141,9 @@ app.get('/api/map', async (req, res) => {
     const router = getRouterById(rid);
     if (!router?.host || !router?.api_user || subset.length === 0) return;
     try {
-      const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
+      const live = await withTimeout(Promise.all([fetchPppSecrets(router), fetchPppActive(router)]), LIVE_READ_BUDGET_MS, null);
+      if (!live) return;
+      const [secrets, sessions] = live;
       const enriched = enrichPppUsersFromLive(subset, secrets, sessions);
       for (let i = 0; i < subset.length; i++) {
         subset[i].status = enriched[i].status;
@@ -3797,7 +3894,8 @@ app.get('/api/interfaces', async (req, res) => {
     const router = getRouter(routerId);
     if (router?.host && router?.api_user) {
       try {
-        const names = await fetchRouterInterfaceNames(router);
+        const names = await withTimeout(fetchRouterInterfaceNames(router), LIVE_READ_BUDGET_MS, null);
+        if (!names) throw new Error('timed out');
         return res.json({ names, source: 'router', routerId });
       } catch {
         return res.json({ names: [], source: 'router', routerId, error: 'unreachable' });
@@ -3819,9 +3917,13 @@ app.get('/api/interfaces/traffic', async (req, res) => {
     const router = getRouter(routerId);
     if (router?.host && router?.api_user) {
       try {
-        const names = ifaces.length ? ifaces : await fetchRouterInterfaceNames(router);
+        const names = ifaces.length
+          ? ifaces
+          : await withTimeout(fetchRouterInterfaceNames(router), LIVE_READ_BUDGET_MS, null);
+        if (!names) throw new Error('timed out');
         const sample = names.slice(0, 12);
-        const interfaces = await fetchRouterInterfaceTraffic(router, sample);
+        const interfaces = await withTimeout(fetchRouterInterfaceTraffic(router, sample), LIVE_READ_BUDGET_MS, null);
+        if (!interfaces) throw new Error('timed out');
         return res.json({ t: Date.now(), interfaces, source: 'router', routerId });
       } catch {
         return res.json({ t: Date.now(), interfaces: [], source: 'router', routerId, error: 'unreachable' });
@@ -3953,4 +4055,5 @@ server.listen(PORT, () => {
   startOutageMonitor(3 * 60_000);
   startNotifyScheduler(5 * 60 * 1000);
   startUsageScheduler(60_000);
+  startRouterSyncScheduler(3 * 60 * 1000);
 });

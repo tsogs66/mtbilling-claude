@@ -481,9 +481,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         action,
         username: u.username,
         customer: u.customer,
-        detail: disabling
-          ? 'PPP secret disabled on MikroTik and any active session was disconnected. The user cannot dial in until enabled again.'
-          : 'PPP secret enabled on MikroTik. The user can connect with their credentials again.',
+        detail: r.data.routerSynced
+          ? disabling
+            ? 'PPP secret disabled on MikroTik and any active session was disconnected. The user cannot dial in until enabled again.'
+            : 'PPP secret enabled on MikroTik. The user can connect with their credentials again.'
+          : `Recorded in the panel, but the router didn't confirm the change${r.data.routerError ? ` (${r.data.routerError})` : ''}. It will be applied automatically once the router is reachable again.`,
       });
       loadUsers();
     } catch (e: any) {
