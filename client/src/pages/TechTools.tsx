@@ -34,6 +34,8 @@ interface TopologyNap {
   splitterType?: 'FBT' | 'PLC' | 'FBTC' | null;
   splitterRatio?: string | null;
   fbtcLeg?: 'through' | 'tap' | null;
+  secondarySplitterType?: 'FBT' | 'PLC' | null;
+  secondarySplitterRatio?: string | null;
   txDbm?: number | null;
   oltName?: string | null;
   parentKind?: string | null;
@@ -268,8 +270,8 @@ function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: Splitter
                   <td className="px-4 py-2 text-right text-slate-400">—</td>
                   <td className="px-4 py-2 text-right font-medium text-slate-700">{result.originDbm.toFixed(2)} dBm</td>
                 </tr>
-                {result.stages.map((s) => (
-                  <tr key={s.napId} className="border-t border-slate-100">
+                {result.stages.map((s, i) => (
+                  <tr key={`${s.napId}-${i}`} className="border-t border-slate-100">
                     <td className="px-4 py-2 text-slate-600">
                       {s.name}{' '}
                       {s.splitterType && s.splitterRatio

@@ -443,6 +443,11 @@ export function migrate() {
     // (subscriber drop, for a NAP deliberately cascaded off a tap port
     // instead). Only meaningful when the parent's splitter_type = 'FBTC'.
     ['fbtc_leg', "TEXT DEFAULT 'through'"],
+    // Optional secondary FBT/PLC splitter fitted inside this NAP box —
+    // further divides this NAP's own local output, separate from (and
+    // applied after) the box's own primary splitter_type/splitter_ratio.
+    ['secondary_splitter_type', 'TEXT'],
+    ['secondary_splitter_ratio', 'TEXT'],
     ['tx_dbm', 'REAL'],
     ['pon_port', 'INTEGER'],
     ['host', 'TEXT'],

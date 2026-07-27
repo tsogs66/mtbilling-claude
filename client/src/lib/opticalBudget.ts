@@ -18,6 +18,15 @@ export interface ChainNapLike {
    * parent's splitterType is 'FBTC'; ignored otherwise.
    */
   fbtcLeg?: 'through' | 'tap' | null;
+  /**
+   * Optional secondary FBT/PLC splitter fitted inside this NAP box, further
+   * dividing this NAP's own local output — separate from (and applied after)
+   * the box's own primary splitterType/splitterRatio. Only applies to this
+   * NAP's own directly-attached clients, not to anything cascaded further
+   * downstream via another NAP.
+   */
+  secondarySplitterType?: 'FBT' | 'PLC' | null;
+  secondarySplitterRatio?: string | null;
   txDbm?: number | null;
 }
 
@@ -53,6 +62,8 @@ export interface ChainStage {
   leg: 'through' | 'tap';
   lossDb: number | null;
   after: number;
+  /** True for the synthetic stage representing a NAP's secondary in-box splitter. */
+  secondary?: boolean;
 }
 
 export interface ChainResult {
@@ -120,5 +131,25 @@ export function computeNapChainDbm(
       after: running,
     };
   });
+
+  // A secondary in-box FBT/PLC splitter only applies to the NAP actually being
+  // queried — i.e. its own local clients — never to a descendant cascaded off it.
+  const target = chain[chain.length - 1];
+  if (target?.secondarySplitterType && target?.secondarySplitterRatio) {
+    const key2 = refKey(target.secondarySplitterType, target.secondarySplitterRatio, null);
+    const lossDb2 = throughMap.has(key2) ? (throughMap.get(key2) as number) : null;
+    if (lossDb2 != null) running -= lossDb2;
+    stages.push({
+      napId: target.id,
+      name: `${target.name} — secondary splitter`,
+      splitterType: target.secondarySplitterType,
+      splitterRatio: target.secondarySplitterRatio,
+      leg: 'through',
+      lossDb: lossDb2,
+      after: running,
+      secondary: true,
+    });
+  }
+
   return { oltId: olt?.id ?? null, oltName: olt?.name ?? null, originDbm, stages, receivedDbm: running };
 }
