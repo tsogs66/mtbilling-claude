@@ -1748,12 +1748,27 @@ export default function ClientsMap() {
                     </select>
                   </FormField>
                 </div>
-                {editNap.splitterType === 'FBTC' && (
-                  <p className="text-xs text-slate-400 -mt-1">
-                    This box's own clients use the tap leg (subscriber drop); any cascaded NAP downstream of it
-                    uses the through leg (trunk continue).
-                  </p>
-                )}
+                {editNap.splitterType === 'FBTC' && (() => {
+                  const ref = splitterRows.find(
+                    (r) => r.type === 'FBTC' && r.ratio === editNap.splitterRatio && Number(r.ports) === Number(editNap.ports)
+                  );
+                  return (
+                    <div className="-mt-1 space-y-1.5">
+                      <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                        <span className="text-slate-500">
+                          Through (trunk continue): <span className="font-semibold text-slate-800">{ref ? `${ref.throughLossDb.toFixed(1)} dB` : '—'}</span>
+                        </span>
+                        <span className="text-slate-500">
+                          Tap (subscriber drop): <span className="font-semibold text-slate-800">{ref?.tapLossDb != null ? `${ref.tapLossDb.toFixed(1)} dB` : '—'}</span>
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        This box's own clients use the tap leg (subscriber drop); any cascaded NAP downstream of it
+                        uses the through leg (trunk continue).
+                      </p>
+                    </div>
+                  );
+                })()}
                 {napPreview && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
                     <span>
