@@ -357,6 +357,8 @@ export function migrate() {
     ['status', "TEXT DEFAULT 'active'"],
     ['address', 'TEXT'],
     ['splitter_ratio', 'TEXT'],
+    ['splitter_type', 'TEXT'],
+    ['tx_dbm', 'REAL'],
     ['pon_port', 'INTEGER'],
     ['host', 'TEXT'],
     ['snmp_port', 'INTEGER DEFAULT 161'],

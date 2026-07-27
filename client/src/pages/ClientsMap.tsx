@@ -8,6 +8,7 @@ import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
 import { fetchCurrentWeather, weatherCategory, type WeatherNow, type WeatherCategory } from '../lib/weather';
+import { computeNapChainDbm, type ChainNapLike, type SplitterRefLike } from '../lib/opticalBudget';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -16,9 +17,11 @@ interface ServerNode {
 interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
-  splitterRatio?: string | null; ponPort?: number | null;
+  splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | null; txDbm?: number | null;
+  ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
+  usedPorts?: number; availablePorts?: number;
 }
 interface Connector { id: number; kind: string; fromId: number; toId: number; points: [number, number][] }
 interface Client {
@@ -41,6 +44,18 @@ function fmtRate(bps?: number): string {
 function fmtGB(gb?: number): string {
   const v = gb || 0;
   return `${v >= 100 ? v.toFixed(1) : v.toFixed(2)} GB`;
+}
+
+/** Distinct ratio strings available for a splitter type, in reference-table order. */
+function splitterRatioOptions(rows: SplitterRefLike[], type: 'FBT' | 'PLC'): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    if (r.type !== type || seen.has(r.ratio)) continue;
+    seen.add(r.ratio);
+    out.push(r.ratio);
+  }
+  return out;
 }
 
 function clientState(c: Client): ClientState {
@@ -624,6 +639,8 @@ const emptyNap = (
     status: 'active',
     address: '',
     splitterRatio: kind === 'nap' ? '1:8' : '',
+    splitterType: kind === 'nap' ? 'PLC' : null,
+    txDbm: kind === 'olt' ? 5 : null,
     ponPort: kind === 'nap' ? 1 : null,
   };
 };
@@ -655,6 +672,29 @@ export default function ClientsMap() {
   const [draftDefault, setDraftDefault] = useState({ lat: String(FALLBACK_MAP_LAT), lng: String(FALLBACK_MAP_LNG) });
   const [defaultBusy, setDefaultBusy] = useState(false);
   const [defaultMsg, setDefaultMsg] = useState('');
+  const [splitterRows, setSplitterRows] = useState<SplitterRefLike[]>([]);
+
+  useEffect(() => {
+    api.get('/tech-tools/splitters').then((r) => setSplitterRows(r.data || []));
+  }, []);
+
+  const napChainById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
+
+  /** Live dBm-received preview for the NAP modal — overlays the in-progress edit onto the loaded chain. */
+  const napPreview = useMemo(() => {
+    if (!editNap || editNap.kind !== 'nap' || !editNap.splitterType || !editNap.splitterRatio) return null;
+    const previewId = editNap.id ?? -1;
+    const merged = new Map(napChainById);
+    merged.set(previewId, {
+      id: previewId,
+      name: editNap.name || 'New NAP',
+      kind: 'nap',
+      parentId: editNap.parentId ?? null,
+      splitterType: editNap.splitterType,
+      splitterRatio: editNap.splitterRatio,
+    });
+    return computeNapChainDbm(previewId, merged, splitterRows);
+  }, [editNap, napChainById, splitterRows]);
 
   const load = useCallback(() => {
     const q = current?.id ? `?routerId=${current.id}` : '';
@@ -1458,6 +1498,7 @@ export default function ClientsMap() {
 
             {naps.map((n) => {
               const w = n.kind === 'olt' ? weather[`olt-${n.id}`] : undefined;
+              const chain = n.kind === 'nap' ? computeNapChainDbm(n.id, napChainById, splitterRows) : null;
               return (
                 <Marker
                   key={n.id}
@@ -1475,6 +1516,16 @@ export default function ClientsMap() {
                     {n.host ? <><br />IP: {n.host}</> : null}
                     {n.kind === 'olt' && n.host ? (
                       <><br />Status: <b style={{ color: n.status === 'online' ? '#16a34a' : '#dc2626' }}>{n.status === 'online' ? 'Online' : 'Offline'}</b></>
+                    ) : null}
+                    {n.kind === 'olt' && n.txDbm != null ? <><br />PON Tx: {n.txDbm} dBm</> : null}
+                    {n.kind === 'nap' && n.splitterType && n.splitterRatio ? (
+                      <><br />Splitter: {n.splitterType} {n.splitterRatio}</>
+                    ) : null}
+                    {n.kind === 'nap' && chain ? <><br />Est. received: {chain.receivedDbm.toFixed(2)} dBm</> : null}
+                    {n.ports != null ? (
+                      <>
+                        <br />Ports: {n.availablePorts ?? Math.max(0, n.ports - (n.usedPorts ?? 0))} free / {n.ports}
+                      </>
                     ) : null}
                     {n.vendor || n.model ? <><br />{[n.vendor, n.model].filter(Boolean).join(' · ')}</> : null}
                     {w ? (
@@ -1647,10 +1698,49 @@ export default function ClientsMap() {
                   <FormField label="PON Port">
                     <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />
                   </FormField>
-                  <FormField label="Splitter Ratio">
-                    <input className="input" value={editNap.splitterRatio || ''} onChange={(e) => setEditNap({ ...editNap, splitterRatio: e.target.value })} placeholder="95/5" />
+                  <FormField label="Splitter Ports (capacity)" hint="Subscriber ports available on this box.">
+                    <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
                   </FormField>
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Splitter Type">
+                    <select
+                      className="input"
+                      value={editNap.splitterType || 'PLC'}
+                      onChange={(e) => {
+                        const t = e.target.value as 'FBT' | 'PLC';
+                        const opts = splitterRatioOptions(splitterRows, t);
+                        const ratio = opts.includes(editNap.splitterRatio || '') ? editNap.splitterRatio : opts[0] || '';
+                        setEditNap({ ...editNap, splitterType: t, splitterRatio: ratio });
+                      }}
+                    >
+                      <option value="PLC">PLC</option>
+                      <option value="FBT">FBT</option>
+                    </select>
+                  </FormField>
+                  <FormField label="Splitter Ratio">
+                    <select
+                      className="input"
+                      value={editNap.splitterRatio || ''}
+                      onChange={(e) => setEditNap({ ...editNap, splitterRatio: e.target.value })}
+                    >
+                      {splitterRatioOptions(splitterRows, (editNap.splitterType as 'FBT' | 'PLC') || 'PLC').map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                </div>
+                {napPreview && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
+                    <span>
+                      Est. received power {napPreview.oltName ? `from ${napPreview.oltName}` : ''}
+                      {napPreview.stages.some((s) => s.lossDb == null) && (
+                        <span className="text-amber-600"> — some hops missing a reference match</span>
+                      )}
+                    </span>
+                    <span className="font-semibold text-slate-800">{napPreview.receivedDbm.toFixed(2)} dBm</span>
+                  </div>
+                )}
                 <FormField label="Status">
                   <select className="input" value={editNap.status || 'active'} onChange={(e) => setEditNap({ ...editNap, status: e.target.value })}>
                     <option value="active">active</option>
@@ -1679,9 +1769,14 @@ export default function ClientsMap() {
                     <MapPin size={14} /> Pick on Map
                   </button>
                 </div>
-                <FormField label="PON Ports">
-                  <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
-                </FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="PON Ports">
+                    <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
+                  </FormField>
+                  <FormField label="PON Tx Power (dBm)" hint="Origin power for downstream budget math. Typical GPON: +3 to +7.">
+                    <input className="input" type="number" step="0.1" value={editNap.txDbm ?? ''} onChange={(e) => setEditNap({ ...editNap, txDbm: e.target.value === '' ? null : Number(e.target.value) })} />
+                  </FormField>
+                </div>
               </>
             )}
             <div className="grid grid-cols-2 gap-3">
