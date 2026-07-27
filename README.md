@@ -76,6 +76,11 @@ The SQLite database is created and seeded automatically on first run.
 
 Wraps the same React UI in a native Android shell. Full steps: **[client/ANDROID.md](./client/ANDROID.md)**.
 
+**Prebuilt APK:** every push to `main` auto-builds a debug APK and publishes it to the
+[`android-latest` release](https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest) — no Android Studio needed.
+
+**Build it yourself:**
+
 ```bash
 npm install
 npm run android:sync   # build web UI → sync into client/android

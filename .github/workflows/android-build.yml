@@ -1,0 +1,87 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-build.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform + build-tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web UI and sync into the Capacitor Android project
+        run: npm run android:sync
+
+      - name: Build debug APK
+        working-directory: client/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt-billing-debug-apk
+          path: client/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish rolling "android-latest" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: MT-Billing Android (auto-built debug APK)
+          body: |
+            Automatically built **debug** APK from the latest `main` (commit ${{ github.sha }}).
+
+            This is a debug build, not signed for the Play Store — Android will show
+            an "app not verified" / "unknown source" warning on install, which is
+            expected and does not indicate a problem.
+
+            **Install:** download `app-debug.apk` below, allow "install unknown apps"
+            for your browser/file manager, and open it. On first launch, enter your
+            panel's public HTTPS URL (e.g. `https://billing.yourdomain.com`) when
+            prompted. See [client/ANDROID.md](https://github.com/${{ github.repository }}/blob/main/client/ANDROID.md)
+            for details, including how to build a signed release APK yourself.
+          files: client/android/app/build/outputs/apk/debug/app-debug.apk
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

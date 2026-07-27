@@ -13,6 +13,18 @@ The phone app does **not** run the Node API — it is a remote client to your pa
 
 ---
 
+## Quickest option: download the pre-built APK
+
+Every push to `main` that touches `client/` auto-builds a **debug** APK via
+[`.github/workflows/android-build.yml`](../.github/workflows/android-build.yml) and
+publishes it to the rolling
+[`android-latest` release](https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest) —
+no Android Studio needed. It's a debug build (unsigned), so Android will show an
+"app not verified" warning on install; that's expected. Not for Play Store
+distribution — see [Build a release APK](#build-the-apk-recommended) below for that.
+
+---
+
 ## What you need (build PC)
 
 - Node.js **20+**
