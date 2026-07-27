@@ -51,13 +51,23 @@ export interface SplitterLike {
 }
 
 /**
+ * FBT and FBTC are both asymmetric tap-percentage couplers (95:5, 90:10, ...,
+ * 50:50) with a through leg (trunk continue) and a tap leg (subscriber drop)
+ * — FBTC is just a cassette cascading several FBT couplers in one tray. PLC
+ * is the only symmetric type (equal N-way split, no tap leg).
+ */
+export function isAsymmetricType(type?: string | null): boolean {
+  return type === 'FBTC' || type === 'FBT';
+}
+
+/**
  * FBTC loss scales with cassette size (an 8/16/32-port tray cascades that many
  * individual tap couplers internally, so the cumulative through-loss and the
  * worst-case tap-loss both grow with port count) — so its lookup key includes
- * ports. FBT/PLC are single symmetric splitters where ratio alone determines
- * the loss, so their key stays type+ratio (a NAP's "capacity" field isn't
- * necessarily the same number as the split count, and shouldn't affect the
- * lookup for those types).
+ * ports. FBT is a bare/single coupler (no cassette to scale by) and PLC is a
+ * symmetric splitter where ratio alone determines the loss, so both keep a
+ * type+ratio key (a NAP's "capacity" field isn't necessarily the same number
+ * as the split count, and shouldn't affect the lookup for those types).
  */
 function refKey(type?: string | null, ratio?: string | null, ports?: number | null): string {
   if (!type || !ratio) return '';
@@ -82,7 +92,7 @@ function splitterLegOutput(
   const { throughMap, tapMap } = buildLossMaps(splitterRows);
   const key = refKey(s.type, s.ratio, s.ports);
   if (!key) return null;
-  const wantTap = s.type === 'FBTC' && leg === 'tap';
+  const wantTap = isAsymmetricType(s.type) && leg === 'tap';
   const loss = wantTap ? tapMap.get(key) : throughMap.get(key);
   return loss != null ? inputDbm - loss : null;
 }
@@ -122,7 +132,7 @@ export interface ChainStage {
   name: string;
   splitterType?: string | null;
   splitterRatio?: string | null;
-  /** Which leg's loss was applied — only meaningful for FBTC (asymmetric tap cassette). */
+  /** Which leg's loss was applied — only meaningful for FBT/FBTC (asymmetric tap couplers). */
   leg: 'through' | 'tap';
   lossDb: number | null;
   after: number;
@@ -141,15 +151,15 @@ export const DEFAULT_ORIGIN_DBM = 5;
 /**
  * Walks a NAP's parent chain up to its OLT (or up to a standalone splitter
  * origin, if `originSplitterId` is set on the bottom-most NAP), subtracting
- * each hop's splitter loss. For an FBTC (asymmetric tap cassette) ancestor
+ * each hop's splitter loss. For an FBT/FBTC (asymmetric tap coupler) ancestor
  * that feeds the next NAP in the chain, the loss applied is whichever leg
  * *that child* selects via its own `fbtcLeg` — 'through' (trunk continue, the
  * default) or 'tap' (subscriber drop, for a NAP deliberately cascaded off a
  * tap port instead). The terminal NAP itself — i.e. whichever NAP's own
  * directly-attached clients this call is answering "what do they receive"
- * for — always draws from its own tap ports when it's FBTC, since that's
- * what a subscriber port is. FBT/PLC (symmetric splitters) always use the
- * single per-leg loss value regardless of position.
+ * for — always draws from its own tap leg when it's FBT/FBTC, since that's
+ * what a subscriber port is. PLC (symmetric splitter) always uses its single
+ * per-leg loss value regardless of position.
  */
 export function computeNapChainDbm(
   napId: number,
@@ -192,7 +202,7 @@ export function computeNapChainDbm(
     const child = isTerminal ? null : chain[i + 1];
     const wantsTap = isTerminal ? true : (child?.fbtcLeg ?? 'through') === 'tap';
     const key = refKey(n.splitterType, n.splitterRatio, n.ports);
-    const useTap = n.splitterType === 'FBTC' && wantsTap && key !== '' && tapMap.has(key);
+    const useTap = isAsymmetricType(n.splitterType) && wantsTap && key !== '' && tapMap.has(key);
     const lossDb = key
       ? useTap
         ? (tapMap.get(key) as number)

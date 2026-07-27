@@ -272,15 +272,18 @@ function columnExists(table: string, col: string): boolean {
 }
 
 /**
- * Per-tap-coupler baseline for FBTC (ratio -> [single-coupler through-loss,
- * single-coupler tap-loss]). A real FBTC cassette cascades one of these
- * couplers per port internally — the trunk passes through every coupler in
- * turn, tapping a little off at each one — so both loss figures scale with
- * cassette size: through-loss is cumulative across the whole tray, and
- * tap-loss is worst-case (the last/furthest port, after already passing
- * through every upstream coupler).
+ * Baseline for a single fused-biconic-taper (FBT) coupler (ratio ->
+ * [through-loss, tap-loss]). Unlike PLC (a planar waveguide that only ever
+ * splits equally — 1:2, 1:4, 1:8, ...), an FBT coupler is inherently an
+ * asymmetric 2-leg device specified by its split percentage (95:5, 90:10,
+ * ..., 50:50) — the through leg carries the majority of the power onward,
+ * the tap leg drops a smaller, lossier fraction off. A bare/single FBT
+ * splitter uses these values directly; an FBTC ("tap cassette") cascades N
+ * of these same couplers internally in one tray, so both its cumulative
+ * through-loss and worst-case tap-loss scale with cassette size — see
+ * `fbtcScaledRows()`.
  */
-const FBTC_SINGLE_COUPLER: [string, number, number][] = [
+const ASYMMETRIC_COUPLER_BASE: [string, number, number][] = [
   ['95:5', 0.3, 13.2],
   ['90:10', 0.6, 10.3],
   ['85:15', 0.9, 8.4],
@@ -296,7 +299,7 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 function fbtcScaledRows(): [string, number, number, number][] {
   const out: [string, number, number, number][] = [];
   for (const ports of FBTC_PORT_SIZES) {
-    for (const [ratio, singleThrough, singleTap] of FBTC_SINGLE_COUPLER) {
+    for (const [ratio, singleThrough, singleTap] of ASYMMETRIC_COUPLER_BASE) {
       out.push([ratio, ports, round1(ports * singleThrough), round1((ports - 1) * singleThrough + singleTap)]);
     }
   }
@@ -323,7 +326,7 @@ function migrateFbtcLossReferenceScaling() {
 
   const scaled = fbtcScaledRows();
   const updateStmt = db.prepare('UPDATE splitter_loss_reference SET through_loss_db = ?, tap_loss_db = ?, notes = ? WHERE id = ?');
-  for (const [oldRatio, oldSingleThrough, oldSingleTap] of FBTC_SINGLE_COUPLER) {
+  for (const [oldRatio, oldSingleThrough, oldSingleTap] of ASYMMETRIC_COUPLER_BASE) {
     for (const ports of [8, 16]) {
       const row = db
         .prepare('SELECT id, through_loss_db AS through, tap_loss_db AS tap FROM splitter_loss_reference WHERE type = ? AND ratio = ? AND ports = ?')
@@ -346,6 +349,54 @@ function migrateFbtcLossReferenceScaling() {
   }
 
   db.prepare('UPDATE app_settings SET fbtc_loss_scaled = 1 WHERE id = 1').run();
+}
+
+const FBT_MIGRATION_NOTES = 'Through = trunk continue, Tap = subscriber drop (bare coupler — no cassette scaling)';
+
+/** [ratio, throughLossDb, tapLossDb] for a bare FBT coupler — no port scaling (see ASYMMETRIC_COUPLER_BASE). */
+function fbtRows(): [string, number, number][] {
+  return ASYMMETRIC_COUPLER_BASE.map(([ratio, through, tap]) => [ratio, through, tap]);
+}
+
+/**
+ * FBT was originally (wrongly) seeded with PLC-style equal-split ratios
+ * (1:2/1:4/1:8) — a real FBT coupler is an asymmetric device specified by
+ * its tap percentage (95:5, 90:10, ..., 50:50), same notation as FBTC. This
+ * replaces any already-seeded, unedited old-style FBT rows with the correct
+ * asymmetric ones and adds any missing — flagged via
+ * app_settings.fbt_ratio_fixed so it only runs once, and never touches a
+ * row a tech has since customized from Tech Tools.
+ */
+function migrateFbtRatioNotation() {
+  const already = (db.prepare('SELECT fbt_ratio_fixed FROM app_settings WHERE id = 1').get() as { fbt_ratio_fixed: number } | undefined)
+    ?.fbt_ratio_fixed;
+  if (already) return;
+
+  const OLD_FBT: [string, number][] = [
+    ['1:2', 3.9],
+    ['1:4', 7.4],
+    ['1:8', 11.0],
+  ];
+  for (const [ratio, oldLoss] of OLD_FBT) {
+    const row = db
+      .prepare('SELECT id, through_loss_db AS through, tap_loss_db AS tap FROM splitter_loss_reference WHERE type = ? AND ratio = ?')
+      .get('FBT', ratio) as { id: number; through: number; tap: number | null } | undefined;
+    if (!row || row.through !== oldLoss || row.tap != null) continue; // missing or tech-edited
+    db.prepare('DELETE FROM splitter_loss_reference WHERE id = ?').run(row.id);
+  }
+
+  const maxOrder = (db.prepare("SELECT COALESCE(MAX(sort_order), -1) AS m FROM splitter_loss_reference WHERE type = 'FBT'").get() as { m: number }).m;
+  let order = maxOrder + 1;
+  const insSplitter = db.prepare(
+    `INSERT INTO splitter_loss_reference (type, ratio, ports, through_loss_db, tap_loss_db, notes, sort_order)
+     VALUES ('FBT', ?, NULL, ?, ?, ?, ?)`
+  );
+  for (const [ratio, through, tap] of fbtRows()) {
+    const exists = db.prepare('SELECT 1 FROM splitter_loss_reference WHERE type = ? AND ratio = ?').get('FBT', ratio);
+    if (!exists) insSplitter.run(ratio, through, tap, FBT_MIGRATION_NOTES, order++);
+  }
+
+  db.prepare('UPDATE app_settings SET fbt_ratio_fixed = 1 WHERE id = 1').run();
 }
 
 /** Idempotent migrations for databases created before a column existed. */
@@ -427,6 +478,9 @@ export function migrate() {
     // One-time flag: has the FBTC splitter_loss_reference migration to
     // port-scaled through/tap values run yet?
     ['fbtc_loss_scaled', 'INTEGER DEFAULT 0'],
+    // One-time flag: has FBT's ratio notation been fixed to asymmetric
+    // tap-percentage style (95:5, ...) instead of PLC-style equal splits?
+    ['fbt_ratio_fixed', 'INTEGER DEFAULT 0'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
@@ -620,13 +674,8 @@ export function migrate() {
     for (const [ratio, ports, loss] of plc) {
       insSplitter.run('PLC', ratio, ports, loss, null, 'Typical PLC splitter insertion loss', order++);
     }
-    const fbt: [string, number, number][] = [
-      ['1:2', 2, 3.9],
-      ['1:4', 4, 7.4],
-      ['1:8', 8, 11.0],
-    ];
-    for (const [ratio, ports, loss] of fbt) {
-      insSplitter.run('FBT', ratio, ports, loss, null, 'Typical FBT splitter insertion loss', order++);
+    for (const [ratio, through, tap] of fbtRows()) {
+      insSplitter.run('FBT', ratio, null, through, tap, FBT_MIGRATION_NOTES, order++);
     }
     for (const [ratio, ports, through, tap] of fbtcScaledRows()) {
       insSplitter.run(
@@ -641,6 +690,7 @@ export function migrate() {
     }
   }
   migrateFbtcLossReferenceScaling();
+  migrateFbtRatioNotation();
 
   const payLinkCols: [string, string][] = [
     ['pay_channel', 'TEXT'],
