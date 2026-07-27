@@ -1376,25 +1376,56 @@ body {
 }
 .wx-cloud {
   position: absolute;
-  bottom: 8px;
-  width: 26px;
-  height: 12px;
+  bottom: 5px;
+  width: 20px;
+  height: 9px;
   border-radius: 9999px;
-  background: #f8fafc;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  background: #f1f5f9;
+  filter: drop-shadow(0 1.5px 2px rgba(0, 0, 0, 0.5));
   animation: wx-drift 4.5s ease-in-out infinite;
 }
+.wx-cloud::before,
+.wx-cloud::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  background: #f8fafc;
+}
+.wx-cloud::before {
+  width: 11px;
+  height: 11px;
+  left: 2px;
+  top: -6px;
+}
+.wx-cloud::after {
+  width: 8px;
+  height: 8px;
+  left: 10px;
+  top: -4px;
+}
 .wx-cloud-a {
-  left: 4px;
+  left: 3px;
   animation-delay: 0s;
 }
 .wx-cloud-b {
-  left: 22px;
-  bottom: 15px;
-  width: 18px;
-  height: 9px;
+  left: 18px;
+  bottom: 12px;
+  width: 14px;
+  height: 6px;
   animation-delay: 1.2s;
   opacity: 0.85;
+}
+.wx-cloud-b::before {
+  width: 8px;
+  height: 8px;
+  left: 1px;
+  top: -4px;
+}
+.wx-cloud-b::after {
+  width: 6px;
+  height: 6px;
+  left: 7px;
+  top: -3px;
 }
 @keyframes wx-drift {
   0%, 100% { transform: translateX(-4px); }
@@ -1497,24 +1528,65 @@ body {
 }
 .mapfx-cloud {
   position: absolute;
-  border-radius: 9999px;
-  background: #f8fafc;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
   opacity: 0.95;
+  filter: drop-shadow(0 4px 9px rgba(0, 0, 0, 0.3));
   animation-name: mapfx-cloud-drift;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
 }
+.mapfx-puff {
+  position: absolute;
+  border-radius: 50%;
+  background: #f8fafc;
+}
+.mapfx-puff-body {
+  left: 4%;
+  top: 42%;
+  width: 92%;
+  height: 52%;
+  border-radius: 50% / 65%;
+  background: #eef2f7;
+}
+.mapfx-puff-1 {
+  left: -2%;
+  top: 46%;
+  width: 30%;
+  height: 60%;
+}
+.mapfx-puff-2 {
+  left: 16%;
+  top: 10%;
+  width: 42%;
+  height: 84%;
+}
+.mapfx-puff-3 {
+  left: 44%;
+  top: 0%;
+  width: 46%;
+  height: 90%;
+}
+.mapfx-puff-4 {
+  left: 72%;
+  top: 26%;
+  width: 32%;
+  height: 66%;
+}
+.mapfx-puff-5 {
+  left: 88%;
+  top: 48%;
+  width: 20%;
+  height: 48%;
+}
 .mapfx-cloud-1 {
   top: 10%;
   width: 190px;
-  height: 54px;
+  height: 56px;
   animation-duration: 38s;
 }
 .mapfx-cloud-2 {
   top: 28%;
   width: 130px;
-  height: 40px;
+  height: 42px;
   animation-duration: 48s;
   animation-delay: -14s;
   opacity: 0.9;
@@ -1522,7 +1594,7 @@ body {
 .mapfx-cloud-3 {
   top: 4%;
   width: 100px;
-  height: 32px;
+  height: 34px;
   animation-duration: 58s;
   animation-delay: -30s;
   opacity: 0.85;

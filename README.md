@@ -345,3 +345,21 @@ sudo bash scripts/build-all-flash-images.sh
 ```
 
 Details: [flash/README.md](./flash/README.md) · [SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md).
+
+### Updating after new commits (flash images)
+
+**Automatic (all flash images built from this point on):** first boot enables the same 10-minute GitHub polling timer used by the Proxmox LXC install. Set `MT_AUTO_UPDATE=0` before first boot to opt out.
+
+```bash
+# On the device
+systemctl status mt-billing-auto-update.timer
+journalctl -u mt-billing-auto-update.service -n 50
+```
+
+**Retrofit a device flashed before this existed** (or re-enable it after a factory image reset), on any board — RPi, Orange Pi, Orange Pi One, PC, PC-USB:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --enable-timer
+```
+
+**Manual, one-time pull** (no timer): `sudo bash /opt/mt-billing/install/mt-billing-update.sh`, or from the panel's Application Updater page.

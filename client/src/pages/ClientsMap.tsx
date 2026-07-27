@@ -433,11 +433,21 @@ function MapWeatherOverlay({ category }: { category: WeatherCategory }) {
     );
   }
   if (category === 'cloud') {
+    const puffs = (
+      <>
+        <i className="mapfx-puff mapfx-puff-body" />
+        <i className="mapfx-puff mapfx-puff-1" />
+        <i className="mapfx-puff mapfx-puff-2" />
+        <i className="mapfx-puff mapfx-puff-3" />
+        <i className="mapfx-puff mapfx-puff-4" />
+        <i className="mapfx-puff mapfx-puff-5" />
+      </>
+    );
     return (
       <div className="map-weatherfx-layer" aria-hidden>
-        <span className="mapfx-cloud mapfx-cloud-1" />
-        <span className="mapfx-cloud mapfx-cloud-2" />
-        <span className="mapfx-cloud mapfx-cloud-3" />
+        <span className="mapfx-cloud mapfx-cloud-1">{puffs}</span>
+        <span className="mapfx-cloud mapfx-cloud-2">{puffs}</span>
+        <span className="mapfx-cloud mapfx-cloud-3">{puffs}</span>
       </div>
     );
   }

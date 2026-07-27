@@ -16,6 +16,7 @@ API_PORT="${MT_API_PORT:-4000}"
 PANEL_PORT="${MT_PANEL_PORT:-80}"
 ADMIN_USER="${MT_ADMIN_USER:-admin}"
 ADMIN_PASS="${MT_ADMIN_PASS:-admin123}"
+AUTO_UPDATE="${MT_AUTO_UPDATE:-1}"
 LOG="${MT_FIRSTBOOT_LOG:-/var/log/mt-billing-firstboot.log}"
 
 exec > >(tee -a "$LOG") 2>&1
@@ -71,13 +72,13 @@ install_nodejs() {
   if command -v node >/dev/null 2>&1; then
     major="$(node -v 2>/dev/null | tr -d v | cut -d. -f1 || echo 0)"
     if [[ "${major:-0}" -ge 20 ]]; then
-      echo "[2/7] Node.js already present: $(node -v)"
+      echo "[2/9] Node.js already present: $(node -v)"
       return 0
     fi
   fi
 
   arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
-  echo "[2/7] Installing Node.js (arch=${arch})…"
+  echo "[2/9] Installing Node.js (arch=${arch})…"
 
   # Prefer distro packages on armhf (NodeSource armhf support is unreliable).
   if [[ "$arch" == "armhf" || "$arch" == "armel" || "$arch" == "armv7l" ]]; then
@@ -143,7 +144,7 @@ for d in /boot/firmware /boot; do
   fi
 done
 
-echo "[1/7] Installing OS packages…"
+echo "[1/9] Installing OS packages…"
 apt-get update -y
 apt-get install -y \
   curl git ca-certificates openssl build-essential python3 \
@@ -155,7 +156,7 @@ if ! id "$SERVICE_USER" &>/dev/null; then
   useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-echo "[3/7] Cloning MT-Billing (${REPO_BRANCH})…"
+echo "[3/9] Cloning MT-Billing (${REPO_BRANCH})…"
 mkdir -p "$(dirname "$INSTALL_DIR")"
 # Always bypass dubious-ownership checks (root vs service-user chown).
 git_safe() { git -c safe.directory='*' -c safe.directory="$INSTALL_DIR" "$@"; }
@@ -177,11 +178,11 @@ chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
 sudo -u "$SERVICE_USER" git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 sudo -u "$SERVICE_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
-echo "[4/7] Building application…"
+echo "[4/9] Building application…"
 # Cap Node heap on small boards so the Vite/tsc build survives 1 GB RAM + swap.
 sudo -u "$SERVICE_USER" bash -c "cd '$INSTALL_DIR' && NODE_OPTIONS='--max-old-space-size=768' npm install && NODE_OPTIONS='--max-old-space-size=768' npm run build && NODE_OPTIONS='--max-old-space-size=768' npm --prefix server run build"
 
-echo "[5/7] Writing environment…"
+echo "[5/9] Writing environment…"
 JWT_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 64)"
 mkdir -p "$INSTALL_DIR/server/data"
 cat >"$INSTALL_DIR/server/.env" <<EOF
@@ -193,7 +194,7 @@ EOF
 chmod 600 "$INSTALL_DIR/server/.env"
 chown "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR/server/.env" "$INSTALL_DIR/server/data"
 
-echo "[6/7] Enabling systemd + nginx…"
+echo "[6/9] Enabling systemd + nginx…"
 cat >/etc/systemd/system/mt-billing-api.service <<EOF
 [Unit]
 Description=MT-Billing API (MikroTik billing panel)
@@ -250,7 +251,7 @@ systemctl enable --now mt-billing-api
 systemctl enable nginx
 systemctl reload nginx
 
-echo "[6b/7] Granting panel passwordless sudo (Cloudflare Tunnel + Updater)…"
+echo "[7/9] Granting panel passwordless sudo (Cloudflare Tunnel + Updater)…"
 # One-time: lets Cloudflare Access / Application Updater work from the UI without SSH.
 if [[ -x "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" ]]; then
   bash "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" || true
@@ -264,7 +265,23 @@ elif [[ -f "${INSTALL_DIR}/install/mt-billing-sudoers" ]]; then
   visudo -cf /etc/sudoers.d/mt-billing >/dev/null 2>&1 || rm -f /etc/sudoers.d/mt-billing
 fi
 
-echo "[7/7] Disabling first-boot unit…"
+echo "[8/9] Enabling auto-update timer (checks GitHub every 10 minutes)…"
+if [[ "$AUTO_UPDATE" == "1" ]]; then
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-auto-update.service" && -f "${INSTALL_DIR}/install/mt-billing-auto-update.timer" ]]; then
+    sed "s|var_repo_branch=main|var_repo_branch=${REPO_BRANCH}|g; s|var_install_dir=/opt/mt-billing|var_install_dir=${INSTALL_DIR}|g" \
+      "${INSTALL_DIR}/install/mt-billing-auto-update.service" >/etc/systemd/system/mt-billing-auto-update.service
+    install -m 644 "${INSTALL_DIR}/install/mt-billing-auto-update.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now mt-billing-auto-update.timer
+    echo "Auto-update enabled (systemctl status mt-billing-auto-update.timer)"
+  else
+    echo "WARNING: auto-update unit files missing from checkout — skipping (device still updatable from the panel UI)"
+  fi
+else
+  echo "Auto-update disabled (MT_AUTO_UPDATE=0) — device still updatable from the panel UI"
+fi
+
+echo "[9/9] Disabling first-boot unit…"
 systemctl disable mt-billing-firstboot.service 2>/dev/null || true
 rm -f /etc/systemd/system/mt-billing-firstboot.service
 systemctl daemon-reload
