@@ -211,7 +211,7 @@ function TopologyDbmLookup({ naps, rows }: { naps: TopologyNap[]; rows: Splitter
 
   const napsById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
   const splitterRefs = useMemo(
-    () => rows.map((r) => ({ type: r.type, ratio: r.ratio, throughLossDb: r.throughLossDb, tapLossDb: r.tapLossDb })),
+    () => rows.map((r) => ({ type: r.type, ratio: r.ratio, ports: r.ports, throughLossDb: r.throughLossDb, tapLossDb: r.tapLossDb })),
     [rows]
   );
   const result = useMemo(() => (napId ? computeNapChainDbm(Number(napId), napsById, splitterRefs) : null), [napId, napsById, splitterRefs]);
