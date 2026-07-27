@@ -54,6 +54,12 @@ See **[SYSTEM_REQUIREMENTS.md](../SYSTEM_REQUIREMENTS.md)** for hardware minimum
 ssh mtadmin@<device-ip>
 ```
 
+`mtadmin` has passwordless `sudo`, so use `sudo reboot` / `sudo poweroff` —
+a bare `reboot` fails with "Interactive authentication required" over SSH
+(that goes through polkit/logind, not sudo). `mtadmin` can also reboot/power
+off without `sudo` at all, since firstboot installs a polkit rule granting
+that to the `sudo` group.
+
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 
 ### Staying up to date

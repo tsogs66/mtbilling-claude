@@ -115,6 +115,23 @@ ensure_console_user() {
   # Passwordless sudo helps headless recovery on small boards.
   echo "${user} ALL=(ALL) NOPASSWD:ALL" >"/etc/sudoers.d/010-${user}"
   chmod 440 "/etc/sudoers.d/010-${user}"
+  # `reboot`/`poweroff` go through systemd-logind + polkit, not sudo — over
+  # SSH there's no interactive polkit auth agent, so a bare `reboot` fails
+  # with "Interactive authentication required" even though the user has
+  # passwordless sudo. Let the sudo group do it without a prompt.
+  if [[ -d /etc/polkit-1/rules.d ]]; then
+    cat >/etc/polkit-1/rules.d/49-mtbilling-sudo-power.rules <<'EOF'
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+        subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+  fi
   # Raspberry Pi OS: keep SSH enabled on bootfs.
   for d in /boot/firmware /boot; do
     if [[ -d "$d" && -w "$d" ]]; then
