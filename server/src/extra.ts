@@ -34,6 +34,7 @@ export const ALL_PERMISSIONS = [
   'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
   'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
+  'tech-tools',
 ] as const;
 
 // Shared license / password-reset signing secrets live in panelId.ts.
@@ -118,7 +119,7 @@ export function initExtra() {
     ins.run(
       'Technician',
       'Manage clients, routers and network',
-      JSON.stringify(['dashboard', 'terminal', 'pppoe', 'ipoe', 'routers', 'network', 'map', 'files', 'logs', 'license'])
+      JSON.stringify(['dashboard', 'terminal', 'pppoe', 'ipoe', 'routers', 'network', 'map', 'files', 'logs', 'license', 'tech-tools'])
     );
     ins.run(
       'Cashier',
@@ -663,6 +664,82 @@ extraRouter.put('/inventory/:id', (req, res) => {
 });
 extraRouter.delete('/inventory/:id', (req, res) => {
   db.prepare('DELETE FROM inventory WHERE id = ?').run(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// ---------------- Tech Tools: splitter loss reference ----------------
+extraRouter.get('/tech-tools/splitters', (_req, res) => {
+  res.json(
+    db
+      .prepare(
+        `SELECT id, type, ratio, ports, through_loss_db AS throughLossDb, tap_loss_db AS tapLossDb, notes, sort_order AS sortOrder
+         FROM splitter_loss_reference ORDER BY type, sort_order, id`
+      )
+      .all()
+  );
+});
+extraRouter.post('/tech-tools/splitters', (req, res) => {
+  const b = req.body || {};
+  const type = String(b.type || '').trim().toUpperCase();
+  const ratio = String(b.ratio || '').trim();
+  if (!type || !ratio) return res.status(400).json({ error: 'type and ratio are required' });
+  const throughLoss = Number(b.throughLossDb);
+  if (!Number.isFinite(throughLoss)) return res.status(400).json({ error: 'throughLossDb must be a number' });
+  const info = db
+    .prepare(
+      `INSERT INTO splitter_loss_reference (type, ratio, ports, through_loss_db, tap_loss_db, notes, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      type,
+      ratio,
+      b.ports != null && b.ports !== '' ? Number(b.ports) : null,
+      throughLoss,
+      b.tapLossDb != null && b.tapLossDb !== '' ? Number(b.tapLossDb) : null,
+      b.notes || null,
+      Number(b.sortOrder) || 0
+    );
+  res.status(201).json(
+    db
+      .prepare(
+        `SELECT id, type, ratio, ports, through_loss_db AS throughLossDb, tap_loss_db AS tapLossDb, notes, sort_order AS sortOrder
+         FROM splitter_loss_reference WHERE id = ?`
+      )
+      .get(info.lastInsertRowid)
+  );
+});
+extraRouter.put('/tech-tools/splitters/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM splitter_loss_reference WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const throughLoss = b.throughLossDb != null ? Number(b.throughLossDb) : ex.through_loss_db;
+  if (!Number.isFinite(throughLoss)) return res.status(400).json({ error: 'throughLossDb must be a number' });
+  db.prepare(
+    `UPDATE splitter_loss_reference
+     SET type=?, ratio=?, ports=?, through_loss_db=?, tap_loss_db=?, notes=?, sort_order=?
+     WHERE id=?`
+  ).run(
+    b.type ? String(b.type).trim().toUpperCase() : ex.type,
+    b.ratio != null ? String(b.ratio).trim() : ex.ratio,
+    b.ports != null && b.ports !== '' ? Number(b.ports) : b.ports === '' ? null : ex.ports,
+    throughLoss,
+    b.tapLossDb != null && b.tapLossDb !== '' ? Number(b.tapLossDb) : b.tapLossDb === '' ? null : ex.tap_loss_db,
+    b.notes !== undefined ? b.notes : ex.notes,
+    b.sortOrder != null ? Number(b.sortOrder) : ex.sort_order,
+    id
+  );
+  res.json(
+    db
+      .prepare(
+        `SELECT id, type, ratio, ports, through_loss_db AS throughLossDb, tap_loss_db AS tapLossDb, notes, sort_order AS sortOrder
+         FROM splitter_loss_reference WHERE id = ?`
+      )
+      .get(id)
+  );
+});
+extraRouter.delete('/tech-tools/splitters/:id', (req, res) => {
+  db.prepare('DELETE FROM splitter_loss_reference WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
 });
 

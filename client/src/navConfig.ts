@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, Link2, PieChart,
-  ShieldAlert, Cloud, Satellite, RadioTower,
+  ShieldAlert, Cloud, Satellite, RadioTower, Cable,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -36,6 +36,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
       { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
       { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
+      { to: '/tech-tools', label: 'Tech Tools', icon: Cable, permission: 'tech-tools' },
     ],
   },
   {
@@ -96,7 +97,7 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     label: 'Network',
     icon: Network,
     permission: 'network',
-    matchPaths: ['/network', '/map', '/terminal', '/ai-scripting', '/files', '/zerotier', '/super-router', '/routers'],
+    matchPaths: ['/network', '/map', '/terminal', '/ai-scripting', '/files', '/zerotier', '/super-router', '/routers', '/tech-tools'],
   },
   {
     to: '/sales',
@@ -136,6 +137,7 @@ export function permissionForPath(pathname: string): string {
     '/map': 'map',
     '/zerotier': 'zerotier',
     '/super-router': 'super-router',
+    '/tech-tools': 'tech-tools',
     '/files': 'files',
     '/sales': 'sales',
     '/pay-portal': 'sales',

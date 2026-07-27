@@ -6,7 +6,7 @@ import { api } from '../api';
 
 const PERMISSIONS = [
   'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
-  'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
+  'zerotier', 'super-router', 'tech-tools', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
 ];
 
