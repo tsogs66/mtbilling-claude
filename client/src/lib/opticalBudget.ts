@@ -61,6 +61,21 @@ export function isAsymmetricType(type?: string | null): boolean {
 }
 
 /**
+ * Label a through/tap leg choice by the splitter's own ratio numbers (e.g.
+ * ratio "95:5" -> "95" for through, "5" for tap) instead of generic
+ * trunk/subscriber wording, since that's what's printed on the hardware.
+ * Falls back to the generic label if the ratio isn't in "NN:MM" form.
+ */
+export function ratioLegLabel(ratio: string | null | undefined, leg: 'through' | 'tap'): string {
+  const parts = (ratio || '').split(':');
+  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
+    return leg === 'through' ? 'Through (trunk continue)' : 'Tap (subscriber drop)';
+  }
+  const [throughPct, tapPct] = parts;
+  return leg === 'through' ? `${throughPct.trim()} (through)` : `${tapPct.trim()} (tap)`;
+}
+
+/**
  * FBTC loss scales with cassette size (an 8/16/32-port tray cascades that many
  * individual tap couplers internally, so the cumulative through-loss and the
  * worst-case tap-loss both grow with port count) — so its lookup key includes
