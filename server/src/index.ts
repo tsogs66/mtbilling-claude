@@ -92,7 +92,6 @@ import {
   mikrotikProfileForPlan,
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
-  withTimeout,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -1557,37 +1556,39 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
       discount_days: b.discount_days,
       source: 'admin',
     });
-    // A slow SMTP/SMS gateway must not hold up the response either — same
-    // reasoning as the router-sync budget inside recordPppoePayment. The
-    // send itself still completes in the background; it just won't be
-    // reflected in `emailed`/`smsSent` if it was still in flight past the budget.
-    let emailed = false;
+    // Email/SMS are notifications, not part of the transaction, so they must
+    // never hold up the response — a slow gateway here previously stacked a
+    // timeout-bounded wait on top of the router-sync budget inside
+    // recordPppoePayment (up to ~18s combined), which could still exceed an
+    // intermediary proxy/tunnel's own timeout and show "payment failed" even
+    // though the payment had already gone through. Fire them in the
+    // background instead: sendPaymentReceiptEmail / sendPaymentConfirmationSms
+    // always log their real outcome to the Notifications page once they
+    // settle, regardless of whether the response has already been sent.
+    let emailPending = false;
     if (b.send_receipt && result.user?.email) {
       const receipt = result.receipt;
-      const r = await withTimeout(
-        sendPaymentReceiptEmail({
-          to: result.user.email,
-          clientId: id,
-          customerName: result.user.customer_name || receipt?.customer,
-          receipt,
-        }),
-        8000,
-        { sent: false, detail: 'timed out — continuing in the background' }
-      );
-      emailed = r.sent;
+      emailPending = true;
+      sendPaymentReceiptEmail({
+        to: result.user.email,
+        clientId: id,
+        customerName: result.user.customer_name || receipt?.customer,
+        receipt,
+      }).catch(() => undefined);
     }
-    let smsSent = false;
-    let smsDetail: string | null = null;
+    let smsPending = false;
     if (b.send_sms && result.user?.contact) {
-      const r = await withTimeout(
-        sendPaymentConfirmationSms(result.user, result.total),
-        8000,
-        { sent: false, detail: 'timed out — continuing in the background' }
-      );
-      smsSent = r.sent;
-      smsDetail = r.sent ? null : r.detail;
+      smsPending = true;
+      sendPaymentConfirmationSms(result.user, result.total).catch(() => undefined);
     }
-    res.json({ ...result, emailed, smsSent, smsDetail });
+    res.json({
+      ...result,
+      emailed: false,
+      emailPending,
+      smsSent: false,
+      smsPending,
+      smsDetail: smsPending ? 'Sending — check the Notifications page for delivery status.' : null,
+    });
   } catch (e: any) {
     const code = /not found/i.test(e?.message || '') ? 404 : 400;
     res.status(code).json({ error: e?.message || 'Payment failed' });
