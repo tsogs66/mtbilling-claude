@@ -418,6 +418,24 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
   );
 }
 
+/**
+ * Gzip a file client-side before upload when the browser supports it. This
+ * both speeds up the transfer and, more importantly, gives large backups a
+ * real chance of staying under a reverse tunnel's hard request-size cap
+ * (e.g. Cloudflare Tunnel's ~100MB, which no server-side limit can raise).
+ * Falls back to the original file untouched on older browsers.
+ */
+async function maybeGzip(file: File): Promise<{ body: Blob; gzipped: boolean }> {
+  if (typeof CompressionStream === 'undefined') return { body: file, gzipped: false };
+  try {
+    const stream = file.stream().pipeThrough(new CompressionStream('gzip'));
+    const body = await new Response(stream).blob();
+    return { body, gzipped: true };
+  } catch {
+    return { body: file, gzipped: false };
+  }
+}
+
 function DatabaseManagement({ flash }: any) {
   const [backups, setBackups] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
@@ -511,11 +529,12 @@ function DatabaseManagement({ flash }: any) {
     setBusy(true);
     setRestoreJob({ fileName: selectedFile.name, phase: 'uploading', percent: 0 });
     try {
+      const { body, gzipped } = await maybeGzip(selectedFile.file);
       const r = await api.post(
-        '/db/restore?restart=1',
-        selectedFile.file,
+        `/db/restore?restart=1${gzipped ? '&gzip=1' : ''}`,
+        body,
         {
-          headers: { 'Content-Type': 'application/octet-stream' },
+          headers: { 'Content-Type': gzipped ? 'application/gzip' : 'application/octet-stream' },
           onUploadProgress: (ev) => {
             if (!ev.total) return;
             const percent = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
@@ -559,7 +578,7 @@ function DatabaseManagement({ flash }: any) {
       const msg =
         e?.response?.data?.error ||
         (status === 413
-          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 300m and retry.'
+          ? 'Upload rejected (file too large). If nginx sits directly in front of the panel, raise client_max_body_size to 300m. If you are going through a Cloudflare Tunnel, its ~100MB request cap can\'t be raised from here — restore from the panel\'s local network address instead.'
           : e?.message || 'Restore failed.');
       setRestoreJob({ fileName: selectedFile.name, phase: 'error', error: msg });
       flash(msg);
