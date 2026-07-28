@@ -3445,7 +3445,10 @@ app.get('/api/naps', (req, res) => {
               n.code, n.status, n.address, n.splitter_ratio AS splitterRatio, n.splitter_type AS splitterType,
               n.fbtc_leg AS fbtcLeg, n.origin_splitter_id AS originSplitterId,
               n.tx_dbm AS txDbm, n.pon_port AS ponPort,
-              (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName,
+              COALESCE(
+                (SELECT name FROM naps o WHERE o.id = n.parent_id),
+                (SELECT s.name || ' (splitter)' FROM splitters s WHERE s.id = n.origin_splitter_id)
+              ) AS oltName,
               (SELECT kind FROM naps o WHERE o.id = n.parent_id) AS parentKind
        FROM naps n ${where} ORDER BY n.kind DESC, n.id`
     )

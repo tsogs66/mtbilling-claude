@@ -186,12 +186,20 @@ function AvailableNaps({ naps }: { naps: TopologyNap[] }) {
         ]}
         rows={boxes.map((n) => {
           const full = (n.availablePorts ?? 0) <= 0;
+          const splitterLabel = n.splitterType && n.splitterRatio ? `${n.splitterType} ${n.splitterRatio}` : '';
           return {
             key: n.id,
+            sortValues: {
+              name: n.code ? `${n.code} ${n.name}` : n.name,
+              olt: n.oltName || '',
+              splitter: splitterLabel,
+              used: n.usedPorts ?? 0,
+              avail: n.availablePorts ?? 0,
+            },
             cells: [
               <span className="font-medium text-slate-800">{n.code ? `${n.code} · ${n.name}` : n.name}</span>,
               <span className="text-slate-500 text-xs">{n.oltName || '—'}</span>,
-              <span className="text-slate-600 text-xs">{n.splitterType && n.splitterRatio ? `${n.splitterType} ${n.splitterRatio}` : '—'}</span>,
+              <span className="text-slate-600 text-xs">{splitterLabel || '—'}</span>,
               <span className="text-slate-600">{n.usedPorts ?? 0} / {n.ports}</span>,
               <span className={`font-semibold ${full ? 'text-rose-600' : 'text-emerald-600'}`}>
                 {full ? 'Full' : n.availablePorts}
