@@ -58,6 +58,7 @@ run() { if [[ -n "${STD:-}" ]]; then $STD "$@"; else "$@"; fi; }
 SERVICE_UNIT="/etc/systemd/system/mt-billing-api.service"
 STATE_DIR="${INSTALL_DIR}/server/data"
 STATE_FILE="${STATE_DIR}/.last-update.json"
+BUILD_MARKER="${STATE_DIR}/.last-build-sha"
 PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
 SUDOERS_FILE="/etc/sudoers.d/mt-billing"
 
@@ -261,12 +262,22 @@ BEFORE="$(local_sha)"
 REMOTE="$(remote_sha)"
 
 if [[ "$BEFORE" == "$REMOTE" ]]; then
-  log_ok "Already up to date (${BEFORE:0:12})"
-  write_state "current" "$BEFORE" "$REMOTE" "Already up to date."
   if [[ "$CHECK_ONLY" == "1" ]]; then
+    log_ok "Already up to date (${BEFORE:0:12})"
+    write_state "current" "$BEFORE" "$REMOTE" "Already up to date."
     exit 1
   fi
-  exit 0
+  # Git being in sync doesn't mean the last build actually finished — a
+  # prior run can pull the code fine and then die mid-build (OOM on a
+  # small Pi/VM is the common case) and leave the old dist/ in place.
+  # Re-running the updater after that would otherwise report "up to
+  # date" forever without ever retrying the build.
+  if [[ -f "$BUILD_MARKER" && "$(cat "$BUILD_MARKER" 2>/dev/null)" == "$BEFORE" ]]; then
+    log_ok "Already up to date (${BEFORE:0:12})"
+    write_state "current" "$BEFORE" "$REMOTE" "Already up to date."
+    exit 0
+  fi
+  log_info "Code is up to date (${BEFORE:0:12}) but the last build never completed — rebuilding"
 fi
 
 if [[ "$CHECK_ONLY" == "1" ]]; then
@@ -274,7 +285,7 @@ if [[ "$CHECK_ONLY" == "1" ]]; then
   exit 0
 fi
 
-if [[ "$AUTO_ONLY" == "1" ]]; then
+if [[ "$AUTO_ONLY" == "1" && "$BEFORE" != "$REMOTE" ]]; then
   log_info "New commits on origin — applying update ${BEFORE:0:12} → ${REMOTE:0:12}"
 fi
 
@@ -299,6 +310,8 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   run chown -R "${SVC_USER}:${SVC_USER}" "$INSTALL_DIR"
   run sudo -u "$SVC_USER" bash -c "cd '$INSTALL_DIR' && npm install && npm run build && npm --prefix server run build"
   log_ok "Build complete"
+  mkdir -p "$STATE_DIR"
+  echo "$AFTER" >"$BUILD_MARKER"
 fi
 
 log_info "Starting services"
