@@ -416,13 +416,6 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
   const nextId = useMemo(() => Math.max(0, ...stages.map((s) => s.id)) + 1, [stages]);
 
   const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const lastStage = stages[stages.length - 1];
-  const lastIsTerminalTap = !!(
-    lastStage &&
-    lastStage.splitterId &&
-    isAsymmetricType(byId.get(Number(lastStage.splitterId))?.type) &&
-    lastStage.leg === 'tap'
-  );
 
   const origin = Number(originDbm);
   const min = Number(minDbm);
@@ -467,18 +460,13 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
         {stages.map((s, i) => {
           const row = s.splitterId ? byId.get(Number(s.splitterId)) : undefined;
           const isFbtcRow = isAsymmetricType(row?.type);
-          const disabled = i > 0 && stages.slice(0, i).some((prev) => {
-            const prevRow = prev.splitterId ? byId.get(Number(prev.splitterId)) : undefined;
-            return isAsymmetricType(prevRow?.type) && prev.leg === 'tap';
-          });
           return (
-            <div key={s.id} className={`flex flex-wrap items-end gap-2 p-3 rounded-xl border border-slate-200 ${disabled ? 'opacity-40' : ''}`}>
+            <div key={s.id} className="flex flex-wrap items-end gap-2 p-3 rounded-xl border border-slate-200">
               <span className="text-xs font-semibold text-slate-400 w-16 pb-2">Stage {i + 1}</span>
               <div className="flex-1 min-w-[220px]">
                 <FormField label="Splitter">
                   <select
                     className="input"
-                    disabled={disabled}
                     value={s.splitterId}
                     onChange={(e) => updateStage(s.id, { splitterId: e.target.value ? Number(e.target.value) : '', leg: 'through' })}
                   >
@@ -503,7 +491,6 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
                   <FormField label="Split">
                     <select
                       className="input"
-                      disabled={disabled}
                       value={s.leg}
                       onChange={(e) => updateStage(s.id, { leg: e.target.value as 'through' | 'tap' })}
                     >
@@ -523,15 +510,13 @@ function BudgetCalculator({ rows }: { rows: SplitterRow[] }) {
       </div>
 
       <div className="flex items-center gap-2 mb-5">
-        <button className="btn-secondary" onClick={addStage} disabled={lastIsTerminalTap}>
+        <button className="btn-secondary" onClick={addStage}>
           <Plus size={16} /> Add Stage
         </button>
         <button className="btn-secondary" onClick={reset}>
           <RotateCcw size={16} /> Reset
         </button>
-        {lastIsTerminalTap && (
-          <span className="text-xs text-slate-400">Tap leg ends the run — this is the subscriber's drop.</span>
-        )}
+        <span className="text-xs text-slate-400">Either leg can feed the next stage — a splitter or another NAP can hang off through or tap.</span>
       </div>
 
       <div className="rounded-xl border border-slate-200 overflow-hidden">

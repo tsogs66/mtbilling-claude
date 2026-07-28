@@ -278,9 +278,9 @@ function columnExists(table: string, col: string): boolean {
  * asymmetric 2-leg device specified by its split percentage (95:5, 90:10,
  * ..., 50:50) — the through leg carries the majority of the power onward,
  * the tap leg drops a smaller, lossier fraction off. A bare/single FBT
- * splitter uses these values directly; an FBTC ("tap cassette") cascades N
- * of these same couplers internally in one tray, so both its cumulative
- * through-loss and worst-case tap-loss scale with cassette size — see
+ * splitter uses these values directly; an FBTC ("tap cassette") is this
+ * same single coupler with its low-ratio (tap) leg wired internally to a
+ * 1:N PLC splitter that fans out to the cassette's N subscriber ports — see
  * `fbtcScaledRows()`.
  */
 const ASYMMETRIC_COUPLER_BASE: [string, number, number][] = [
@@ -293,14 +293,24 @@ const ASYMMETRIC_COUPLER_BASE: [string, number, number][] = [
   ['50:50', 3.6, 3.6],
 ];
 const FBTC_PORT_SIZES = [8, 16, 32];
+/** 1:N PLC insertion loss for each cassette size — the internal fan-out an FBTC's tap leg feeds (see PLC rows below). */
+const PLC_LOSS_BY_PORTS: Record<number, number> = { 8: 10.5, 16: 13.6, 32: 17.6 };
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** [ratio, ports, throughLossDb, tapLossDb] for every FBTC ratio × cassette size. */
+/**
+ * [ratio, ports, throughLossDb, tapLossDb] for every FBTC ratio × cassette
+ * size. Through = the bare FBT coupler's own through-leg loss only — trunk
+ * continuation bypasses the internal PLC entirely, so it's the same
+ * regardless of cassette size. Tap = the FBT coupler's tap-leg loss PLUS the
+ * internal 1:N PLC split that fans that tap out to the cassette's N ports —
+ * what an individual subscriber on this box actually receives.
+ */
 function fbtcScaledRows(): [string, number, number, number][] {
   const out: [string, number, number, number][] = [];
   for (const ports of FBTC_PORT_SIZES) {
+    const plcLoss = PLC_LOSS_BY_PORTS[ports] ?? 0;
     for (const [ratio, singleThrough, singleTap] of ASYMMETRIC_COUPLER_BASE) {
-      out.push([ratio, ports, round1(ports * singleThrough), round1((ports - 1) * singleThrough + singleTap)]);
+      out.push([ratio, ports, round1(singleThrough), round1(singleTap + plcLoss)]);
     }
   }
   return out;
@@ -349,6 +359,45 @@ function migrateFbtcLossReferenceScaling() {
   }
 
   db.prepare('UPDATE app_settings SET fbtc_loss_scaled = 1 WHERE id = 1').run();
+}
+
+const FBTC_CASSETTE_MIGRATION_NOTES =
+  "Through = FBT through leg only (trunk continue, same regardless of cassette size), Tap = FBT tap leg + internal 1:N PLC fan-out to this cassette's ports";
+
+/**
+ * FBTC was modeled as N FBT couplers cascaded in series (through-loss and
+ * tap-loss both scaling with port count) — real tap-cassette hardware is a
+ * single FBT coupler whose tap leg feeds an internal 1:N PLC splitter to fan
+ * out to the cassette's N subscriber ports, while the through leg continues
+ * the trunk untouched by port count (see `fbtcScaledRows()`). This corrects
+ * already-seeded/scaled FBTC rows that still match the old cascaded-coupler
+ * formula to the new single-coupler + internal-PLC values. Flagged via
+ * app_settings.fbtc_cassette_model_v2 so it only runs once, and never
+ * touches a row a tech has since customized from Tech Tools.
+ */
+function migrateFbtcCassetteModel() {
+  const already = (
+    db.prepare('SELECT fbtc_cassette_model_v2 FROM app_settings WHERE id = 1').get() as
+      | { fbtc_cassette_model_v2: number }
+      | undefined
+  )?.fbtc_cassette_model_v2;
+  if (already) return;
+
+  const updateStmt = db.prepare('UPDATE splitter_loss_reference SET through_loss_db = ?, tap_loss_db = ?, notes = ? WHERE id = ?');
+  for (const ports of FBTC_PORT_SIZES) {
+    const plcLoss = PLC_LOSS_BY_PORTS[ports] ?? 0;
+    for (const [ratio, singleThrough, singleTap] of ASYMMETRIC_COUPLER_BASE) {
+      const oldThrough = round1(ports * singleThrough);
+      const oldTap = round1((ports - 1) * singleThrough + singleTap);
+      const row = db
+        .prepare('SELECT id, through_loss_db AS through, tap_loss_db AS tap FROM splitter_loss_reference WHERE type = ? AND ratio = ? AND ports = ?')
+        .get('FBTC', ratio, ports) as { id: number; through: number; tap: number } | undefined;
+      if (!row || row.through !== oldThrough || row.tap !== oldTap) continue; // missing or tech-edited
+      updateStmt.run(round1(singleThrough), round1(singleTap + plcLoss), FBTC_CASSETTE_MIGRATION_NOTES, row.id);
+    }
+  }
+
+  db.prepare('UPDATE app_settings SET fbtc_cassette_model_v2 = 1 WHERE id = 1').run();
 }
 
 const FBT_MIGRATION_NOTES = 'Through = trunk continue, Tap = subscriber drop (bare coupler — no cassette scaling)';
@@ -481,6 +530,9 @@ export function migrate() {
     // One-time flag: has FBT's ratio notation been fixed to asymmetric
     // tap-percentage style (95:5, ...) instead of PLC-style equal splits?
     ['fbt_ratio_fixed', 'INTEGER DEFAULT 0'],
+    // One-time flag: has FBTC been corrected from the cascaded-coupler model
+    // to the single-coupler + internal-1:N-PLC-fan-out model?
+    ['fbtc_cassette_model_v2', 'INTEGER DEFAULT 0'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
@@ -678,19 +730,12 @@ export function migrate() {
       insSplitter.run('FBT', ratio, null, through, tap, FBT_MIGRATION_NOTES, order++);
     }
     for (const [ratio, ports, through, tap] of fbtcScaledRows()) {
-      insSplitter.run(
-        'FBTC',
-        ratio,
-        ports,
-        through,
-        tap,
-        'Through = trunk continue (cumulative across the cassette), Tap = worst-case subscriber drop (last port)',
-        order++
-      );
+      insSplitter.run('FBTC', ratio, ports, through, tap, FBTC_CASSETTE_MIGRATION_NOTES, order++);
     }
   }
   migrateFbtcLossReferenceScaling();
   migrateFbtRatioNotation();
+  migrateFbtcCassetteModel();
 
   const payLinkCols: [string, string][] = [
     ['pay_channel', 'TEXT'],
