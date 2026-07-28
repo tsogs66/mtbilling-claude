@@ -1720,6 +1720,7 @@ export default function ClientsMap() {
           splitter={editSplitter}
           splitters={splitters}
           splitterRows={splitterRows}
+          napChainById={napChainById}
           olts={olts}
           napNodes={napNodes}
           onClose={() => setEditSplitter(null)}
@@ -2116,6 +2117,7 @@ function SplitterModal({
   splitter,
   splitters,
   splitterRows,
+  napChainById,
   olts,
   napNodes,
   onClose,
@@ -2124,6 +2126,7 @@ function SplitterModal({
   splitter: Partial<Splitter>;
   splitters: Splitter[];
   splitterRows: SplitterRefLike[];
+  napChainById: Map<number, ChainNapLike>;
   olts: Nap[];
   napNodes: Nap[];
   onClose: () => void;
@@ -2132,11 +2135,37 @@ function SplitterModal({
   const [form, setForm] = useState<Partial<Splitter>>({ ...splitter });
   const [busy, setBusy] = useState(false);
   const isEdit = !!splitter.id;
+  const isAsymmetric = isAsymmetricType(form.type);
   const set = (patch: Partial<Splitter>) => setForm((f) => ({ ...f, ...patch }));
 
   const originNap = form.originKind === 'nap' && form.originId ? napNodes.find((n) => n.id === form.originId) : null;
   const originSplitter = form.originKind === 'splitter' && form.originId ? splitters.find((s) => s.id === form.originId) : null;
   const originIsAsymmetric = isAsymmetricType(originNap?.splitterType) || isAsymmetricType(originSplitter?.type);
+
+  /** Live dBm preview — overlays the in-progress edit onto the loaded splitter chain. */
+  const splittersById = useMemo(() => new Map(splitters.map((s) => [s.id, s as SplitterLike])), [splitters]);
+  const preview = useMemo(() => {
+    if (!form.type || !form.ratio?.trim() || !form.originKind) return null;
+    const previewId = splitter.id ?? -1;
+    const merged = new Map(splittersById);
+    merged.set(previewId, {
+      id: previewId,
+      name: form.name || 'New splitter',
+      type: form.type as 'FBT' | 'PLC' | 'FBTC',
+      ratio: form.ratio,
+      ports: form.ports,
+      originKind: form.originKind,
+      originId: form.originId ?? null,
+      fbtcLeg: form.fbtcLeg,
+    });
+    const inputDbm = resolveSplitterInputDbm(previewId, merged, napChainById, splitterRows);
+    const ref = splitterRows.find(
+      (r) => r.type === form.type && r.ratio === form.ratio && (form.type !== 'FBTC' || Number(r.ports) === Number(form.ports))
+    );
+    const throughDbm = ref && inputDbm != null ? inputDbm - ref.throughLossDb : null;
+    const tapDbm = ref?.tapLossDb != null && inputDbm != null ? inputDbm - ref.tapLossDb : null;
+    return { inputDbm, throughDbm, tapDbm, hasRef: !!ref };
+  }, [form, splitter.id, splittersById, napChainById, splitterRows]);
 
   const save = async () => {
     if (!form.name?.trim() || !form.ratio?.trim()) return;
@@ -2248,6 +2277,27 @@ function SplitterModal({
               <option value="tap">{ratioLegLabel(originNap?.splitterRatio || originSplitter?.ratio, 'tap')}</option>
             </select>
           </FormField>
+        )}
+        {preview && (
+          <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+            {isAsymmetric ? (
+              <>
+                <span className="text-slate-500">
+                  Through (trunk continue): <span className="font-semibold text-slate-800">{preview.throughDbm != null ? `${preview.throughDbm.toFixed(2)} dBm` : '—'}</span>
+                </span>
+                <span className="text-slate-500">
+                  Tap (subscriber drop): <span className="font-semibold text-slate-800">{preview.tapDbm != null ? `${preview.tapDbm.toFixed(2)} dBm` : '—'}</span>
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-500">
+                Output: <span className="font-semibold text-slate-800">{preview.throughDbm != null ? `${preview.throughDbm.toFixed(2)} dBm` : '—'}</span>
+              </span>
+            )}
+            {!preview.hasRef && (
+              <span className="text-amber-600">no reference match for this type/ratio</span>
+            )}
+          </div>
         )}
       </div>
     </Modal>
