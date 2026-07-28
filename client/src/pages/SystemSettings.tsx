@@ -421,8 +421,8 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
 function DatabaseManagement({ flash }: any) {
   const [backups, setBackups] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
-  const [fileData, setFileData] = useState('');
   const [selectedFile, setSelectedFile] = useState<{
+    file: File;
     name: string;
     size: number;
     status: 'reading' | 'ready' | 'error';
@@ -458,37 +458,50 @@ function DatabaseManagement({ flash }: any) {
     }
   };
 
+  // Only peek the first 16 bytes to check the SQLite magic header — reading
+  // the whole file here (e.g. a 100+ MB backup) just to validate it would
+  // burn memory and time for nothing; the full file is streamed straight to
+  // the server as raw bytes on upload instead.
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setFileData('');
-    setSelectedFile({ name: f.name, size: f.size, status: 'reading' });
+    setSelectedFile({ file: f, name: f.name, size: f.size, status: 'reading' });
     const reader = new FileReader();
     reader.onload = () => {
-      setFileData(String(reader.result));
-      setSelectedFile({ name: f.name, size: f.size, status: 'ready' });
+      const bytes = new Uint8Array(reader.result as ArrayBuffer);
+      const magic = new TextDecoder().decode(bytes);
+      if (!magic.startsWith('SQLite format 3')) {
+        setSelectedFile({
+          file: f,
+          name: f.name,
+          size: f.size,
+          status: 'error',
+          error: 'Not a valid SQLite database (.db). Export a panel backup or use a file that starts with “SQLite format 3”.',
+        });
+        return;
+      }
+      setSelectedFile({ file: f, name: f.name, size: f.size, status: 'ready' });
     };
     reader.onerror = () => {
-      setFileData('');
       setSelectedFile({
+        file: f,
         name: f.name,
         size: f.size,
         status: 'error',
         error: 'Could not read the backup file from disk.',
       });
     };
-    reader.readAsDataURL(f);
+    reader.readAsArrayBuffer(f.slice(0, 16));
     e.target.value = '';
   };
 
   const clearSelectedFile = () => {
-    setFileData('');
     setSelectedFile(null);
     if (fileRef.current) fileRef.current.value = '';
   };
 
   const restore = async () => {
-    if (!fileData || selectedFile?.status !== 'ready') {
+    if (selectedFile?.status !== 'ready') {
       flash('Choose a backup file first and wait until it is ready.');
       return;
     }
@@ -499,9 +512,10 @@ function DatabaseManagement({ flash }: any) {
     setRestoreJob({ fileName: selectedFile.name, phase: 'uploading', percent: 0 });
     try {
       const r = await api.post(
-        '/db/restore',
-        { data: fileData, restart: true },
+        '/db/restore?restart=1',
+        selectedFile.file,
         {
+          headers: { 'Content-Type': 'application/octet-stream' },
           onUploadProgress: (ev) => {
             if (!ev.total) return;
             const percent = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
@@ -545,7 +559,7 @@ function DatabaseManagement({ flash }: any) {
       const msg =
         e?.response?.data?.error ||
         (status === 413
-          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 100m and retry.'
+          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 300m and retry.'
           : e?.message || 'Restore failed.');
       setRestoreJob({ fileName: selectedFile.name, phase: 'error', error: msg });
       flash(msg);
@@ -787,7 +801,7 @@ function DatabaseManagement({ flash }: any) {
             type="button"
             className="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-500 text-white font-medium py-2.5 rounded-lg disabled:opacity-60"
             onClick={restore}
-            disabled={busy || selectedFile?.status !== 'ready' || !fileData}
+            disabled={busy || selectedFile?.status !== 'ready'}
           >
             <Upload size={16} className={busy ? 'animate-pulse' : ''} /> {busy ? 'Restoring…' : 'Upload & Restore'}
           </button>

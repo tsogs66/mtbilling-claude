@@ -326,26 +326,25 @@ settingsRouter.delete('/db/backups/:name', (req, res) => {
   res.json({ ok: true });
 });
 
-// Restore from an uploaded base64 SQLite file. Staged then applied on API restart.
-settingsRouter.post('/db/restore', (req, res) => {
-  const data = req.body?.data;
-  if (!data || typeof data !== 'string') {
+// Restore from an uploaded raw SQLite file (application/octet-stream — see
+// the express.raw() middleware below, kept separate from the app-wide
+// express.json() limit since backups are much larger than typical JSON
+// bodies and a base64/JSON wrapper would inflate the upload by ~33%).
+// Staged then applied on API restart.
+settingsRouter.post('/db/restore', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
+  const buf = Buffer.isBuffer(req.body) ? req.body : null;
+  if (!buf || !buf.length) {
     return res.status(400).json({ error: 'No file uploaded. Choose a .db or .sqlite backup first.' });
   }
   try {
-    const base64 = data.includes(',') ? data.split(',')[1] : data;
-    if (!base64 || base64.length < 32) {
-      return res.status(400).json({ error: 'Upload was empty or truncated. Try a smaller file or raise nginx client_max_body_size.' });
+    if (buf.length < 1024) {
+      return res.status(400).json({ error: 'Backup file is too small to be a panel database.' });
     }
-    const buf = Buffer.from(base64, 'base64');
     const magic = buf.subarray(0, 16).toString('utf8');
     if (!magic.startsWith('SQLite format 3')) {
       return res.status(400).json({
         error: 'Not a valid SQLite database (.db). Export a panel backup or use a file that starts with “SQLite format 3”.',
       });
-    }
-    if (buf.length < 1024) {
-      return res.status(400).json({ error: 'Backup file is too small to be a panel database.' });
     }
     const pending = `${dbPath}.pending`;
     fs.writeFileSync(pending, buf);
@@ -354,7 +353,7 @@ settingsRouter.post('/db/restore', (req, res) => {
       'database',
       `Restore staged (${buf.length} bytes); applying on API restart`
     );
-    const restart = req.body?.restart !== false;
+    const restart = req.query.restart !== '0';
     res.json({
       ok: true,
       restartRequired: true,
@@ -368,7 +367,7 @@ settingsRouter.post('/db/restore', (req, res) => {
     const msg = String(e?.message || 'restore failed');
     if (/entity too large|request entity too large|413/i.test(msg)) {
       return res.status(413).json({
-        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 100m;/g" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
+        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 300m;/g" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
       });
     }
     res.status(500).json({ error: msg });
