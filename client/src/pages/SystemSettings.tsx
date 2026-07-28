@@ -550,13 +550,29 @@ function DatabaseManagement({ flash }: any) {
       // production-sized database means real boot-time work (loading all the
       // data, the schedulers that fire immediately on startup) — on modest
       // hardware that can take well over a minute, so give it real headroom
-      // before assuming something's actually wrong.
-      let tries = 0;
-      const timer = setInterval(async () => {
-        tries += 1;
+      // before assuming something's actually wrong. Backgrounded browser tabs
+      // throttle setInterval (sometimes to a near-stop), so a plain tick count
+      // can leave the UI stuck showing "restarting" long after the API is
+      // already back — track a wall-clock deadline instead, and re-check
+      // immediately the moment the tab regains focus rather than waiting on
+      // whatever the browser lets the timer do.
+      const deadline = Date.now() + 5 * 60 * 1000;
+      let settled = false;
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') void checkOnce();
+      };
+      const cleanup = () => {
+        if (timer) clearInterval(timer);
+        document.removeEventListener('visibilitychange', onVisible);
+      };
+      const checkOnce = async () => {
+        if (settled) return;
         try {
           await api.get('/settings/app');
-          clearInterval(timer);
+          if (settled) return;
+          settled = true;
+          cleanup();
           setRestoreJob({ fileName: selectedFile.name, phase: 'done', percent: 100 });
           flash('Database restored and API is back online.');
           load();
@@ -564,8 +580,9 @@ function DatabaseManagement({ flash }: any) {
           setBusy(false);
           window.setTimeout(() => setRestoreJob(null), 2000);
         } catch {
-          if (tries >= 100) {
-            clearInterval(timer);
+          if (!settled && Date.now() >= deadline) {
+            settled = true;
+            cleanup();
             setRestoreJob({
               fileName: selectedFile.name,
               phase: 'error',
@@ -576,7 +593,9 @@ function DatabaseManagement({ flash }: any) {
             setBusy(false);
           }
         }
-      }, 1500);
+      };
+      timer = setInterval(() => void checkOnce(), 1500);
+      document.addEventListener('visibilitychange', onVisible);
       return;
     } catch (e: any) {
       const status = e?.response?.status;
