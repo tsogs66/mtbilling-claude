@@ -546,7 +546,11 @@ function DatabaseManagement({ flash }: any) {
       );
       setRestoreJob({ fileName: selectedFile.name, phase: 'restarting' });
       flash(r.data?.message || 'Backup staged. Restarting API to apply…');
-      // Poll until API is back (restore applies pending DB on boot).
+      // Poll until API is back (restore applies pending DB on boot). A large
+      // production-sized database means real boot-time work (loading all the
+      // data, the schedulers that fire immediately on startup) — on modest
+      // hardware that can take well over a minute, so give it real headroom
+      // before assuming something's actually wrong.
       let tries = 0;
       const timer = setInterval(async () => {
         tries += 1;
@@ -560,14 +564,15 @@ function DatabaseManagement({ flash }: any) {
           setBusy(false);
           window.setTimeout(() => setRestoreJob(null), 2000);
         } catch {
-          if (tries >= 40) {
+          if (tries >= 100) {
             clearInterval(timer);
             setRestoreJob({
               fileName: selectedFile.name,
               phase: 'error',
-              error: 'Restore staged but the API did not come back in time. Restart: sudo systemctl restart mt-billing-api',
+              error:
+                'Restore staged, but the API is taking longer than usual to come back — this often still finishes on its own with a large database on modest hardware. Wait a bit and refresh the panel before restarting manually: sudo systemctl restart mt-billing-api',
             });
-            flash('Restore staged. If the panel stays offline, restart: sudo systemctl restart mt-billing-api');
+            flash('Restore staged. Give it a bit longer, then refresh — or restart manually: sudo systemctl restart mt-billing-api');
             setBusy(false);
           }
         }
