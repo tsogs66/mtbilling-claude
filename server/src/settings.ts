@@ -532,7 +532,12 @@ settingsRouter.post('/account/2fa/disable', (req: any, res) => {
 // ---------- Server restart ----------
 function scheduleApiRestart() {
   setTimeout(() => {
-    exec('systemctl restart mt-billing-api 2>/dev/null', (sysErr) => {
+    // The service runs as an unprivileged user — restarting the systemd unit
+    // needs the passwordless sudo grant set up for exactly this command (see
+    // install/mt-billing-sudoers). Without `sudo` this always fails silently
+    // (stderr is discarded) and falls through to the much slower/fragile
+    // self-respawn path below on every single restart.
+    exec('sudo -n systemctl restart mt-billing-api 2>/dev/null', (sysErr) => {
       if (!sysErr) return; // systemd will stop this process
 
       exec('pm2 restart mt-billing 2>/dev/null || pm2 restart mt-billing-api 2>/dev/null', (pmErr) => {
