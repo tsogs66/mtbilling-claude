@@ -239,7 +239,7 @@ server {
     listen ${PANEL_PORT};
     listen [::]:${PANEL_PORT};
     server_name ${HOSTNAME};
-    client_max_body_size 100m;
+    client_max_body_size 300m;
 
     root ${INSTALL_DIR}/client/dist;
     index index.html;
@@ -252,7 +252,7 @@ server {
     listen ${PANEL_PORT} default_server;
     listen [::]:${PANEL_PORT} default_server;
     server_name ${lan_ip:-_} localhost;
-    client_max_body_size 100m;
+    client_max_body_size 300m;
 
     root ${INSTALL_DIR}/client/dist;
     index index.html;
@@ -266,7 +266,7 @@ server {
     listen ${PANEL_PORT} default_server;
     listen [::]:${PANEL_PORT} default_server;
     server_name ${HOSTNAME} ${lan_ip} _;
-    client_max_body_size 100m;
+    client_max_body_size 300m;
 
     root ${INSTALL_DIR}/client/dist;
     index index.html;
