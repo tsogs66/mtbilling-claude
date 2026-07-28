@@ -338,6 +338,7 @@ settingsRouter.delete('/db/backups/:name', (req, res) => {
 // server-side limit can raise. Staged then applied on API restart.
 settingsRouter.post('/db/restore', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
   let buf = Buffer.isBuffer(req.body) ? req.body : null;
+  req.body = null; // drop the only other reference so the compressed copy is collectible once decompressed
   if (!buf || !buf.length) {
     return res.status(400).json({ error: 'No file uploaded. Choose a .db or .sqlite backup first.' });
   }

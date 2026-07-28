@@ -4187,10 +4187,17 @@ process.on('mt-billing-restart' as any, () => {
 
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
-  startUptime(90000);
+  // startUptime/startNotifyScheduler/startUsageScheduler/startRouterSyncScheduler
+  // each run a full-table-scanning pass immediately on call (unlike
+  // startStatusHub/startOutageMonitor, which already defer their first run a
+  // few seconds). Kicking off four such passes in the same tick spikes memory
+  // and CPU right at boot — worst possible timing right after a DB restore
+  // restart, when the box is already under pressure and the dataset just got
+  // bigger. Stagger them instead of firing the whole burst at once.
   startStatusHub(5 * 60_000);
   startOutageMonitor(3 * 60_000);
-  startNotifyScheduler(5 * 60 * 1000);
-  startUsageScheduler(60_000);
-  startRouterSyncScheduler(3 * 60 * 1000);
+  startUptime(90000);
+  setTimeout(() => startUsageScheduler(60_000), 15_000);
+  setTimeout(() => startRouterSyncScheduler(3 * 60 * 1000), 30_000);
+  setTimeout(() => startNotifyScheduler(5 * 60 * 1000), 45_000);
 });
