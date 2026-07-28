@@ -314,6 +314,16 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   echo "$AFTER" >"$BUILD_MARKER"
 fi
 
+# V8 auto-sizes its heap ceiling from detected RAM, which is too
+# conservative on small boards (Pi/OPi with ~1GB) and can self-abort with
+# "JavaScript heap out of memory" while swap sits unused — patch existing
+# installs whose unit predates this, same as new installs already get.
+if [[ -f "$SERVICE_UNIT" ]] && ! grep -q 'NODE_OPTIONS.*max-old-space-size' "$SERVICE_UNIT"; then
+  log_info "Raising Node heap ceiling (NODE_OPTIONS=--max-old-space-size=768)"
+  sed -i '/^EnvironmentFile=/a Environment=NODE_OPTIONS=--max-old-space-size=768' "$SERVICE_UNIT" || true
+  run systemctl daemon-reload
+fi
+
 log_info "Starting services"
 run systemctl start mt-billing-api
 

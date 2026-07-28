@@ -238,6 +238,11 @@ User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_DIR}/server
 EnvironmentFile=${INSTALL_DIR}/server/.env
+# V8 auto-sizes its heap ceiling from detected RAM, which is too
+# conservative on small boards (Pi/OPi with ~1GB) and can self-abort
+# with "JavaScript heap out of memory" while swap sits unused. Raise the
+# ceiling so it can actually use the memory (incl. swap) that's there.
+Environment=NODE_OPTIONS=--max-old-space-size=768
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
