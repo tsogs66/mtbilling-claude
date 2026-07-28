@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
@@ -330,13 +331,24 @@ settingsRouter.delete('/db/backups/:name', (req, res) => {
 // the express.raw() middleware below, kept separate from the app-wide
 // express.json() limit since backups are much larger than typical JSON
 // bodies and a base64/JSON wrapper would inflate the upload by ~33%).
-// Staged then applied on API restart.
+// The client gzips the file before sending (?gzip=1) when the browser
+// supports it — this both speeds up the upload and, more importantly,
+// gives large backups a real chance of staying under a reverse tunnel's
+// (e.g. Cloudflare Tunnel's ~100MB) hard request-size cap, which no
+// server-side limit can raise. Staged then applied on API restart.
 settingsRouter.post('/db/restore', express.raw({ type: '*/*', limit: '300mb' }), (req, res) => {
-  const buf = Buffer.isBuffer(req.body) ? req.body : null;
+  let buf = Buffer.isBuffer(req.body) ? req.body : null;
   if (!buf || !buf.length) {
     return res.status(400).json({ error: 'No file uploaded. Choose a .db or .sqlite backup first.' });
   }
   try {
+    if (req.query.gzip === '1') {
+      try {
+        buf = zlib.gunzipSync(buf);
+      } catch {
+        return res.status(400).json({ error: 'Uploaded backup could not be decompressed — the transfer may have been corrupted. Try again.' });
+      }
+    }
     if (buf.length < 1024) {
       return res.status(400).json({ error: 'Backup file is too small to be a panel database.' });
     }
@@ -367,7 +379,8 @@ settingsRouter.post('/db/restore', express.raw({ type: '*/*', limit: '300mb' }),
     const msg = String(e?.message || 'restore failed');
     if (/entity too large|request entity too large|413/i.test(msg)) {
       return res.status(413).json({
-        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 300m;/g" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
+        error:
+          'Backup rejected as too large by a reverse proxy or tunnel in front of the panel. If nginx is directly in front of the panel: sudo sed -i "s/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 300m;/g" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx — but if you are accessing the panel through a Cloudflare Tunnel, its ~100MB request cap cannot be raised from this side; restore from the panel\'s local network address instead.',
       });
     }
     res.status(500).json({ error: msg });
