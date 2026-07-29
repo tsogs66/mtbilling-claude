@@ -453,10 +453,13 @@ inject_usb_installer() {
 [Unit]
 Description=MT-Billing USB installer (clone to internal disk)
 Documentation=https://github.com/tsogs66/mtbilling-claude
-After=network-online.target cloud-init.target cloud-init.service
+DefaultDependencies=no
+# Do not After=cloud-init.* — on Ubuntu cloud images that forms an ordering
+# cycle with multi-user.target; systemd then deletes this job and install never runs.
+After=local-fs.target network-online.target
 Wants=network-online.target
-Conflicts=mt-billing-firstboot.service
-Before=mt-billing-firstboot.service
+Conflicts=shutdown.target mt-billing-firstboot.service
+Before=shutdown.target mt-billing-firstboot.service
 ConditionPathExists=/etc/mt-billing-usb-installer
 ConditionPathExists=/usr/local/lib/mt-billing/usb-install-to-disk.sh
 
@@ -487,6 +490,8 @@ This stick installs Ubuntu + MT-Billing onto the largest internal disk (UEFI).
 All data on that disk will be erased. Keep Ethernet connected.
 When finished the PC powers off — unplug USB, then boot from the internal disk.
 SSH (if needed): mtadmin / mtbilling   Log: /var/log/mt-billing-usb-install.log
+If install does not start automatically:
+  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh
 
 EOF
 
@@ -820,8 +825,12 @@ PY
   cat >"$root_mnt/etc/systemd/system/mt-billing-firstboot.service" <<'EOF'
 [Unit]
 Description=MT-Billing first-boot installer
-After=network-online.target cloud-init.target
+DefaultDependencies=no
+# Avoid After=cloud-init.target — ordering cycle with multi-user.target on cloud images.
+After=local-fs.target network-online.target
 Wants=network-online.target
+Conflicts=shutdown.target
+Before=shutdown.target
 ConditionPathExists=/usr/local/lib/mt-billing/firstboot-mt-billing.sh
 
 [Service]
@@ -829,6 +838,8 @@ Type=oneshot
 ExecStart=/usr/local/lib/mt-billing/firstboot-mt-billing.sh
 RemainAfterExit=yes
 TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target

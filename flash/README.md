@@ -40,6 +40,17 @@ Or open **Advanced options → recovery mode** (already includes `nomodeset`).
 If the screen stays black but Ethernet is up, try `ssh mtadmin@<device-ip>`  
 (password `mtbilling`) — the installer may still be running.
 
+If boot reaches a login/console but you see  
+`Job mt-billing-usb-install.service/start deleted to break ordering cycle`,  
+run the installer manually:
+
+```bash
+sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh
+```
+
+(or re-flash the latest USB image, which removes the cloud-init ordering cycle).
+
+
 Build all:
 
 ```bash

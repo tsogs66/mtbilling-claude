@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `c0bdf0278447f3377981df6cb3816f8349610250531fa2b648ca5b7fd3668ef9` | 2026-07-29 | Wyse 3040: `nomodeset` on **default** GRUB entries (XBOOTLDR grub.cfg) |
+| `mt-billing-pc-usb-amd64.img.xz` | `bff412f2870c2ed9e2b46ab3a6c962e482b5bf91317efcc25b61d25ebd9a1ceb` | 2026-07-29 | Fix systemd ordering cycle dropping usb-install; Wyse nomodeset on default GRUB |
 
 Rebuild and publish PC USB installer:
 
