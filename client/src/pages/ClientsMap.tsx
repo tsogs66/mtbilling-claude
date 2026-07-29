@@ -671,6 +671,7 @@ export default function ClientsMap() {
   const [editSplitter, setEditSplitter] = useState<Partial<Splitter> | null>(null);
   const [editServer, setEditServer] = useState<Partial<ServerNode> | null>(null);
   const [mapPickServer, setMapPickServer] = useState<ServerNode | null>(null);
+  const [mapPickClient, setMapPickClient] = useState<Client | null>(null);
   const [pickFor, setPickFor] = useState<'nap' | 'server' | null>(null);
   const [busy, setBusy] = useState(false);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
@@ -954,6 +955,40 @@ export default function ClientsMap() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const saveClientMap = async (client: Client, lat: number, lng: number) => {
+    setBusy(true);
+    try {
+      await api.put(`/map/clients/${client.id}`, { lat, lng });
+      setMapPickClient(null);
+      setSelected((sel) => (sel?.id === client.id ? { ...sel, lat, lng } : sel));
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Jump straight into cable-path editing for this client's NAP connection. */
+  const editClientRoute = (client: Client) => {
+    if (!client.napId) {
+      alert('This client has no NAP assigned yet — set its NAP under PPPoE Management first.');
+      return;
+    }
+    const fromId = client.napId;
+    const toId = client.id;
+    if (!isValidTopologyPair('nap-client', fromId, toId)) {
+      alert('Only existing topology links can be edited.');
+      return;
+    }
+    const existing = findConnector(connectors, 'nap-client', fromId, toId);
+    setRouteKind('nap-client');
+    setRouteFrom(fromId);
+    setRouteTo(toId);
+    setDrawPoints(existing?.points?.slice(1, -1) || []);
+    setDrawMode(true);
+    setTopoOpen(true);
+    setSelected(null);
   };
 
   const saveServer = async () => {
@@ -1450,7 +1485,14 @@ export default function ClientsMap() {
             </div>
           )}
 
-          {selected && <ClientPanel client={selected} onClose={() => setSelected(null)} />}
+          {selected && (
+            <ClientPanel
+              client={selected}
+              onClose={() => setSelected(null)}
+              onEditLocation={() => setMapPickClient(selected)}
+              onEditRoute={() => editClientRoute(selected)}
+            />
+          )}
 
           <button
             type="button"
@@ -2016,14 +2058,18 @@ export default function ClientsMap() {
       )}
 
       <MapLocationPicker
-        open={!!pickFor || !!mapPickServer}
-        lat={mapPickServer ? mapPickServer.lat : pickLat}
-        lng={mapPickServer ? mapPickServer.lng : pickLng}
+        open={!!pickFor || !!mapPickServer || !!mapPickClient}
+        lat={mapPickServer ? mapPickServer.lat : mapPickClient ? mapPickClient.lat : pickLat}
+        lng={mapPickServer ? mapPickServer.lng : mapPickClient ? mapPickClient.lng : pickLng}
         fallback={defaultCenter}
-        onClose={() => { setPickFor(null); setMapPickServer(null); }}
+        onClose={() => { setPickFor(null); setMapPickServer(null); setMapPickClient(null); }}
         onConfirm={(lat, lng) => {
           if (mapPickServer) {
             saveServerMap(mapPickServer, lat, lng);
+            return;
+          }
+          if (mapPickClient) {
+            saveClientMap(mapPickClient, lat, lng);
             return;
           }
           if (pickFor === 'server' && editServer) setEditServer({ ...editServer, lat, lng });
@@ -2061,7 +2107,17 @@ function resolveEndpoints(
   return [[n.lat, n.lng], [c.lat, c.lng]];
 }
 
-function ClientPanel({ client, onClose }: { client: Client; onClose: () => void }) {
+function ClientPanel({
+  client,
+  onClose,
+  onEditLocation,
+  onEditRoute,
+}: {
+  client: Client;
+  onClose: () => void;
+  onEditLocation: () => void;
+  onEditRoute: () => void;
+}) {
   const state = clientState(client);
   const color = CLIENT_COLORS[state].fill;
   return (
@@ -2083,6 +2139,22 @@ function ClientPanel({ client, onClose }: { client: Client; onClose: () => void 
         <div className="pt-2 border-t border-slate-100 text-xs text-slate-500">
           <div>NAP: {client.napName} · OLT: {client.oltName}</div>
           <div className="mt-1 font-medium text-slate-700">{client.topology}</div>
+        </div>
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-700"
+            onClick={onEditLocation}
+          >
+            <MapPin size={13} /> Edit Location
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-700"
+            onClick={onEditRoute}
+          >
+            <Route size={13} /> Edit Cable Route
+          </button>
         </div>
       </div>
     </div>
