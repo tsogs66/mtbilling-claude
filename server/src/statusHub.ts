@@ -15,6 +15,7 @@ const UA = 'MT-Billing-StatusHub/2.0';
 
 export type MonitorType = 'feed' | 'statuspage';
 export type HeartbeatStatus = 'up' | 'down' | 'degraded' | 'pending';
+export type ProbeMode = 'auto' | 'router' | 'panel';
 
 type GroupSeed = { slug: string; name: string; sort: number; icon: string };
 type MonitorSeed = {
@@ -633,7 +634,8 @@ function resolveBackgroundRouter(): { id: number; conn: RouterConn } | null {
 export async function runStatusChecks(
   monitorIds?: number[],
   routerConn?: RouterConn | null,
-  routerId?: number | null
+  routerId?: number | null,
+  probeMode: ProbeMode = 'auto'
 ) {
   if (running) return { skipped: true, running: true };
   running = true;
@@ -655,7 +657,22 @@ export async function runStatusChecks(
         .all();
     }
 
-    const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+    const routerAvailable = !!(routerConn?.host && routerConn?.api_user);
+    if (probeMode === 'router' && !routerAvailable) {
+      for (const m of rows) recordHeartbeat(m.id, 'down', 'Router probe requested but no router is connected', rid, null);
+      lastRunAt = Date.now();
+      lastRouterProbeUnavailable = true;
+      lastProbeMode = 'internet-feeds';
+      return {
+        ok: true,
+        checked: rows.length,
+        at: lastRunAt,
+        mode: lastProbeMode,
+        routerId: null,
+        routerProbeUnavailable: true,
+      };
+    }
+    const viaRouter = probeMode === 'panel' ? false : routerAvailable;
     lastRouterProbeUnavailable = rid > 0 && !viaRouter;
     lastProbeMode = viaRouter ? 'router-probe' : 'internet-feeds';
 
@@ -709,7 +726,11 @@ function pruneUplinkResults(targetId: number) {
   db.prepare('DELETE FROM status_uplink_results WHERE target_id = ? AND checked_at < ?').run(targetId, cutoff);
 }
 
-export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?: number | null) {
+export async function runUplinkChecks(
+  routerConn?: RouterConn | null,
+  routerId?: number | null,
+  probeMode: ProbeMode = 'auto'
+) {
   if (uplinkRunning) return { skipped: true, running: true };
   uplinkRunning = true;
   const rid = routerId ?? activeRouterId ?? 0;
@@ -720,7 +741,19 @@ export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?:
       )
       .all() as any[];
 
-    const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+    const routerAvailable = !!(routerConn?.host && routerConn?.api_user);
+    if (probeMode === 'router' && !routerAvailable) {
+      for (const t of targets) {
+        db.prepare(`
+          INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
+          VALUES (?, 'down', NULL, NULL, NULL, ?, ?, 0)
+        `).run(t.id, 'Router probe requested but no router is connected', Date.now());
+        pruneUplinkResults(t.id);
+      }
+      lastUplinkRunAt = Date.now();
+      return { ok: true, targets: targets.length, hosts: 0, at: lastUplinkRunAt, routerId: null };
+    }
+    const viaRouter = probeMode === 'panel' ? false : routerAvailable;
 
     if (viaRouter) {
       const urls = targets.map((t) => String(t.url || ''));
