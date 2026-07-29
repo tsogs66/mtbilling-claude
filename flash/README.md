@@ -20,13 +20,15 @@ Orange Pi **One** must use `mt-billing-opi-one-armhf*`.
 | Image | What it does |
 |-------|----------------|
 | `mt-billing-pc-amd64*` | Flash to USB/SSD and **run from that drive** (appliance). |
-| `mt-billing-pc-usb-amd64*` | Flash to a USB stick, boot once — **installs onto the largest internal disk** (≥8 GB), then powers off. Unplug USB and boot from the PC disk. |
+| `mt-billing-pc-usb-amd64*` | Flash to a USB stick, boot once — **installs onto the largest internal disk** (≥4 GB; prefers eMMC), then powers off. Unplug USB and boot from the PC disk. |
 
 USB installer notes:
 
 - UEFI boot required; target disk is **wiped**.
 - Needs Ethernet/internet during install and again on first boot from the internal disk (MT-Billing firstboot).
 - Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
+- Target selection prefers **eMMC** (`/dev/mmcblk0`) over USB. Marketing “8 GB” eMMC (Dell Wyse 3040) is accepted (≥4 GiB).
+- Force a disk: `sudo TARGET_DISK=/dev/mmcblk0 /usr/local/lib/mt-billing/usb-install-to-disk.sh`
 
 **Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
 `EFI stub: Loaded initrd…` with a black screen, re-flash the latest  

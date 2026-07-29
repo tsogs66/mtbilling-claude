@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `bff412f2870c2ed9e2b46ab3a6c962e482b5bf91317efcc25b61d25ebd9a1ceb` | 2026-07-29 | Fix systemd ordering cycle dropping usb-install; Wyse nomodeset on default GRUB |
+| `mt-billing-pc-usb-amd64.img.xz` | `909263be0292d2a2b1fa85644ff6fdc7316ea0486446abc6b4b3deb6cc120547` | 2026-07-29 | Detect Wyse eMMC (&lt;8 GiB); prefer mmcblk; TARGET_DISK override |
 
 Rebuild and publish PC USB installer:
 

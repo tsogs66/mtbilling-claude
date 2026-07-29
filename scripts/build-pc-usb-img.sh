@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the PC amd64 USB installer image (flash to USB stick).
-# Boot from the stick once: it wipes the largest internal disk (≥8 GB),
+# Boot from the stick once: it wipes the largest internal disk (≥4 GB; prefers eMMC),
 # clones the OS, installs UEFI GRUB, then powers off.
 # Unplug USB and boot from the internal disk; firstboot installs MT-Billing.
 #
