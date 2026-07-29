@@ -29,9 +29,16 @@ USB installer notes:
 - Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
 
 **Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
-`EFI stub: Loaded initrd…` with a black screen, rebuild the USB image from current `main`  
-(`sudo bash scripts/build-pc-usb-img.sh`) — images now bake in `nomodeset` and i915  
-workarounds. Also use a **USB 2.0** port, disable **Secure Boot**, and try another stick.
+`EFI stub: Loaded initrd…` with a black screen, re-flash the latest  
+`mt-billing-pc-usb-amd64.img.xz` from the [flash images release](https://github.com/tsogs66/mtbilling-claude/releases/tag/sbc-flash-images)  
+(images bake in `nomodeset` / `i915.modeset=0` on the **default** GRUB entries).  
+Also use a **USB 2.0** port, disable **Secure Boot**, and try another stick.
+
+**Immediate workaround** (current stick, no re-flash): at the GRUB menu press `e`,  
+append `nomodeset i915.modeset=0` to the `linux` line, then Ctrl-X to boot.  
+Or open **Advanced options → recovery mode** (already includes `nomodeset`).  
+If the screen stays black but Ethernet is up, try `ssh mtadmin@<device-ip>`  
+(password `mtbilling`) — the installer may still be running.
 
 Build all:
 
