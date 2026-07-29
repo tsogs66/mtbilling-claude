@@ -58,7 +58,7 @@ Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with 
 |------|--------------|-------------|---------------|--------------|------------------|
 | Target | Pi 3 / 4 / 5 (64-bit) | OPi 5 (RK3588S arm64) | OPi One (H3 armhf) | UEFI x86_64 — run from USB/SSD | UEFI x86_64 — install to internal disk |
 | Base OS | Raspberry Pi OS Lite 64-bit | Armbian minimal | Armbian Orangepione minimal | Ubuntu 24.04 server cloud image | Same base; clones to internal disk |
-| Storage | microSD **≥ 16 GB** | microSD / eMMC **≥ 16 GB** | microSD **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** | Flash USB **≥ 8 GB**; target disk **≥ 8 GB** (wiped) |
+| Storage | microSD **≥ 16 GB** | microSD / eMMC **≥ 16 GB** | microSD **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** | Flash USB **≥ 8 GB**; target disk **≥ 4 GB** (eMMC OK; wiped) |
 | RAM | 2 GB+ recommended | 2 GB+ | 512 MB (swap enabled; slow) | 2 GB+ | 2 GB+ |
 | Network | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet required for install + firstboot |
 | Flash file | `mt-billing-rpi-arm64*` | `mt-billing-opi-arm64*` | `mt-billing-opi-one-armhf*` | `mt-billing-pc-amd64*` | `mt-billing-pc-usb-amd64*` |

@@ -20,9 +20,13 @@ export DEBIAN_FRONTEND=noninteractive
 
 log "=== MT-Billing USB → internal disk installer ==="
 
-# Wait for disks to settle
+# Wait for disks to settle; load common eMMC / SDHCI modules (Dell Wyse 3040, etc.)
 sleep 5
+for mod in mmc_block sdhci sdhci_pci sdhci_acpi mmc_core; do
+  modprobe "$mod" 2>/dev/null || true
+done
 udevadm settle 2>/dev/null || true
+sleep 2
 
 ROOT_SRC=$(findmnt -n -o SOURCE /)
 BOOT_PART=$(lsblk -no PKNAME,NAME,TYPE -p "$ROOT_SRC" 2>/dev/null | awk '$3=="part"{print $2; exit}')
@@ -34,29 +38,69 @@ if [[ -z "$BOOT_DISK" || "$BOOT_DISK" == "/dev/" ]]; then
 fi
 
 log "Boot medium: $BOOT_DISK (root $ROOT_SRC)"
+log "Block devices:"
+lsblk -b -o NAME,SIZE,TYPE,TRAN,RM,MODEL -p 2>/dev/null | while read -r line; do log "  $line"; done || true
 
-# Largest non-boot disk ≥ 8 GiB
-TARGET_DISK=""
+# Allow override: TARGET_DISK=/dev/mmcblk0 sudo -E .../usb-install-to-disk.sh
+# Marketing "8 GB" eMMC is often ~7.2 GiB — require ≥ 4 GiB, not a strict 8 GiB.
+MIN_TARGET_BYTES=${MIN_TARGET_BYTES:-4294967296}
+TARGET_DISK="${TARGET_DISK:-}"
 TARGET_BYTES=0
-while read -r name size type; do
-  [[ "$type" == "disk" ]] || continue
-  [[ -b "$name" ]] || continue
-  [[ "$name" == "$BOOT_DISK" ]] && continue
-  # Skip obvious USB if path still matches boot (already skipped)
-  if (( size >= 8589934592 && size > TARGET_BYTES )); then
-    TARGET_DISK="$name"
-    TARGET_BYTES=$size
-  fi
-done < <(lsblk -b -dn -o NAME,SIZE,TYPE -p)
+
+pick_score() {
+  # Prefer internal eMMC / SATA / NVMe over USB sticks. Higher is better.
+  local name="$1" tran="$2" rm="$3"
+  local score=10
+  case "$tran" in
+    mmc) score=100 ;;
+    nvme) score=90 ;;
+    sata|ata|raid) score=80 ;;
+    usb|"") score=20 ;;
+  esac
+  [[ "$rm" == "1" ]] && score=$((score - 50))
+  [[ "$name" == /dev/mmcblk* ]] && score=$((score + 20))
+  echo "$score"
+}
+
+if [[ -n "$TARGET_DISK" ]]; then
+  [[ -b "$TARGET_DISK" ]] || { log "ERROR: TARGET_DISK=$TARGET_DISK is not a block device."; exit 1; }
+  [[ "$TARGET_DISK" == "$BOOT_DISK" ]] && { log "ERROR: TARGET_DISK cannot be the boot USB ($BOOT_DISK)."; exit 1; }
+  TARGET_BYTES=$(lsblk -b -dn -o SIZE -p "$TARGET_DISK" | head -1)
+  log "Using TARGET_DISK override: $TARGET_DISK ($TARGET_BYTES bytes)"
+else
+  BEST_SCORE=-999
+  while read -r name size type tran rm; do
+    [[ "$type" == "disk" ]] || continue
+    [[ -b "$name" ]] || continue
+    if [[ "$name" == "$BOOT_DISK" ]]; then
+      log "  skip $name (boot medium)"
+      continue
+    fi
+    if (( size < MIN_TARGET_BYTES )); then
+      log "  skip $name (size $size < min $MIN_TARGET_BYTES)"
+      continue
+    fi
+    # Skip other removable USB disks unless nothing better exists (handled by score)
+    score=$(pick_score "$name" "${tran:-}" "${rm:-0}")
+    log "  candidate $name size=$size tran=${tran:-?} rm=${rm:-?} score=$score"
+    if (( score > BEST_SCORE || (score == BEST_SCORE && size > TARGET_BYTES) )); then
+      TARGET_DISK="$name"
+      TARGET_BYTES=$size
+      BEST_SCORE=$score
+    fi
+  done < <(lsblk -b -dn -o NAME,SIZE,TYPE,TRAN,RM -p)
+fi
 
 if [[ -z "$TARGET_DISK" ]]; then
-  log "ERROR: No internal disk ≥ 8 GB found (other than $BOOT_DISK)."
-  log "Connect a target drive and reboot with this USB stick."
+  log "ERROR: No usable internal disk ≥ $(( MIN_TARGET_BYTES / 1024 / 1024 / 1024 )) GiB found (other than $BOOT_DISK)."
+  log "Dell Wyse / thin clients: internal storage is usually /dev/mmcblk0 (eMMC)."
+  log "If lsblk shows it, re-run with: sudo TARGET_DISK=/dev/mmcblk0 /usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  log "If no mmcblk device appears, enable eMMC in BIOS / try another kernel, then reboot."
   sleep 120
   exit 1
 fi
 
-log "Target disk: $TARGET_DISK ($(( TARGET_BYTES / 1024 / 1024 / 1024 )) GiB)"
+log "Target disk: $TARGET_DISK ($(( TARGET_BYTES / 1024 / 1024 )) MiB / $(( TARGET_BYTES / 1024 / 1024 / 1024 )) GiB)"
 log "WARNING: All data on $TARGET_DISK will be erased."
 
 apt-get update -qq
