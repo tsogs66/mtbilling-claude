@@ -439,6 +439,72 @@ EOF
   echo "PC thin-client: kernel cmdline includes: ${args}"
 }
 
+# Ubuntu cloud/virtual images omit MMC/SDHCI modules; Dell Wyse 3040 eMMC needs them.
+inject_pc_emmc_modules() {
+  local root_mnt="$1"
+  local kver=""
+  kver="$(ls -1 "$root_mnt/lib/modules" 2>/dev/null | head -1 || true)"
+  if [[ -z "$kver" ]]; then
+    echo "WARNING: no kernel modules dir; skipping eMMC modules-extra." >&2
+    return 0
+  fi
+
+  if compgen -G "$root_mnt/lib/modules/$kver/kernel/drivers/mmc/host/sdhci-acpi.ko*" >/dev/null; then
+    echo "MMC/SDHCI modules already present for $kver."
+  else
+    local ver_pkg deb_extra deb_regdb tmpd abi
+    ver_pkg="$(chroot "$root_mnt" dpkg-query -W -f='${Version}' "linux-modules-${kver}" 2>/dev/null || true)"
+    if [[ -z "$ver_pkg" ]]; then
+      abi="$(echo "$kver" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+-[0-9]+).*/\1/')"
+      ver_pkg="${abi}.${abi##*-}"
+    fi
+
+    tmpd="$(mktemp -d /tmp/mt-emmc-mods.XXXXXX)"
+    deb_extra="$tmpd/linux-modules-extra.deb"
+    deb_regdb="$tmpd/wireless-regdb.deb"
+    echo "Fetching linux-modules-extra-${kver} (${ver_pkg}) for Wyse eMMC…"
+    if ! curl -fsSL -o "$deb_extra" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-modules-extra-${kver}_${ver_pkg}_amd64.deb"; then
+      echo "WARNING: could not download linux-modules-extra-${kver}; eMMC may be invisible on thin clients." >&2
+      rm -rf "$tmpd"
+      return 0
+    fi
+    curl -fsSL -o "$deb_regdb" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/w/wireless-regdb/wireless-regdb_2026.02.04-0ubuntu1~24.04.1_all.deb" \
+      || curl -fsSL -o "$deb_regdb" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/w/wireless-regdb/wireless-regdb_2026.02.04-0ubuntu1_all.deb" \
+      || true
+
+    mount --bind /dev "$root_mnt/dev"
+    mount -t proc proc "$root_mnt/proc"
+    mount -t sysfs sysfs "$root_mnt/sys"
+    cp -f "$deb_extra" "$root_mnt/tmp/linux-modules-extra.deb"
+    [[ -f "$deb_regdb" ]] && cp -f "$deb_regdb" "$root_mnt/tmp/wireless-regdb.deb"
+    if [[ -f "$root_mnt/tmp/wireless-regdb.deb" ]]; then
+      chroot "$root_mnt" dpkg -i /tmp/wireless-regdb.deb /tmp/linux-modules-extra.deb || \
+        chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
+    else
+      chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
+    fi
+    chroot "$root_mnt" depmod -a "$kver" || true
+    rm -f "$root_mnt/tmp/linux-modules-extra.deb" "$root_mnt/tmp/wireless-regdb.deb"
+    umount "$root_mnt/sys" 2>/dev/null || true
+    umount "$root_mnt/proc" 2>/dev/null || true
+    umount "$root_mnt/dev" 2>/dev/null || true
+    rm -rf "$tmpd"
+  fi
+
+  install -d -m 0755 "$root_mnt/etc/modules-load.d"
+  cat >"$root_mnt/etc/modules-load.d/mt-billing-emmc.conf" <<'EOF'
+# Dell Wyse 3040 / Cherry Trail eMMC (linux-modules-extra)
+sdhci
+sdhci_acpi
+sdhci_pci
+mmc_block
+EOF
+  echo "Enabled eMMC modules-load for thin clients."
+}
+
 # USB installer image: boot from stick → clone OS onto largest internal disk → power off.
 inject_usb_installer() {
   local root_mnt="$1"
@@ -877,9 +943,11 @@ EOF
   # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
   if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc" "mt-billing"
+    inject_pc_emmc_modules "$root_mnt"
     inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   elif [[ "$board_name" == "pc-usb-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc-usb" "mt-billing-usb"
+    inject_pc_emmc_modules "$root_mnt"
     inject_usb_installer "$root_mnt"
     inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   fi

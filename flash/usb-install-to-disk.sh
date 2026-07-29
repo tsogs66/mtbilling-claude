@@ -193,7 +193,9 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
 apt-get install -y -qq grub-efi-amd64 grub-efi-amd64-bin efibootmgr || true
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck --removable
+# Wyse 3040 firmware only honors the removable/fallback path EFI/BOOT/BOOTX64.EFI
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck || true
 update-grub
 sync
 GRUB
