@@ -29,6 +29,14 @@ USB installer notes:
 - Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
 - Target selection prefers **eMMC** (`/dev/mmcblk0`) over USB. Marketing “8 GB” eMMC (Dell Wyse 3040) is accepted (≥4 GiB).
 - Force a disk: `sudo TARGET_DISK=/dev/mmcblk0 /usr/local/lib/mt-billing/usb-install-to-disk.sh`
+- If `lsblk` shows **only the USB stick** (no `mmcblk0`), the cloud image was missing MMC drivers — re-flash the latest release (includes `linux-modules-extra`), or on a networked stick:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y linux-modules-extra-$(uname -r)
+sudo modprobe sdhci_acpi sdhci_pci mmc_block
+lsblk -o NAME,SIZE,TYPE,TRAN,MODEL
+```
 
 **Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
 `EFI stub: Loaded initrd…` with a black screen, re-flash the latest  
