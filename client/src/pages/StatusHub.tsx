@@ -148,12 +148,29 @@ function StatusDot({ status }: { status: Status }) {
   );
 }
 
+type ProbeMode = 'auto' | 'router' | 'panel';
+const PROBE_MODE_KEY = 'mt_status_hub_probe_mode';
+const PROBE_MODES: { id: ProbeMode; label: string }[] = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'router', label: 'Via Router' },
+  { id: 'panel', label: 'Via Panel (API)' },
+];
+
 export default function StatusHub() {
   const { canWrite } = useAuth();
   const { current } = useRouterDevice();
   const routerId = current?.id ?? null;
-  const routerParams = routerId ? { routerId } : {};
-  const viaRouter = !!routerId;
+  const [probeMode, setProbeMode] = useState<ProbeMode>(() => {
+    try {
+      const saved = localStorage.getItem(PROBE_MODE_KEY);
+      if (saved === 'auto' || saved === 'router' || saved === 'panel') return saved;
+    } catch {
+      /* ignore */
+    }
+    return 'auto';
+  });
+  const routerParams = { ...(routerId ? { routerId } : {}), probeMode };
+  const viaRouter = probeMode === 'panel' ? false : !!routerId;
   const [tab, setTab] = useState<Tab>('services');
   const [groups, setGroups] = useState<Group[]>([]);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -223,6 +240,11 @@ export default function StatusHub() {
   }, []);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(PROBE_MODE_KEY, probeMode);
+    } catch {
+      /* ignore */
+    }
     // Load latest background results — do not force a full scan on every visit.
     loadServices().catch(() => undefined);
     loadUplink().catch(() => undefined);
@@ -231,7 +253,13 @@ export default function StatusHub() {
       loadUplink().catch(() => undefined);
     }, 30_000);
     return () => clearInterval(id);
-  }, [routerId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routerId, probeMode]);
+
+  const changeProbeMode = (next: ProbeMode) => {
+    if (next === probeMode) return;
+    setProbeMode(next);
+  };
 
   const grouped = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -293,6 +321,31 @@ export default function StatusHub() {
                   ? `Reachability and latency tests run through the active MikroTik router (“${current?.name}”) — your subscribers’ WAN perspective.`
                   : 'Crowdsourced and official outage data from the internet. Select a router in the top bar to probe services from your network edge.'}
               </p>
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] uppercase tracking-wider text-cyan-300/60 mr-1">Probe mode:</span>
+                {PROBE_MODES.map((m) => {
+                  const active = m.id === probeMode;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => changeProbeMode(m.id)}
+                      className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                        active
+                          ? 'border-cyan-400/60 bg-cyan-400/15 text-cyan-100'
+                          : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:text-slate-200'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {probeMode === 'router' && !routerId && (
+                <div className="mt-1.5 text-xs text-amber-300">
+                  Select a router in the top bar to use “Via Router” — otherwise every service will show as down.
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button

@@ -59,6 +59,14 @@ const SCOPE_ICONS: Record<ScopeId, typeof Globe2> = {
 };
 
 const STORAGE_KEY = 'mt_uptime_scope';
+const PROBE_MODE_KEY = 'mt_uptime_probe_mode';
+
+type ProbeMode = 'auto' | 'router' | 'panel';
+const PROBE_MODES: { id: ProbeMode; label: string }[] = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'router', label: 'Via Router' },
+  { id: 'panel', label: 'Via Panel (API)' },
+];
 
 function ago(ts: number | null) {
   if (!ts) return 'never';
@@ -140,10 +148,19 @@ export default function Uptime() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [probeMode, setProbeMode] = useState<ProbeMode>(() => {
+    try {
+      const saved = localStorage.getItem(PROBE_MODE_KEY);
+      if (saved === 'auto' || saved === 'router' || saved === 'panel') return saved;
+    } catch {
+      /* ignore */
+    }
+    return 'auto';
+  });
 
-  const load = (sc = scope, rid = routerId) =>
+  const load = (sc = scope, rid = routerId, mode = probeMode) =>
     api
-      .get('/uptime', { params: { scope: sc, ...(rid ? { routerId: rid } : {}) } })
+      .get('/uptime', { params: { scope: sc, ...(rid ? { routerId: rid } : {}), probeMode: mode } })
       .then((r) => {
         setMonitors(r.data.monitors || []);
         setSummary(r.data.summary);
@@ -160,10 +177,15 @@ export default function Uptime() {
     } catch {
       /* ignore */
     }
+    try {
+      localStorage.setItem(PROBE_MODE_KEY, probeMode);
+    } catch {
+      /* ignore */
+    }
     let cancelled = false;
     setChecking(true);
     api
-      .post('/uptime/check', { scope, ...(routerId ? { routerId } : {}) })
+      .post('/uptime/check', { scope, probeMode, ...(routerId ? { routerId } : {}) })
       .then((r) => {
         if (cancelled) return;
         setMonitors(r.data.monitors || []);
@@ -174,19 +196,19 @@ export default function Uptime() {
       .catch((e) => {
         if (cancelled) return;
         setError(e?.response?.data?.error || 'Could not load uptime data');
-        load(scope);
+        load(scope, routerId, probeMode);
       })
       .finally(() => {
         if (!cancelled) setChecking(false);
       });
 
-    const t = setInterval(() => load(scope, routerId), 30000);
+    const t = setInterval(() => load(scope, routerId, probeMode), 30000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, routerId]);
+  }, [scope, routerId, probeMode]);
 
   const changeScope = (next: ScopeId) => {
     if (next === scope) return;
@@ -199,7 +221,7 @@ export default function Uptime() {
     setChecking(true);
     setError('');
     try {
-      const r = await api.post('/uptime/check', { scope, ...(routerId ? { routerId } : {}) });
+      const r = await api.post('/uptime/check', { scope, probeMode, ...(routerId ? { routerId } : {}) });
       setMonitors(r.data.monitors || []);
       setSummary(r.data.summary);
       if (Array.isArray(r.data.scopes) && r.data.scopes.length) setScopes(r.data.scopes);
@@ -208,6 +230,11 @@ export default function Uptime() {
     } finally {
       setChecking(false);
     }
+  };
+
+  const changeProbeMode = (next: ProbeMode) => {
+    if (next === probeMode) return;
+    setProbeMode(next);
   };
 
   const grouped = useMemo(() => {
@@ -246,12 +273,47 @@ export default function Uptime() {
         <div className="font-semibold text-slate-800">{activeMeta?.label}</div>
         <div className="text-slate-500 mt-0.5">{activeMeta?.description}</div>
         {scope === 'local' && (
-          <div className="mt-2 text-xs text-slate-600">
-            Probe source:{' '}
-            <span className="font-semibold text-slate-800">
-              {current?.name ? `MikroTik router “${current.name}”` : 'Panel server (no router selected)'}
-            </span>
-          </div>
+          <>
+            <div className="mt-2 text-xs text-slate-600">
+              Probe source:{' '}
+              <span className="font-semibold text-slate-800">
+                {probeMode === 'panel'
+                  ? 'Panel server (forced)'
+                  : probeMode === 'router'
+                  ? current?.name
+                    ? `MikroTik router “${current.name}” (forced)`
+                    : 'MikroTik router (forced — none selected)'
+                  : current?.name
+                  ? `MikroTik router “${current.name}”`
+                  : 'Panel server (no router selected)'}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-slate-500 mr-1">Probe mode:</span>
+              {PROBE_MODES.map((m) => {
+                const active = m.id === probeMode;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => changeProbeMode(m.id)}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      active
+                        ? 'border-brand-500 bg-brand-50 text-brand-800'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+            {probeMode === 'router' && !current?.id && (
+              <div className="mt-1.5 text-xs text-amber-600">
+                Select a router in the top bar to use “Via Router” — otherwise every target will show as down.
+              </div>
+            )}
+          </>
         )}
       </div>
 

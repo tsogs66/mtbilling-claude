@@ -578,7 +578,14 @@ function applyResult(
 
 const runningByKey = new Map<string, Promise<void>>();
 
-export async function runUptimeChecks(scope?: UptimeScope, routerConn?: RouterConn | null, routerId?: number | null) {
+export type ProbeMode = 'auto' | 'router' | 'panel';
+
+export async function runUptimeChecks(
+  scope?: UptimeScope,
+  routerConn?: RouterConn | null,
+  routerId?: number | null,
+  probeMode: ProbeMode = 'auto'
+) {
   const sc = scope || activeScope;
   const rid = sc === 'local' ? (routerId ?? activeRouterId) : null;
   const key = stateKey(sc, rid);
@@ -587,7 +594,22 @@ export async function runUptimeChecks(scope?: UptimeScope, routerConn?: RouterCo
   const job = (async () => {
     const map = getScopeMap(sc, rid);
     if (sc === 'local') {
-      const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+      const routerAvailable = !!(routerConn?.host && routerConn?.api_user);
+      if (probeMode === 'router' && !routerAvailable) {
+        for (const t of LOCAL_TARGETS) {
+          applyResult(map.get(t.id)!, {
+            status: 'down',
+            up: false,
+            latencyMs: null,
+            code: 0,
+            lastError: 'Router probe requested but no router is connected',
+            detail: 'Select a reachable router in the top bar to probe via router',
+            source: 'local',
+          });
+        }
+        return;
+      }
+      const viaRouter = probeMode === 'panel' ? false : routerAvailable;
       await mapPool(LOCAL_TARGETS, CONCURRENCY, async (t) => {
         const r = viaRouter
           ? await probeHttpUrlFromRouter(routerConn!, t.url)
