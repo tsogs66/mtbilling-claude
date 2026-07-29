@@ -1630,12 +1630,35 @@ function parseProbeUrl(url: string): { host: string; fetchUrl: string } {
   }
 }
 
+/**
+ * RouterOS reports ping/duration fields as compound strings with sub-ms
+ * precision — "3ms800us", "800us", "1s200ms" — not a plain number. A naive
+ * `.replace(/ms$/i, '')` only strips an exact trailing "ms" and leaves
+ * anything with a "us" (or multi-unit) remainder as NaN, which silently
+ * drops every real reading and forces callers to fall back to a much
+ * coarser wall-clock measurement instead of the router's own reported RTT.
+ */
+function parseRouterOsDurationMs(raw: string | undefined | null): number | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
+  const UNIT_MS: Record<string, number> = { d: 86400000, h: 3600000, m: 60000, s: 1000, ms: 1, us: 0.001, ns: 0.000001 };
+  const re = /(\d+(?:\.\d+)?)(ms|us|ns|d|h|m|s)/g;
+  let total = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    matched = true;
+    total += Number(m[1]) * UNIT_MS[m[2]];
+  }
+  return matched ? total : null;
+}
+
 function parsePingAvgMs(rows: Record<string, string>[]): number | null {
   const times: number[] = [];
   for (const row of rows || []) {
-    const t = String(row.time || row['avg-rtt'] || '').replace(/ms$/i, '').trim();
-    const n = Number(t);
-    if (Number.isFinite(n) && n > 0) times.push(n);
+    const n = parseRouterOsDurationMs(row.time || row['avg-rtt']);
+    if (n != null && n > 0) times.push(n);
   }
   if (!times.length) return null;
   return Math.round(times.reduce((a, b) => a + b, 0) / times.length);
@@ -1798,10 +1821,13 @@ async function probePingHost(
   start: number
 ): Promise<RouterHttpProbeResult | null> {
   const address = (await resolveHostViaRouter(api, host)) || host;
+  // RouterOS defaults to a 1s gap between packets when =interval isn't set,
+  // which for count=2 pads every single latency reading by a full second —
+  // set it explicitly everywhere so a probe reflects real network RTT.
   const attempts: string[][] = [
-    [`=address=${address}`, '=count=2'],
+    [`=address=${address}`, '=count=2', '=interval=100ms'],
     [`=address=${address}`, '=count=2', '=interval=500ms'],
-    [`=address=${host}`, '=count=2'],
+    [`=address=${host}`, '=count=2', '=interval=100ms'],
   ];
 
   for (const args of attempts) {
