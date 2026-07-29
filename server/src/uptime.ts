@@ -1,7 +1,7 @@
 import dns from 'dns';
 import { performance } from 'perf_hooks';
 import type { RouterConn } from './mikrotik.js';
-import { probeHttpUrlFromRouter } from './mikrotik.js';
+import { probeHttpUrlsFromRouter } from './mikrotik.js';
 
 /**
  * Uptime monitor with three scopes:
@@ -610,17 +610,39 @@ export async function runUptimeChecks(
         return;
       }
       const viaRouter = probeMode === 'panel' ? false : routerAvailable;
+      if (viaRouter) {
+        // One RouterOS API session for every target (MikroTik allows only one active
+        // /tool fetch per channel anyway) — opening a separate connection per URL here
+        // used to mean e.g. 21 targets = 21 connect attempts to the same router, so an
+        // offline/unreachable router took ~4x15s (batches of CONCURRENCY) to report back
+        // instead of failing once.
+        const results = await probeHttpUrlsFromRouter(
+          routerConn!,
+          LOCAL_TARGETS.map((t) => t.url)
+        );
+        LOCAL_TARGETS.forEach((t, i) => {
+          const r = results[i];
+          applyResult(map.get(t.id)!, {
+            status: r.status,
+            up: r.up,
+            latencyMs: r.ms,
+            code: r.code,
+            lastError: r.error,
+            detail: r.error || (r.code ? `Reachable via router · HTTP ${r.code}` : 'Reachable via router'),
+            source: 'local',
+          });
+        });
+        return;
+      }
       await mapPool(LOCAL_TARGETS, CONCURRENCY, async (t) => {
-        const r = viaRouter
-          ? await probeHttpUrlFromRouter(routerConn!, t.url)
-          : await probeLocal(t.url);
+        const r = await probeLocal(t.url);
         applyResult(map.get(t.id)!, {
           status: r.status,
           up: r.up,
           latencyMs: r.ms,
           code: r.code,
           lastError: r.error,
-          detail: r.error || (r.code ? `Reachable via ${viaRouter ? 'router' : 'panel'} · HTTP ${r.code}` : `Reachable via ${viaRouter ? 'router' : 'panel'}`),
+          detail: r.error || (r.code ? `Reachable via panel · HTTP ${r.code}` : 'Reachable via panel'),
           source: 'local',
         });
       });
