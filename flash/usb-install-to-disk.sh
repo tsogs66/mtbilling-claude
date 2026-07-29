@@ -103,12 +103,47 @@ fi
 log "Target disk: $TARGET_DISK ($(( TARGET_BYTES / 1024 / 1024 )) MiB / $(( TARGET_BYTES / 1024 / 1024 / 1024 )) GiB)"
 log "WARNING: All data on $TARGET_DISK will be erased."
 
+# Release any mounts/holders on the target (old Ubuntu on eMMC is often still mounted/busy).
+release_disk() {
+  local disk="$1" part
+  log "Releasing mounts/holders on $disk…"
+  # Swap on target partitions
+  while read -r swapdev; do
+    [[ -z "$swapdev" ]] && continue
+    case "$swapdev" in
+      ${disk}p*|"${disk}"[0-9]*) swapoff "$swapdev" 2>/dev/null || true ;;
+    esac
+  done < <(awk '/^\/dev\// {print $1}' /proc/swaps 2>/dev/null || true)
+  # Mounted filesystems on target
+  while read -r mp; do
+    [[ -z "$mp" ]] && continue
+    umount -R "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done < <(findmnt -n -o TARGET -S "${disk}*" 2>/dev/null || true)
+  while read -r part; do
+    [[ -b "$part" ]] || continue
+    umount -R "$part" 2>/dev/null || umount -l "$part" 2>/dev/null || true
+  done < <(lsblk -ln -o NAME -p -n "$disk" 2>/dev/null | grep -v "^${disk}$" || true)
+  # LVM / device-mapper on target
+  if command -v dmsetup >/dev/null 2>&1; then
+    dmsetup remove_all 2>/dev/null || true
+  fi
+  sync
+  sleep 1
+}
+
+release_disk "$TARGET_DISK"
+
 apt-get update -qq
 apt-get install -y -qq parted gdisk e2fsprogs dosfstools rsync grub-efi-amd64 grub-efi-amd64-bin \
   efibootmgr util-linux 2>&1 | tail -20
 
+release_disk "$TARGET_DISK"
 wipefs -a "$TARGET_DISK" 2>/dev/null || true
 sgdisk --zap-all "$TARGET_DISK" 2>/dev/null || true
+# Drop old partition nodes so the kernel will accept a new table
+partx -d "$TARGET_DISK" 2>/dev/null || true
+blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
+sleep 1
 
 parted -s "$TARGET_DISK" mklabel gpt
 parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB
@@ -117,6 +152,8 @@ parted -s "$TARGET_DISK" mkpart root ext4 513MiB 100%
 
 sleep 2
 partprobe "$TARGET_DISK" 2>/dev/null || true
+partx -u "$TARGET_DISK" 2>/dev/null || true
+blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
 udevadm settle 2>/dev/null || true
 sleep 2
 
@@ -128,11 +165,24 @@ else
   ROOT_PART="${TARGET_DISK}2"
 fi
 
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  [[ -b "$EFI_PART" && -b "$ROOT_PART" ]] && break
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if [[ -b "$EFI_PART" && -b "$ROOT_PART" ]]; then
+    break
+  fi
+  log "Waiting for new partitions to appear ($i)…"
   sleep 1
   partprobe "$TARGET_DISK" 2>/dev/null || true
+  partx -u "$TARGET_DISK" 2>/dev/null || true
+  blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
 done
+
+if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
+  log "ERROR: New partitions not visible after repartition ($EFI_PART / $ROOT_PART)."
+  log "Reboot from this USB stick and run the installer again:"
+  log "  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  sleep 60
+  exit 1
+fi
 
 log "Formatting $EFI_PART (EFI) and $ROOT_PART (root)"
 mkfs.vfat -F 32 -n EFI "$EFI_PART"
