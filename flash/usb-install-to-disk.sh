@@ -186,9 +186,32 @@ if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
   exit 1
 fi
 
+# Kill anything still holding the new partition nodes (common on eMMC after GPT rewrite).
+release_disk "$TARGET_DISK"
+for part in "$EFI_PART" "$ROOT_PART"; do
+  fuser -km "$part" 2>/dev/null || true
+  umount -l "$part" 2>/dev/null || true
+  wipefs -a "$part" 2>/dev/null || true
+done
+sync
+sleep 2
+
 log "Formatting $EFI_PART (EFI) and $ROOT_PART (root)"
-mkfs.vfat -F 32 -n EFI "$EFI_PART"
-mkfs.ext4 -F -L mtbilling "$ROOT_PART"
+if ! mkfs.vfat -F 32 -n EFI "$EFI_PART"; then
+  log "ERROR: mkfs.vfat failed on $EFI_PART (device busy)."
+  log "Reboot from this USB stick, then run:"
+  log "  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  sleep 60
+  exit 1
+fi
+if ! mkfs.ext4 -F -L mtbilling "$ROOT_PART"; then
+  log "ERROR: mkfs.ext4 failed on $ROOT_PART (device busy)."
+  log "This usually means the kernel still has the old eMMC mapping."
+  log "Reboot from this USB stick (do not boot internal disk), then run:"
+  log "  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  sleep 60
+  exit 1
+fi
 
 mkdir -p "$TARGET_MNT"
 mount "$ROOT_PART" "$TARGET_MNT"
