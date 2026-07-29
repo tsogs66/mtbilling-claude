@@ -145,10 +145,12 @@ partx -d "$TARGET_DISK" 2>/dev/null || true
 blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
 sleep 1
 
-parted -s "$TARGET_DISK" mklabel gpt
-parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB
-parted -s "$TARGET_DISK" set 1 esp on
-parted -s "$TARGET_DISK" mkpart root ext4 513MiB 100%
+# parted returns non-zero when it cannot inform a busy kernel — table is often
+# still written. Tolerate that and rely on partprobe/partx + node checks below.
+parted -s "$TARGET_DISK" mklabel gpt || true
+parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB || true
+parted -s "$TARGET_DISK" set 1 esp on || true
+parted -s "$TARGET_DISK" mkpart root ext4 513MiB 100% || true
 
 sleep 2
 partprobe "$TARGET_DISK" 2>/dev/null || true
