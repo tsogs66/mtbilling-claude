@@ -3681,6 +3681,23 @@ app.put('/api/map/servers/:id', (req, res) => {
   res.json(db.prepare('SELECT id, name, host, status, lat, lng, address FROM routers WHERE id = ?').get(id));
 });
 
+// Lightweight pin-position update for a client from the Topology map — deliberately
+// separate from PUT /api/pppoe/users/:id, which also syncs the PPP secret to
+// MikroTik; a map-drag reposition shouldn't touch the router at all.
+app.put('/api/map/clients/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  db.prepare('UPDATE pppoe_users SET lat=?, lng=?, address=? WHERE id=?').run(
+    b.lat != null && b.lat !== '' ? Number(b.lat) : ex.lat,
+    b.lng != null && b.lng !== '' ? Number(b.lng) : ex.lng,
+    b.address !== undefined ? (b.address ? String(b.address).trim() : null) : ex.address,
+    id
+  );
+  res.json(db.prepare('SELECT id, lat, lng, address FROM pppoe_users WHERE id = ?').get(id));
+});
+
 // ---- Map cable connectors (editable street paths) ----
 app.get('/api/map/connectors', (_req, res) => {
   const rows = db.prepare('SELECT id, kind, from_id AS fromId, to_id AS toId, points FROM map_connectors').all() as any[];
