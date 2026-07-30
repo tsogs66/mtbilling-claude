@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `bc09e4f777b7af4f412b3e8c8bf7aded08142ee4e53f8c48e6aebcae192e98af` | 2026-07-30 | #42 single-block xz (Etcher) + #43 single grub-install + Wyse fixes |
+| `mt-billing-pc-usb-amd64.img.xz` | `27c5886915b0907ec9b4140c64061ae2755a3dd1d0bdc35b031593d77fdbaab4` | 2026-07-30 | Full rebuild: #41 GRUB failure guards + #42 xz `-T1` (1 stream/1 block, Etcher) + #43 single grub-install; kernel 6.8.0-136; synthesized grub.cfg when chroot update-grub emits empty 10_linux |
 
 Rebuild and publish PC USB installer:
 

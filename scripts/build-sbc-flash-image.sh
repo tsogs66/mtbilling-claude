@@ -431,12 +431,65 @@ EOF
   chroot "$root_mnt" /usr/sbin/update-grub || chroot "$root_mnt" /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg || true
   # Re-patch after update-grub in case it regenerated without our args.
   patch_grub_cfg_kernel_args "$root_mnt/boot/grub/grub.cfg" "$args"
+  # chroot update-grub on loop-mounted cloud images often emits an empty
+  # 10_linux section (grub-probe can't resolve the root device). Synthesize a
+  # minimal bootable grub.cfg if that happened.
+  ensure_pc_grub_linux_entries "$root_mnt" "$args"
   umount "$root_mnt/dev/pts" 2>/dev/null || true
   umount "$root_mnt/boot/efi" 2>/dev/null || true
   umount "$root_mnt/sys"
   umount "$root_mnt/proc"
   umount "$root_mnt/dev"
   echo "PC thin-client: kernel cmdline includes: ${args}"
+}
+
+# If grub.cfg has no linux/linuxefi lines, write a minimal bootable config.
+ensure_pc_grub_linux_entries() {
+  local root_mnt="$1"
+  local args="$2"
+  local cfg="$root_mnt/boot/grub/grub.cfg"
+  local kver="" boot_uuid=""
+  [[ -f "$cfg" ]] || return 0
+  if grep -E '^[[:space:]]*linux(efi)?[[:space:]]' "$cfg" | grep -vq recovery; then
+    return 0
+  fi
+  kver="$(ls -1 "$root_mnt/boot"/vmlinuz-*-generic 2>/dev/null | head -1 | xargs -r basename | sed 's/^vmlinuz-//')"
+  if [[ -z "$kver" ]]; then
+    echo "WARNING: no vmlinuz on /boot; cannot synthesize grub.cfg" >&2
+    return 0
+  fi
+  boot_uuid="$(findmnt -n -o UUID "$root_mnt/boot" 2>/dev/null || true)"
+  if [[ -z "$boot_uuid" ]] && command -v blkid >/dev/null 2>&1; then
+    boot_uuid="$(blkid -s UUID -o value "$(findmnt -n -o SOURCE "$root_mnt/boot" 2>/dev/null)" 2>/dev/null || true)"
+  fi
+  [[ -n "$boot_uuid" ]] || boot_uuid="$(blkid -s UUID -o value "$(df -P "$root_mnt/boot" | awk 'NR==2{print $1}')" 2>/dev/null || true)"
+  echo "WARNING: grub.cfg has no linux entries after update-grub — synthesizing boot menu for ${kver}."
+  cat >"$cfg" <<EOF
+# Synthesized by MT-Billing image build (chroot update-grub produced empty 10_linux).
+set default=0
+set timeout=2
+set timeout_style=menu
+insmod part_gpt
+insmod ext2
+insmod gzio
+search --no-floppy --fs-uuid --set=root ${boot_uuid}
+menuentry 'Ubuntu' --class ubuntu --class gnu-linux --class gnu --class os {
+	insmod gzio
+	insmod part_gpt
+	insmod ext2
+	search --no-floppy --fs-uuid --set=root ${boot_uuid}
+	linux	/vmlinuz-${kver} root=LABEL=cloudimg-rootfs ro console=tty1 console=ttyS0 ${args}
+	initrd	/initrd.img-${kver}
+}
+menuentry 'Ubuntu (recovery mode)' --class ubuntu --class gnu-linux --class gnu --class os {
+	insmod gzio
+	insmod part_gpt
+	insmod ext2
+	search --no-floppy --fs-uuid --set=root ${boot_uuid}
+	linux	/vmlinuz-${kver} root=LABEL=cloudimg-rootfs ro recovery nomodeset dis_ucode_ldr
+	initrd	/initrd.img-${kver}
+}
+EOF
 }
 
 # Ubuntu cloud/virtual images omit MMC/SDHCI modules; Dell Wyse 3040 eMMC needs them.
