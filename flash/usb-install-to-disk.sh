@@ -139,26 +139,12 @@ apt-get install -y -qq parted gdisk e2fsprogs dosfstools rsync grub-efi-amd64 gr
 
 release_disk "$TARGET_DISK"
 wipefs -a "$TARGET_DISK" 2>/dev/null || true
-sgdisk --zap-all "$TARGET_DISK" 2>/dev/null || true
-# Drop old partition nodes so the kernel will accept a new table
-partx -d "$TARGET_DISK" 2>/dev/null || true
-blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
-sleep 1
 
-# parted returns non-zero when it cannot inform a busy kernel — table is often
-# still written. Tolerate that and rely on partprobe/partx + node checks below.
-parted -s "$TARGET_DISK" mklabel gpt || true
-parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB || true
-parted -s "$TARGET_DISK" set 1 esp on || true
-parted -s "$TARGET_DISK" mkpart root ext4 513MiB 100% || true
-
-sleep 2
-partprobe "$TARGET_DISK" 2>/dev/null || true
-partx -u "$TARGET_DISK" 2>/dev/null || true
-blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
-udevadm settle 2>/dev/null || true
-sleep 2
-
+# Prefer sgdisk for GPT on eMMC; fall back to parted. If a previous attempt
+# already created our 512MiB ESP + root layout, skip repartition (avoids the
+# classic "Error during partitioning" / busy-kernel failure on Wyse).
+EFI_PART=""
+ROOT_PART=""
 if [[ -b "${TARGET_DISK}p1" ]]; then
   EFI_PART="${TARGET_DISK}p1"
   ROOT_PART="${TARGET_DISK}p2"
@@ -167,21 +153,70 @@ else
   ROOT_PART="${TARGET_DISK}2"
 fi
 
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  if [[ -b "$EFI_PART" && -b "$ROOT_PART" ]]; then
-    break
+reuse_parts=0
+if [[ -b "$EFI_PART" && -b "$ROOT_PART" ]]; then
+  efi_sz="$(lsblk -b -dn -o SIZE -p "$EFI_PART" 2>/dev/null || echo 0)"
+  root_sz="$(lsblk -b -dn -o SIZE -p "$ROOT_PART" 2>/dev/null || echo 0)"
+  # ESP ~512 MiB (allow 256–768 MiB); root must be the bulk of the disk.
+  if (( efi_sz >= 268435456 && efi_sz <= 805306368 && root_sz >= 2147483648 )); then
+    reuse_parts=1
+    log "Reusing existing partitions $EFI_PART ($(echo "$efi_sz" | awk '{printf "%.0fMiB",$1/1024/1024}')) + $ROOT_PART — skipping repartition."
   fi
-  log "Waiting for new partitions to appear ($i)…"
+fi
+
+if [[ "$reuse_parts" -ne 1 ]]; then
+  log "Partitioning $TARGET_DISK (GPT: EFI 512MiB + root)…"
+  sgdisk --zap-all "$TARGET_DISK" 2>/dev/null || true
+  partx -d "$TARGET_DISK" 2>/dev/null || true
+  blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
   sleep 1
+
+  if command -v sgdisk >/dev/null 2>&1; then
+    # sgdisk is more reliable than parted on busy eMMC after a failed attempt.
+    sgdisk -n 1:2048:1050623 -t 1:EF00 -c 1:EFI "$TARGET_DISK" || true
+    sgdisk -n 2:1050624:0 -t 2:8300 -c 2:root "$TARGET_DISK" || true
+    sgdisk -p "$TARGET_DISK" || true
+  else
+    # parted returns non-zero when it cannot inform a busy kernel — table is often
+    # still written. Tolerate that and rely on partprobe/partx + node checks below.
+    parted -s "$TARGET_DISK" mklabel gpt || true
+    parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB || true
+    parted -s "$TARGET_DISK" set 1 esp on || true
+    parted -s "$TARGET_DISK" mkpart root ext4 513MiB 100% || true
+  fi
+
+  sleep 2
   partprobe "$TARGET_DISK" 2>/dev/null || true
   partx -u "$TARGET_DISK" 2>/dev/null || true
   blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
-done
+  udevadm settle 2>/dev/null || true
+  sleep 2
+
+  if [[ -b "${TARGET_DISK}p1" ]]; then
+    EFI_PART="${TARGET_DISK}p1"
+    ROOT_PART="${TARGET_DISK}p2"
+  else
+    EFI_PART="${TARGET_DISK}1"
+    ROOT_PART="${TARGET_DISK}2"
+  fi
+
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if [[ -b "$EFI_PART" && -b "$ROOT_PART" ]]; then
+      break
+    fi
+    log "Waiting for new partitions to appear ($i)…"
+    sleep 1
+    partprobe "$TARGET_DISK" 2>/dev/null || true
+    partx -u "$TARGET_DISK" 2>/dev/null || true
+    blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
+  done
+fi
 
 if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
-  log "ERROR: New partitions not visible after repartition ($EFI_PART / $ROOT_PART)."
-  log "Reboot from this USB stick and run the installer again:"
+  log "ERROR: Partitions not visible ($EFI_PART / $ROOT_PART)."
+  log "Reboot from this USB stick (F12 → USB), then run the installer again:"
   log "  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  log "If it still fails: sudo TARGET_DISK=/dev/mmcblk0 /usr/local/lib/mt-billing/usb-install-to-disk.sh"
   sleep 60
   exit 1
 fi
