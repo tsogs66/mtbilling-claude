@@ -38,27 +38,10 @@ sudo modprobe sdhci_acpi sdhci_pci mmc_block
 lsblk -o NAME,SIZE,TYPE,TRAN,MODEL
 ```
 
-**Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
-`EFI stub: Loaded initrd…` with a black screen, re-flash the latest  
+**Dell Wyse 3040 / Intel Atom thin clients:** re-flash the latest  
 `mt-billing-pc-usb-amd64.img.xz` from the [flash images release](https://github.com/tsogs66/mtbilling-claude/releases/tag/sbc-flash-images)  
-(images bake in `nomodeset` / `i915.modeset=0` on the **default** GRUB entries).  
-Also use a **USB 2.0** port, disable **Secure Boot**, and try another stick.
-
-**Immediate workaround** (current stick, no re-flash): at the GRUB menu press `e`,  
-append `nomodeset i915.modeset=0` to the `linux` line, then Ctrl-X to boot.  
-Or open **Advanced options → recovery mode** (already includes `nomodeset`).  
-If the screen stays black but Ethernet is up, try `ssh mtadmin@<device-ip>`  
-(password `mtbilling`) — the installer may still be running.
-
-If boot reaches a login/console but you see  
-`Job mt-billing-usb-install.service/start deleted to break ordering cycle`,  
-run the installer manually:
-
-```bash
-sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh
-```
-
-(or re-flash the latest USB image, which removes the cloud-init ordering cycle).
+(SHA-256 in `flash/RELEASE-sbc-flash-images.md`). That image includes MMC drivers,  
+`nomodeset`, apt-lock wait, and partition reuse. Use a **USB 2.0** port and disable **Secure Boot**.
 
 
 Build all:

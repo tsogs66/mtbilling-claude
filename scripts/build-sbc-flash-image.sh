@@ -561,6 +561,16 @@ If install does not start automatically:
 
 EOF
 
+  # Prevent unattended-upgrades from locking apt on first USB boot (blocks installer).
+  install -d -m 0755 "$root_mnt/etc/apt/apt.conf.d"
+  cat >"$root_mnt/etc/apt/apt.conf.d/20auto-upgrades" <<'EOF'
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/apt-daily.timer"
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/apt-daily-upgrade.timer"
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/unattended-upgrades.service"
+
   echo "Injected USB → internal-disk installer (marker /etc/mt-billing-usb-installer)."
 }
 
