@@ -439,6 +439,7 @@ async function maybeGzip(file: File): Promise<{ body: Blob; gzipped: boolean }> 
 function DatabaseManagement({ flash }: any) {
   const [backups, setBackups] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{
     file: File;
     name: string;
@@ -527,6 +528,7 @@ function DatabaseManagement({ flash }: any) {
       return;
     }
     setBusy(true);
+    setRestoring(true);
     setRestoreJob({ fileName: selectedFile.name, phase: 'uploading', percent: 0 });
     try {
       const { body, gzipped } = await maybeGzip(selectedFile.file);
@@ -578,6 +580,7 @@ function DatabaseManagement({ flash }: any) {
           load();
           clearSelectedFile();
           setBusy(false);
+          setRestoring(false);
           window.setTimeout(() => setRestoreJob(null), 2000);
         } catch {
           if (!settled && Date.now() >= deadline) {
@@ -591,6 +594,7 @@ function DatabaseManagement({ flash }: any) {
             });
             flash('Restore staged. Give it a bit longer, then refresh — or restart manually: sudo systemctl restart mt-billing-api');
             setBusy(false);
+            setRestoring(false);
           }
         }
       };
@@ -607,6 +611,7 @@ function DatabaseManagement({ flash }: any) {
       setRestoreJob({ fileName: selectedFile.name, phase: 'error', error: msg });
       flash(msg);
       setBusy(false);
+      setRestoring(false);
     }
   };
 
@@ -846,7 +851,7 @@ function DatabaseManagement({ flash }: any) {
             onClick={restore}
             disabled={busy || selectedFile?.status !== 'ready'}
           >
-            <Upload size={16} className={busy ? 'animate-pulse' : ''} /> {busy ? 'Restoring…' : 'Upload & Restore'}
+            <Upload size={16} className={restoring ? 'animate-pulse' : ''} /> {restoring ? 'Restoring…' : 'Upload & Restore'}
           </button>
         </div>
 
