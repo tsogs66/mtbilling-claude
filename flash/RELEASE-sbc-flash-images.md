@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `2da0a1c4844d4f97f55bfee09d023dcc284160e4e6c91976b7bc38cfc4e088a3` | 2026-07-30 | Fresh Wyse-ready USB installer: MMC modules, apt-lock wait, reuse partitions, unattended-upgrades off |
+| `mt-billing-pc-usb-amd64.img.xz` | `a21a2125bf05d8e356b185c7f7c63b7fbdf6c1a7783249a6a4869b8dc855390d` | 2026-07-30 | Includes #41 GRUB-failure guards + Wyse MMC/nomodeset/apt-lock/partition-reuse |
 
 Rebuild and publish PC USB installer:
 
