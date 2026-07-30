@@ -53,6 +53,12 @@ export default function CloudflareAccess() {
         cf_tunnel_url: r.data.url || r.data.cf_tunnel_url,
         public_base_url: r.data.public_base_url ?? s?.public_base_url,
       }));
+      // A stale "Apply failed" banner from an earlier client-side error (e.g. a
+      // request that outran a proxy/browser timeout while the install script
+      // kept running and finished successfully server-side) is just wrong once
+      // we've confirmed the tunnel is actually up — clear it rather than leave
+      // contradictory info on screen next to a "running" badge.
+      if (r.data.status === 'running') setBanner('');
       await loadPublic();
     } catch {
       /* ignore */
@@ -79,6 +85,11 @@ export default function CloudflareAccess() {
         e?.response?.data?.error ||
             'Apply failed. One-time SSH fix: sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh — then retry from this page (no SSH after that).'
       );
+      // The install script (apt-get installs, cloudflared install, token probe,
+      // service start) can outrun a proxy/browser timeout even when it goes on
+      // to finish successfully. Re-check shortly after so a genuinely-successful
+      // install doesn't sit behind a wrongly-shown failure banner.
+      window.setTimeout(() => { refreshStatus(); }, 4000);
     } finally {
       setBusy(false);
     }
