@@ -133,7 +133,34 @@ release_disk() {
 
 release_disk "$TARGET_DISK"
 
-apt-get update -qq
+wait_for_apt() {
+  local i locks
+  locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+  log "Waiting for apt/dpkg locks (unattended-upgrades often holds them on first boot)…"
+  for i in $(seq 1 180); do
+    if ! fuser "${locks[@]}" >/dev/null 2>&1 \
+      && ! pgrep -x apt-get >/dev/null 2>&1 \
+      && ! pgrep -x apt >/dev/null 2>&1 \
+      && ! pgrep -x dpkg >/dev/null 2>&1 \
+      && ! pgrep -f unattended-upgrade >/dev/null 2>&1; then
+      return 0
+    fi
+    if (( i % 15 == 0 )); then
+      log "  still waiting for apt lock… (${i}s)"
+    fi
+    sleep 1
+  done
+  log "WARNING: apt still busy after 180s — stopping unattended-upgrades / apt…"
+  systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+  killall -9 apt-get apt dpkg unattended-upgrade 2>/dev/null || true
+  rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock 2>/dev/null || true
+  dpkg --configure -a 2>/dev/null || true
+  sleep 2
+}
+
+wait_for_apt
+apt-get update -qq || { wait_for_apt; apt-get update -qq; }
+wait_for_apt
 apt-get install -y -qq parted gdisk e2fsprogs dosfstools rsync grub-efi-amd64 grub-efi-amd64-bin \
   efibootmgr util-linux 2>&1 | tail -20
 
