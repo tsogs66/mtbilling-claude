@@ -1035,8 +1035,13 @@ build_one() {
 
   local artifacts=("$raw")
   if [[ "$COMPRESS" -eq 1 ]]; then
-    echo "Compressing with xz (this may take a few minutes)…"
-    xz -T0 -f -k "$raw"
+    echo "Compressing with xz (this may take a while — single-threaded for compatibility)…"
+    # -T0 (multi-threaded) splits the stream into one independent block per thread
+    # chunk — spec-valid and fine for `xz`/`7z`/Rufus, but Balena Etcher's bundled
+    # decompressor has known trouble with multi-block .xz files and fails to flash
+    # them. Single-threaded always produces one block; slower to build, but every
+    # flashing tool can read it.
+    xz -T1 -f -k "$raw"
     artifacts+=("$raw.xz")
     if [[ "$KEEP_RAW" -eq 0 ]]; then
       rm -f "$raw"
