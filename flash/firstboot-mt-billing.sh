@@ -165,7 +165,7 @@ echo "[1/9] Installing OS packages…"
 apt-get update -y
 apt-get install -y \
   curl git ca-certificates openssl build-essential python3 \
-  libsqlite3-dev nginx xz-utils
+  libsqlite3-dev sqlite3 nginx xz-utils
 
 install_nodejs
 

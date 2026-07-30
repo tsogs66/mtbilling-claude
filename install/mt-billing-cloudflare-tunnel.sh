@@ -95,6 +95,22 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+# The Node app talks to SQLite via the bundled better-sqlite3 native addon —
+# it never needs the `sqlite3` CLI. This script does (read_from_db,
+# set_public_base_url, set_db_status, do_status all shell out to it), but
+# flash images only ever apt-get install libsqlite3-dev (headers, needed to
+# build better-sqlite3), not the `sqlite3` package itself. Result: every
+# --from-db call fails with "Cannot read settings from DB" even though the DB
+# file is right there and the panel is clearly running. Self-install it here,
+# the same way install_cloudflared() below self-installs cloudflared, so
+# existing machines heal by just re-fetching this script (no image rebuild).
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  log_info "Installing sqlite3 (CLI, required to read/write MT-Billing settings)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || true
+  apt-get install -y -qq sqlite3 || log_warn "Could not install sqlite3 — --from-db options will fail"
+fi
+
 normalize_host() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's|^https\?://||' -e 's|/.*||' -e 's|:.*||' -e 's/\.$//'
 }

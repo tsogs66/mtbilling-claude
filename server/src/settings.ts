@@ -147,6 +147,14 @@ function cloudflareTunnelScript(): string {
   return CF_TUNNEL_SCRIPT;
 }
 
+// install/*.sh log helpers (log_err etc.) colorize with ANSI SGR codes for a
+// terminal; strip them here so script output shown in the panel UI doesn't
+// render as raw "[1;31m[ERROR][0m ...".
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const script = cloudflareTunnelScript();
@@ -180,7 +188,7 @@ function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: st
           runNext(i + 1);
           return;
         }
-        resolve({ code: code ?? 1, stdout, stderr });
+        resolve({ code: code ?? 1, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr) });
       });
     };
     runNext(0);
