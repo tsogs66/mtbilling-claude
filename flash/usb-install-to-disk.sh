@@ -330,15 +330,30 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
 apt-get install -y -qq grub-efi-amd64 grub-efi-amd64-bin efibootmgr || true
-# Wyse 3040 firmware only honors the removable/fallback path EFI/BOOT/BOOTX64.EFI, so
-# that is the call that matters most — but under `set -e` an unguarded failure here
-# would abort this whole chroot script and skip the fallback call, update-grub, and
-# sync, leaving the outer installer's own `set -e` to abort too and skip cleanup +
-# poweroff. Guard both calls so a GRUB hiccup never strands the machine mid-install.
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck --removable \
-  && echo "grub-install --removable: OK" || echo "WARNING: grub-install --removable failed"
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck \
-  && echo "grub-install (NVRAM): OK" || echo "WARNING: grub-install (NVRAM) failed"
+# Install GRUB exactly once. Running grub-install twice against the same
+# --boot-directory=/boot (once --removable, once for NVRAM) had both invocations
+# writing /boot/grub/x86_64-efi/*.mod independently — if the second call (NVRAM
+# registration via efibootmgr) failed partway, e.g. because this chroot has no
+# efivarfs mounted, it could leave that module directory partially overwritten
+# and incomplete. Result: grub.cfg present and correct, but GRUB dropping to the
+# `grub>` rescue shell at boot because `insmod normal` can't find normal.mod —
+# seen in the field on a Wyse 3040 despite the install otherwise completing
+# cleanly. Install once, then copy the resulting binary to the fixed fallback
+# path Wyse 3040 (and most thin-client) firmware actually boots from — that's
+# the standard way to support both NVRAM and fallback boot without a second
+# grub-install run touching the same files.
+if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck; then
+  echo "grub-install: OK"
+else
+  echo "WARNING: grub-install failed"
+fi
+if [[ -f /boot/efi/EFI/ubuntu/grubx64.efi ]]; then
+  mkdir -p /boot/efi/EFI/BOOT
+  cp -f /boot/efi/EFI/ubuntu/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
+  echo "Copied grubx64.efi to removable fallback path EFI/BOOT/BOOTX64.EFI"
+else
+  echo "WARNING: /boot/efi/EFI/ubuntu/grubx64.efi missing after grub-install — no binary to copy to the fallback path."
+fi
 if [[ -f /boot/efi/EFI/BOOT/BOOTX64.EFI || -f /boot/efi/EFI/ubuntu/grubx64.efi ]]; then
   echo "GRUB binaries present on ESP."
 else
