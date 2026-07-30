@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `a21a2125bf05d8e356b185c7f7c63b7fbdf6c1a7783249a6a4869b8dc855390d` | 2026-07-30 | Includes #41 GRUB-failure guards + Wyse MMC/nomodeset/apt-lock/partition-reuse |
+| `mt-billing-pc-usb-amd64.img.xz` | `bc09e4f777b7af4f412b3e8c8bf7aded08142ee4e53f8c48e6aebcae192e98af` | 2026-07-30 | #42 single-block xz (Etcher) + #43 single grub-install + Wyse fixes |
 
 Rebuild and publish PC USB installer:
 
