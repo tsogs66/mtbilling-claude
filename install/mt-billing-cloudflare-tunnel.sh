@@ -525,8 +525,18 @@ do_apply() {
   do_start
 
   if systemctl is-active --quiet mt-billing-api 2>/dev/null; then
-    log_info "Restarting mt-billing-api to load PUBLIC_BASE_URL"
-    systemctl restart mt-billing-api || true
+    # This script itself was invoked (via sudo) BY mt-billing-api handling the
+    # panel's HTTP request — a synchronous `systemctl restart mt-billing-api`
+    # here kills that same process before it can send its response, so nginx
+    # sees "upstream prematurely closed connection" and the panel shows a
+    # generic "Apply failed" even though everything above succeeded. Defer the
+    # restart a couple of seconds via a transient systemd timer, decoupled
+    # from this process tree, so the response goes out first.
+    log_info "Scheduling mt-billing-api restart (to load PUBLIC_BASE_URL) in 2s"
+    if ! systemd-run --on-active=2 --unit="mt-billing-api-restart-deferred-$$" \
+        systemctl restart mt-billing-api >/dev/null 2>&1; then
+      log_warn "Could not schedule deferred restart; PUBLIC_BASE_URL may need a manual: systemctl restart mt-billing-api"
+    fi
   fi
 
   echo
