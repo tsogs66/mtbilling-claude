@@ -138,7 +138,6 @@ apt-get install -y -qq parted gdisk e2fsprogs dosfstools rsync grub-efi-amd64 gr
   efibootmgr util-linux 2>&1 | tail -20
 
 release_disk "$TARGET_DISK"
-wipefs -a "$TARGET_DISK" 2>/dev/null || true
 
 # Prefer sgdisk for GPT on eMMC; fall back to parted. If a previous attempt
 # already created our 512MiB ESP + root layout, skip repartition (avoids the
@@ -166,6 +165,7 @@ fi
 
 if [[ "$reuse_parts" -ne 1 ]]; then
   log "Partitioning $TARGET_DISK (GPT: EFI 512MiB + root)…"
+  wipefs -a "$TARGET_DISK" 2>/dev/null || true
   sgdisk --zap-all "$TARGET_DISK" 2>/dev/null || true
   partx -d "$TARGET_DISK" 2>/dev/null || true
   blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
