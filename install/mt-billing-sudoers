@@ -18,8 +18,17 @@ __SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-u
 __SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-update.sh
 __SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-self-update.sh
 __SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-self-update.sh
+# Sudoers command entries with NO trailing argument token only match an
+# invocation with zero arguments (confirmed on sudo 1.9.15p5: a bare-path rule
+# denies `... cloudflare-tunnel.sh status`, only allows the exact zero-arg
+# form). It does NOT mean "any arguments" — that requires an explicit trailing
+# wildcard. The panel always calls this script with args (apply/start/stop/
+# status/uninstall, --from-db, --token, --hostname, --port), so keep both the
+# bare form (harmless/unused but cheap) and a wildcard form.
 __SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh
 __SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh *
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh *
 __SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-grant-updater-root.sh
 __SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-grant-updater-root.sh
 __SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-fix-now.sh
