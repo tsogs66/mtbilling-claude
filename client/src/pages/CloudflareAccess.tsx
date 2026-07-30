@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
-import { Cloud, Copy, ExternalLink, Globe2, RefreshCw, Save } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Cloud, Copy, ExternalLink, Globe2, Loader2, RefreshCw, Save } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, Flash, FormField, LoadingPage, StatusBadge } from '../components/ui';
+import { Card, Flash, FormField, LoadingPage, Progress, StatusBadge } from '../components/ui';
 import { api } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
+
+type TunnelJob = { action: string; log: string; running: boolean; code: number | null; startedAt: number };
 
 /**
  * Dedicated Cloudflare Tunnel setup: connector token + public website access link
@@ -18,6 +20,23 @@ export default function CloudflareAccess() {
   const [source, setSource] = useState('none');
   const [warning, setWarning] = useState<string | null>(null);
   const [cloudflareUrl, setCloudflareUrl] = useState<string | null>(null);
+  const [job, setJob] = useState<TunnelJob | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const jobPollRef = useRef<number | null>(null);
+  const logRef = useRef<HTMLPreElement | null>(null);
+
+  const stopJobPoll = () => {
+    if (jobPollRef.current != null) {
+      window.clearInterval(jobPollRef.current);
+      jobPollRef.current = null;
+    }
+  };
+
+  useEffect(() => stopJobPoll, []);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [job?.log]);
 
   const flash = (m: string) => {
     setBanner(m);
@@ -72,23 +91,68 @@ export default function CloudflareAccess() {
     return r.data;
   };
 
+  // apply/start/stop now run as a background job on the server (they can take
+  // anywhere from a few seconds to ~30-90s — apt-get installs, cloudflared
+  // install, token probe, cloudflared's own graceful-shutdown grace period on
+  // stop). Poll for live progress instead of blocking on one long request.
+  const pollJob = (action: string) => {
+    stopJobPoll();
+    const startedAt = Date.now();
+    setJob({ action, log: '', running: true, code: null, startedAt });
+    setElapsed(0);
+
+    const tick = async () => {
+      try {
+        const r = await api.get('/cloudflare-tunnel/job');
+        setElapsed(Math.round((Date.now() - startedAt) / 1000));
+        setJob((j) => (j ? { ...j, log: r.data.log || '' } : j));
+        if (!r.data.running) {
+          stopJobPoll();
+          const code = r.data.code;
+          setJob((j) => (j ? { ...j, running: false, code } : j));
+          const ok = code === 0;
+          flash(
+            ok
+              ? action === 'stop'
+                ? 'Tunnel stopped.'
+                : 'Cloudflare Tunnel is running.'
+              : `${action === 'stop' ? 'Stop' : action === 'start' ? 'Start' : 'Apply'} failed (exit ${code}). See details below.`
+          );
+          await refreshStatus();
+          load();
+          if (ok) {
+            window.setTimeout(() => setJob((j) => (j && !j.running ? null : j)), 4000);
+          }
+        }
+      } catch {
+        /* transient network hiccup — keep polling */
+      }
+    };
+
+    void tick();
+    jobPollRef.current = window.setInterval(() => { void tick(); }, 1200);
+  };
+
   const apply = async () => {
     setBusy(true);
     try {
       await saveSettings(token ? { cf_tunnel_token: token } : {});
       const r = await api.post('/cloudflare-tunnel/apply');
-      flash(r.data.url ? `Tunnel running at ${r.data.url}` : 'Cloudflare Tunnel applied.');
       setToken('');
-      load();
+      if (r.data.started) {
+        pollJob('apply');
+      } else {
+        flash(r.data.url ? `Tunnel running at ${r.data.url}` : 'Cloudflare Tunnel applied.');
+        load();
+      }
     } catch (e: any) {
       flash(
         e?.response?.data?.error ||
             'Apply failed. One-time SSH fix: sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh — then retry from this page (no SSH after that).'
       );
-      // The install script (apt-get installs, cloudflared install, token probe,
-      // service start) can outrun a proxy/browser timeout even when it goes on
-      // to finish successfully. Re-check shortly after so a genuinely-successful
-      // install doesn't sit behind a wrongly-shown failure banner.
+      // The install script can outrun a proxy/browser timeout even when it
+      // goes on to finish successfully. Re-check shortly after so a
+      // genuinely-successful install doesn't sit behind a false failure.
       window.setTimeout(() => { refreshStatus(); }, 4000);
     } finally {
       setBusy(false);
@@ -98,9 +162,14 @@ export default function CloudflareAccess() {
   const toggle = async () => {
     setBusy(true);
     try {
+      const willStart = app.cf_tunnel_status !== 'running';
       const r = await api.post('/cloudflare-tunnel/toggle');
-      flash(r.data.status === 'running' ? `Tunnel started: ${r.data.url}` : 'Tunnel stopped.');
-      load();
+      if (r.data.started) {
+        pollJob(willStart ? 'start' : 'stop');
+      } else {
+        flash(r.data.status === 'running' ? `Tunnel started: ${r.data.url}` : 'Tunnel stopped.');
+        load();
+      }
     } catch (e: any) {
       flash(e?.response?.data?.error || 'Failed to toggle Cloudflare Tunnel.');
     } finally {
@@ -263,14 +332,49 @@ export default function CloudflareAccess() {
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <StatusBadge status={status} />
-            <button type="button" className="btn-secondary text-xs py-1.5" onClick={refreshStatus} disabled={busy}>
+            <button type="button" className="btn-secondary text-xs py-1.5" onClick={refreshStatus} disabled={busy || !!job}>
               <RefreshCw size={14} />
             </button>
-            <button type="button" className="btn-primary" onClick={toggle} disabled={busy}>
+            <button type="button" className="btn-primary" onClick={toggle} disabled={busy || !!job}>
               {app.cf_tunnel_status === 'running' ? 'Stop' : 'Start'} Tunnel
             </button>
           </div>
         </div>
+
+        {job && (
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 mb-4">
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-700 min-w-0">
+                {job.running && <Loader2 size={15} className="animate-spin text-brand-600 shrink-0" />}
+                <span className="truncate">
+                  {job.running
+                    ? `${job.action === 'stop' ? 'Stopping' : job.action === 'start' ? 'Starting' : 'Installing & starting'} Cloudflare Tunnel…`
+                    : job.code === 0
+                      ? 'Done.'
+                      : `Failed (exit ${job.code}).`}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-slate-400 font-mono">{elapsed}s</span>
+                {!job.running && (
+                  <button type="button" className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setJob(null)}>
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            </div>
+            <Progress
+              value={job.running ? Math.min(92, elapsed * 3) : 100}
+              color={!job.running && job.code !== 0 ? 'bg-rose-500' : undefined}
+            />
+            <pre
+              ref={logRef}
+              className="mt-3 max-h-40 overflow-auto rounded-lg bg-slate-950 text-slate-300 text-[11px] leading-relaxed font-mono p-3 whitespace-pre-wrap break-words"
+            >
+              {job.log || 'Waiting for output…'}
+            </pre>
+          </div>
+        )}
 
         <div className="space-y-4 max-w-2xl">
           <FormField label={`Tunnel token${app.cf_tunnel_token_set ? ' (saved)' : ''}`}>
@@ -325,7 +429,7 @@ export default function CloudflareAccess() {
             <button
               type="button"
               className="btn-secondary"
-              disabled={busy}
+              disabled={busy || !!job}
               onClick={async () => {
                 setBusy(true);
                 try {
@@ -354,8 +458,8 @@ export default function CloudflareAccess() {
             >
               <Save size={16} /> Save token & settings
             </button>
-            <button type="button" className="btn-primary" disabled={busy} onClick={apply}>
-              {busy ? 'Working…' : 'Install & start tunnel'}
+            <button type="button" className="btn-primary" disabled={busy || !!job} onClick={apply}>
+              {busy ? 'Starting…' : job ? 'Working…' : 'Install & start tunnel'}
             </button>
           </div>
         </div>
