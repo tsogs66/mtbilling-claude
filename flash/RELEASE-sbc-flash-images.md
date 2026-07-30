@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `185fe057fba1e05760e8ba078947c0c27c1fbeddb09964660cb9f15ed675a0ab` | 2026-07-29 | Bake `linux-modules-extra` so Wyse eMMC (`mmcblk0`) is visible |
+| `mt-billing-pc-usb-amd64.img.xz` | `2da0a1c4844d4f97f55bfee09d023dcc284160e4e6c91976b7bc38cfc4e088a3` | 2026-07-30 | Fresh Wyse-ready USB installer: MMC modules, apt-lock wait, reuse partitions, unattended-upgrades off |
 
 Rebuild and publish PC USB installer:
 
