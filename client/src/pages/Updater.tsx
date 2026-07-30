@@ -108,6 +108,11 @@ export default function Updater() {
       to: to || targetShaRef.current || undefined,
     });
     load();
+    // The update just replaced the frontend build this page's JS came from —
+    // reload so the browser picks up the new bundle instead of running stale
+    // code until the next manual refresh. Give the success message a moment
+    // to be seen before it happens automatically.
+    window.setTimeout(() => window.location.reload(), 3000);
   };
 
   const finishFailed = (detail: string) => {
@@ -298,10 +303,15 @@ export default function Updater() {
   };
 
   const dismissResult = () => {
+    if (result?.title === 'Update complete') {
+      // Reload now rather than waiting for the scheduled one in finishSuccess.
+      window.location.reload();
+      return;
+    }
     setPhase('idle');
     setResult(null);
     setStatusText('');
-    setMsg(result?.title === 'Update complete' ? 'Panel updated successfully.' : '');
+    setMsg('');
   };
 
   if (!info && !err) return <Layout title="Updater"><LoadingPage /></Layout>;

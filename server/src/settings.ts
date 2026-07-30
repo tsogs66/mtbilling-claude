@@ -5,7 +5,7 @@ import path from 'path';
 import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
-import { db, backupsDir, dbPath } from './db.js';
+import { db, backupsDir, dbPath, dataDir } from './db.js';
 import { probeRouter } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
@@ -195,6 +195,81 @@ function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: st
   });
 }
 
+// apply/start/stop can take anywhere from a few seconds to ~30-90s (apt-get
+// installs, cloudflared install, token probe, cloudflared's own graceful
+// shutdown grace period on stop) — far too long for a plain blocking
+// request/response to be good UX. Run these as a background job instead,
+// writing live output to a small log file, so the panel can show real
+// progress via polling instead of just a frozen "Working…" button.
+const CF_JOB_LOG = path.join(dataDir, 'cloudflare-tunnel-ui.log');
+let cfJob: { running: boolean; action: string; code: number | null; startedAt: number } = {
+  running: false,
+  action: '',
+  code: null,
+  startedAt: 0,
+};
+
+function startCloudflareJob(
+  args: string[],
+  actionLabel: string,
+  onDone: (code: number) => void
+): { ok: boolean; error?: string } {
+  if (cfJob.running) {
+    return { ok: false, error: `A Cloudflare Tunnel operation (${cfJob.action}) is already running.` };
+  }
+  const script = cloudflareTunnelScript();
+  cfJob = { running: true, action: actionLabel, code: null, startedAt: Date.now() };
+  try {
+    fs.writeFileSync(CF_JOB_LOG, `$ sudo bash ${script} ${args.join(' ')}\n`);
+  } catch {
+    /* best-effort — job still runs without a visible log */
+  }
+
+  const tryCmds = [
+    ['sudo', ['-n', '/bin/bash', script, ...args]],
+    ['sudo', ['-n', '/usr/bin/bash', script, ...args]],
+  ] as [string, string[]][];
+
+  const appendLog = (s: string) => {
+    try { fs.appendFileSync(CF_JOB_LOG, stripAnsi(s)); } catch { /* ignore */ }
+  };
+
+  const runNext = (i: number) => {
+    if (i >= tryCmds.length) {
+      appendLog(
+        '\nCould not run Cloudflare Tunnel helper. One-time fix (SSH once): sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh — then retry from the panel (no SSH needed after that).\n'
+      );
+      cfJob = { ...cfJob, running: false, code: 127 };
+      onDone(127);
+      return;
+    }
+    const [cmd, cmdArgs] = tryCmds[i];
+    const child = spawn(cmd, cmdArgs, { env: process.env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => { const s = String(d); stdout += s; appendLog(s); });
+    child.stderr?.on('data', (d) => { const s = String(d); stderr += s; appendLog(s); });
+    child.on('error', () => runNext(i + 1));
+    child.on('close', (code) => {
+      if (i === 0 && code !== 0 && /password is required|a password is required|not allowed|No such file/i.test(stderr + stdout)) {
+        runNext(i + 1);
+        return;
+      }
+      const finalCode = code ?? 1;
+      cfJob = { ...cfJob, running: false, code: finalCode };
+      onDone(finalCode);
+    });
+  };
+  runNext(0);
+  return { ok: true };
+}
+
+settingsRouter.get('/cloudflare-tunnel/job', (_req, res) => {
+  let log = '';
+  try { log = fs.readFileSync(CF_JOB_LOG, 'utf8').slice(-8000); } catch { /* no job has run yet */ }
+  res.json({ running: cfJob.running, action: cfJob.action, code: cfJob.code, startedAt: cfJob.startedAt, log });
+});
+
 function parseTunnelStatusOutput(stdout: string): { status: string; url: string } {
   const status = (stdout.match(/^status=(.+)$/m) || [])[1]?.trim() || 'stopped';
   const url = (stdout.match(/^url=(.*)$/m) || [])[1]?.trim() || '';
@@ -226,31 +301,28 @@ settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
   if (!s.cf_tunnel_hostname) {
     return res.status(400).json({ error: 'Set the public hostname (e.g. pay.yourisp.com) first.' });
   }
-  const result = await runCloudflareTunnel(['--from-db', 'apply']);
-  if (result.code !== 0) {
-    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-      'error',
-      'cloudflare',
-      `Tunnel apply failed: ${(result.stderr || result.stdout || 'unknown').slice(0, 500)}`
-    );
-    return res.status(500).json({
-      error: result.stderr?.trim() || result.stdout?.trim() || 'Cloudflare Tunnel apply failed',
-      output: (result.stdout + '\n' + result.stderr).trim(),
-    });
-  }
   const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
-  db.prepare(
-    `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
-       public_base_url = ? WHERE id = 1`
-  ).run(url, url);
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-    'info',
-    'cloudflare',
-    `Tunnel applied for ${s.cf_tunnel_hostname}`
-  );
-  const status = await runCloudflareTunnel(['status']);
-  const parsed = status.code === 0 ? parseTunnelStatusOutput(status.stdout) : { status: 'running', url };
-  res.json({ ok: true, ...parsed, ...publicApp(), output: result.stdout.trim() });
+  const started = startCloudflareJob(['--from-db', 'apply'], 'apply', (code) => {
+    if (code === 0) {
+      db.prepare(
+        `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
+           public_base_url = ? WHERE id = 1`
+      ).run(url, url);
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'cloudflare',
+        `Tunnel applied for ${s.cf_tunnel_hostname}`
+      );
+    } else {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'error',
+        'cloudflare',
+        `Tunnel apply failed (exit ${code})`
+      );
+    }
+  });
+  if (!started.ok) return res.status(409).json({ error: started.error });
+  res.json({ ok: true, started: true });
 });
 
 settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
@@ -263,33 +335,39 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
     if (!s.cf_tunnel_hostname) {
       return res.status(400).json({ error: 'Set the public hostname first.' });
     }
-    // Prefer full apply (install unit if missing), else start
-    let result = await runCloudflareTunnel(['--from-db', 'apply']);
-    if (result.code !== 0) {
-      result = await runCloudflareTunnel(['--from-db', 'start']);
-    }
-    if (result.code !== 0) {
-      return res.status(500).json({
-        error: result.stderr?.trim() || result.stdout?.trim() || 'Failed to start Cloudflare Tunnel',
-        output: (result.stdout + '\n' + result.stderr).trim(),
-      });
-    }
     const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
-    db.prepare(
-      `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
-         public_base_url = ? WHERE id = 1`
-    ).run(url, url);
-    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', `Tunnel started at ${url}`);
-    return res.json({ status: 'running', url, ...publicApp() });
+    const onStarted = (code: number) => {
+      if (code === 0) {
+        db.prepare(
+          `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
+             public_base_url = ? WHERE id = 1`
+        ).run(url, url);
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', `Tunnel started at ${url}`);
+      } else {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('error', 'cloudflare', `Tunnel start failed (exit ${code})`);
+      }
+    };
+    // Prefer full apply (installs the unit if missing); fall back to a plain
+    // start if apply itself fails (e.g. unit already configured correctly).
+    const started = startCloudflareJob(['--from-db', 'apply'], 'start', (code) => {
+      if (code === 0) { onStarted(0); return; }
+      const retried = startCloudflareJob(['--from-db', 'start'], 'start', onStarted);
+      if (!retried.ok) onStarted(code);
+    });
+    if (!started.ok) return res.status(409).json({ error: started.error });
+    return res.json({ ok: true, started: true });
   }
 
-  const result = await runCloudflareTunnel(['stop']);
-  if (result.code !== 0) {
-    // Still mark stopped in DB if unit missing
+  const started = startCloudflareJob(['stop'], 'stop', (code) => {
     db.prepare(`UPDATE app_settings SET cf_tunnel_status = 'stopped', cf_tunnel_enabled = 0 WHERE id = 1`).run();
-  }
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', 'Tunnel stopped');
-  res.json({ status: 'stopped', url: null, ...publicApp() });
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'info',
+      'cloudflare',
+      code === 0 ? 'Tunnel stopped' : `Tunnel stop finished with exit ${code}`
+    );
+  });
+  if (!started.ok) return res.status(409).json({ error: started.error });
+  res.json({ ok: true, started: true });
 });
 
 // ---------- Database management ----------
