@@ -359,7 +359,53 @@ if [[ -f /boot/efi/EFI/BOOT/BOOTX64.EFI || -f /boot/efi/EFI/ubuntu/grubx64.efi ]
 else
   echo "WARNING: no GRUB binaries found on ESP after grub-install — internal disk may not boot."
 fi
-update-grub || echo "WARNING: update-grub failed"
+
+# "grub-install: OK" doesn't guarantee the module set actually landed on disk.
+# Field report: grub.cfg present and correct, GRUB's EFI stub loads fine from
+# firmware, but `insmod normal` fails with "no such file" and drops to a
+# rescue shell — meaning /boot/grub/x86_64-efi/ is missing files despite
+# grub-install reporting success. Verify normal.mod directly and, if it's not
+# there, copy the module set straight from this system's own compiled GRUB
+# install instead of trusting grub-install's copy step blindly.
+if [[ ! -f /boot/grub/x86_64-efi/normal.mod ]]; then
+  echo "WARNING: /boot/grub/x86_64-efi/normal.mod missing after grub-install; copying modules directly from /usr/lib/grub/x86_64-efi/"
+  mkdir -p /boot/grub/x86_64-efi
+  cp -f /usr/lib/grub/x86_64-efi/*.mod /boot/grub/x86_64-efi/ 2>/dev/null || true
+  cp -f /usr/lib/grub/x86_64-efi/*.lst /boot/grub/x86_64-efi/ 2>/dev/null || true
+fi
+if [[ -f /boot/grub/x86_64-efi/normal.mod ]]; then
+  echo "normal.mod present: OK"
+else
+  echo "WARNING: normal.mod still missing after fallback copy — /usr/lib/grub/x86_64-efi/ likely doesn't exist on this system (grub-efi-amd64-bin may not have installed correctly)."
+fi
+
+# Deliberately skip update-grub/grub-mkconfig here — same reasoning as the USB
+# stick's own build (see build-sbc-flash-image.sh, inject_pc_thin_client_boot):
+# grub-probe can't reliably resolve the root device from inside a chroot, so
+# grub-mkconfig silently emits a boot menu with zero OS entries instead of
+# erroring. Write a minimal, self-contained grub.cfg by hand instead, using
+# the ext4 label this same script already sets at mkfs time — no device
+# detection needed. Matches the manual recovery sequence confirmed working in
+# the field (search/set root, linux, initrd, boot).
+mkdir -p /boot/grub
+cat > /boot/grub/grub.cfg <<'CFG'
+set timeout=5
+set default=0
+
+menuentry 'MT-Billing' {
+  insmod part_gpt
+  insmod fat
+  insmod ext2
+  search --no-floppy --label mtbilling --set=root
+  linux /boot/vmlinuz root=LABEL=mtbilling ro nomodeset i915.modeset=0 i915.alpha_support=1 i915.fastboot=0 modprobe.blacklist=i915 plymouth.enable=0 loglevel=4
+  initrd /boot/initrd.img
+}
+CFG
+if grep -q '^[[:space:]]*linux[[:space:]]' /boot/grub/grub.cfg; then
+  echo "Wrote self-contained grub.cfg (label-based, no grub-probe needed): OK"
+else
+  echo "WARNING: failed to write grub.cfg"
+fi
 sync
 GRUB
 chmod +x "$TARGET_MNT/tmp/install-grub.sh"
