@@ -299,6 +299,13 @@ patch_grub_cfg_kernel_args() {
   local tmp patched=0 ec=0
   tmp="$(mktemp)"
   # shellcheck disable=SC2016
+  # The intentional exit(10)/exit(0) below signals "patched?" back to bash via
+  # $? — but under `set -e`, a bare non-zero exit from ANY simple command
+  # aborts the whole script before the `ec=$?` line even runs (this doesn't
+  # need patched=1 to be "an error", it just needs to happen once — which it
+  # will, on any real grub.cfg that doesn't already have nomodeset). Guard
+  # with `&& ec=0 || ec=$?` so the compound always itself returns 0 while
+  # still capturing awk's real exit code for the checks below.
   awk -v args="$args" '
     BEGIN { patched = 0 }
     /^[[:space:]]*linux(efi)?[[:space:]]/ {
@@ -312,8 +319,7 @@ patch_grub_cfg_kernel_args() {
     }
     { print }
     END { exit(patched ? 10 : 0) }
-  ' "$f" >"$tmp"
-  ec=$?
+  ' "$f" >"$tmp" && ec=0 || ec=$?
   if [[ "$ec" -eq 10 ]]; then
     cat "$tmp" >"$f"
     patched=1
@@ -401,42 +407,28 @@ EOF
 
   patch_efi_grub_via_mtools "$img" "$boot_off" "$args"
 
-  # Prefer a direct grub.cfg patch over update-grub: Ubuntu cloud images keep
-  # kernels + grub.cfg on XBOOTLDR (/boot), and chroot update-grub often writes
-  # to the wrong place or no-ops when that partition is not mounted.
-  if [[ -f "$root_mnt/boot/grub/grub.cfg" ]]; then
-    if grep -E '^[[:space:]]*linux(efi)?[[:space:]]' "$root_mnt/boot/grub/grub.cfg" \
-      | grep -v recovery | grep -q 'nomodeset'; then
-      echo "PC thin-client: default GRUB entries include nomodeset (${args})"
-      return 0
-    fi
+  # Deliberately never call update-grub/grub-mkconfig here. Ubuntu cloud images
+  # already ship a fully-populated /boot/grub/grub.cfg (XBOOTLDR) with working
+  # Ubuntu/Ubuntu-advanced/recovery menuentries using root=LABEL=cloudimg-rootfs
+  # — confirmed by diffing a pristine cached base image against our own output.
+  # grub-mkconfig's 10_linux generator relies on grub-probe to resolve the root
+  # device, and grub-probe cannot do that correctly from inside a chroot on a
+  # loop-mounted image built offline (chroot doesn't create a new mount
+  # namespace, so /proc/self/mountinfo inside the chroot still reports the
+  # outer host's paths, not "/"). grub-mkconfig doesn't error when grub-probe
+  # fails — it just silently emits an empty 10_linux block — so a prior version
+  # of this script ran update-grub "successfully" while actually replacing a
+  # perfectly good, pre-existing grub.cfg with one containing zero bootable OS
+  # entries (only the "UEFI Firmware Settings" entry survived, since that one
+  # doesn't need device detection). The firmware then had nothing to boot but
+  # a shortcut into BIOS setup. Just patch our kernel args into the existing,
+  # working config instead — already done above via patch_grub_cfg_kernel_args.
+  if [[ -f "$root_mnt/boot/grub/grub.cfg" ]] \
+    && grep -qE '^[[:space:]]*linux(efi)?[[:space:]]' "$root_mnt/boot/grub/grub.cfg"; then
+    echo "PC thin-client: kernel cmdline includes: ${args}"
+  else
+    echo "WARNING: $root_mnt/boot/grub/grub.cfg has no linux/linuxefi entries after patching — the built image may not boot. Investigate before publishing." >&2
   fi
-
-  if [[ ! -x "$root_mnt/usr/sbin/update-grub" ]]; then
-    echo "PC thin-client: patched grub.cfg files (update-grub not present in image)."
-    return 0
-  fi
-
-  echo "PC thin-client: running update-grub inside image…"
-  mount --bind /dev "$root_mnt/dev"
-  mount -t proc proc "$root_mnt/proc"
-  mount -t sysfs sysfs "$root_mnt/sys"
-  mount -t devpts devpts "$root_mnt/dev/pts" 2>/dev/null || true
-  if [[ -n "$boot_mnt" && -d "$boot_mnt" ]]; then
-    mkdir -p "$root_mnt/boot/efi"
-    if ! mountpoint -q "$root_mnt/boot/efi" 2>/dev/null; then
-      mount --bind "$boot_mnt" "$root_mnt/boot/efi" || true
-    fi
-  fi
-  chroot "$root_mnt" /usr/sbin/update-grub || chroot "$root_mnt" /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg || true
-  # Re-patch after update-grub in case it regenerated without our args.
-  patch_grub_cfg_kernel_args "$root_mnt/boot/grub/grub.cfg" "$args"
-  umount "$root_mnt/dev/pts" 2>/dev/null || true
-  umount "$root_mnt/boot/efi" 2>/dev/null || true
-  umount "$root_mnt/sys"
-  umount "$root_mnt/proc"
-  umount "$root_mnt/dev"
-  echo "PC thin-client: kernel cmdline includes: ${args}"
 }
 
 # Ubuntu cloud/virtual images omit MMC/SDHCI modules; Dell Wyse 3040 eMMC needs them.
@@ -480,12 +472,22 @@ inject_pc_emmc_modules() {
     mount -t sysfs sysfs "$root_mnt/sys"
     cp -f "$deb_extra" "$root_mnt/tmp/linux-modules-extra.deb"
     [[ -f "$deb_regdb" ]] && cp -f "$deb_regdb" "$root_mnt/tmp/wireless-regdb.deb"
+    # linux-modules-extra triggers the kernel package's own postinst hooks, and
+    # zz-update-grub among them runs update-grub — which silently wipes the
+    # ESP/XBOOTLDR grub.cfg's working menuentries in this chroot (grub-probe
+    # can't resolve the root device from inside a chroot on a loop-mounted
+    # offline image, and grub-mkconfig doesn't error on that, it just emits an
+    # empty menu). The base image already ships a working grub.cfg — disable
+    # this hook for the duration of the dpkg install so it can't destroy it.
+    local grub_hook="$root_mnt/etc/kernel/postinst.d/zz-update-grub"
+    [[ -f "$grub_hook" ]] && mv -f "$grub_hook" "${grub_hook}.disabled-by-build"
     if [[ -f "$root_mnt/tmp/wireless-regdb.deb" ]]; then
       chroot "$root_mnt" dpkg -i /tmp/wireless-regdb.deb /tmp/linux-modules-extra.deb || \
         chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
     else
       chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
     fi
+    [[ -f "${grub_hook}.disabled-by-build" ]] && mv -f "${grub_hook}.disabled-by-build" "$grub_hook"
     chroot "$root_mnt" depmod -a "$kver" || true
     rm -f "$root_mnt/tmp/linux-modules-extra.deb" "$root_mnt/tmp/wireless-regdb.deb"
     umount "$root_mnt/sys" 2>/dev/null || true

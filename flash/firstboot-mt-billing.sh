@@ -304,9 +304,17 @@ else
 fi
 
 echo "[9/9] Disabling first-boot unit…"
+# `systemctl disable` alone is enough — it removes the WantedBy symlink, which
+# is all that controls whether this runs again on the next boot. Do NOT also
+# rm the unit *file* and daemon-reload here: this script is still executing
+# as that same unit's ExecStart process, and deleting its own definition out
+# from under itself mid-run causes systemd to lose track of the active job
+# during the reload and kill it (SIGTERM) once it finally notices — logged as
+# "Result: timeout" / "not-found" even though every step above already
+# completed successfully. A disabled, harmless leftover unit file costs
+# nothing; a self-inflicted kill on the last line of a successful install
+# does.
 systemctl disable mt-billing-firstboot.service 2>/dev/null || true
-rm -f /etc/systemd/system/mt-billing-firstboot.service
-systemctl daemon-reload
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "==== MT-Billing first-boot complete ===="
