@@ -330,10 +330,21 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
 apt-get install -y -qq grub-efi-amd64 grub-efi-amd64-bin efibootmgr || true
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck --removable
-# Wyse 3040 firmware only honors the removable/fallback path EFI/BOOT/BOOTX64.EFI
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck || true
-update-grub
+# Wyse 3040 firmware only honors the removable/fallback path EFI/BOOT/BOOTX64.EFI, so
+# that is the call that matters most — but under `set -e` an unguarded failure here
+# would abort this whole chroot script and skip the fallback call, update-grub, and
+# sync, leaving the outer installer's own `set -e` to abort too and skip cleanup +
+# poweroff. Guard both calls so a GRUB hiccup never strands the machine mid-install.
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck --removable \
+  && echo "grub-install --removable: OK" || echo "WARNING: grub-install --removable failed"
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck \
+  && echo "grub-install (NVRAM): OK" || echo "WARNING: grub-install (NVRAM) failed"
+if [[ -f /boot/efi/EFI/BOOT/BOOTX64.EFI || -f /boot/efi/EFI/ubuntu/grubx64.efi ]]; then
+  echo "GRUB binaries present on ESP."
+else
+  echo "WARNING: no GRUB binaries found on ESP after grub-install — internal disk may not boot."
+fi
+update-grub || echo "WARNING: update-grub failed"
 sync
 GRUB
 chmod +x "$TARGET_MNT/tmp/install-grub.sh"
@@ -342,7 +353,7 @@ log "Installing UEFI GRUB on $TARGET_DISK…"
 mount --bind /dev "$TARGET_MNT/dev"
 mount --bind /proc "$TARGET_MNT/proc"
 mount --bind /sys "$TARGET_MNT/sys"
-chroot "$TARGET_MNT" /tmp/install-grub.sh
+chroot "$TARGET_MNT" /tmp/install-grub.sh || log "WARNING: GRUB chroot script exited non-zero; check $LOG for details."
 umount "$TARGET_MNT/sys" 2>/dev/null || true
 umount "$TARGET_MNT/proc" 2>/dev/null || true
 umount "$TARGET_MNT/dev" 2>/dev/null || true
