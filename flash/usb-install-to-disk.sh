@@ -319,7 +319,7 @@ elif [[ -f "$TARGET_MNT/lib/systemd/system/mt-billing-firstboot.service" ]]; the
     "$TARGET_MNT/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
 fi
 
-cat > "$TARGET_MNT/tmp/install-grub.sh" <<'GRUB'
+cat > "$TARGET_MNT/tmp/install-grub-pkgs.sh" <<'GRUBPKGS'
 #!/bin/bash
 set -euo pipefail
 mount -t proc proc /proc
@@ -330,65 +330,80 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
 apt-get install -y -qq grub-efi-amd64 grub-efi-amd64-bin efibootmgr || true
-# Install GRUB exactly once. Running grub-install twice against the same
-# --boot-directory=/boot (once --removable, once for NVRAM) had both invocations
-# writing /boot/grub/x86_64-efi/*.mod independently — if the second call (NVRAM
-# registration via efibootmgr) failed partway, e.g. because this chroot has no
-# efivarfs mounted, it could leave that module directory partially overwritten
-# and incomplete. Result: grub.cfg present and correct, but GRUB dropping to the
-# `grub>` rescue shell at boot because `insmod normal` can't find normal.mod —
-# seen in the field on a Wyse 3040 despite the install otherwise completing
-# cleanly. Install once, then copy the resulting binary to the fixed fallback
-# path Wyse 3040 (and most thin-client) firmware actually boots from — that's
-# the standard way to support both NVRAM and fallback boot without a second
-# grub-install run touching the same files.
-if grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --recheck; then
-  echo "grub-install: OK"
+GRUBPKGS
+chmod +x "$TARGET_MNT/tmp/install-grub-pkgs.sh"
+
+log "Ensuring GRUB packages are present on $TARGET_DISK's own root…"
+mount --bind /dev "$TARGET_MNT/dev"
+mount --bind /proc "$TARGET_MNT/proc"
+mount --bind /sys "$TARGET_MNT/sys"
+chroot "$TARGET_MNT" /tmp/install-grub-pkgs.sh || log "WARNING: package-install chroot exited non-zero; check $LOG for details."
+umount "$TARGET_MNT/sys" 2>/dev/null || true
+umount "$TARGET_MNT/proc" 2>/dev/null || true
+umount "$TARGET_MNT/dev" 2>/dev/null || true
+rm -f "$TARGET_MNT/tmp/install-grub-pkgs.sh"
+
+# Run grub-install from THIS (USB stick) environment, targeting $TARGET_MNT's
+# already-mounted paths directly — never chrooted. Two previous fixes here
+# (installing GRUB only once, and copying normal.mod as a fallback) addressed
+# symptoms but not the actual cause of the persistent `grub>` prompt: chroot(2)
+# does not create a new mount namespace, so grub-probe run *inside* the chroot
+# still reads /proc/self/mountinfo with the outer host's paths (this USB
+# stick's own root filesystem), not the chroot's remapped "/". It therefore
+# resolves /boot/grub to the USB stick's own filesystem UUID instead of the
+# target disk's, and grub-install embeds that wrong UUID into the compiled
+# core.img as `search.fs_uuid <uuid> root`. At boot, with the USB stick
+# unplugged, that search finds nothing, root stays unset, and GRUB silently
+# falls through to the interactive `grub>` prompt instead of auto-loading
+# grub.cfg — even with a correct grub.cfg and a present normal.mod. Running
+# grub-install here, unchrooted, against the real mounted $TARGET_MNT paths
+# gives grub-probe the host's real (correct) mount table, so it embeds the
+# target disk's actual partition UUID.
+log "Installing UEFI GRUB on $TARGET_DISK…"
+if grub-install --target=x86_64-efi \
+    --efi-directory="$TARGET_MNT/boot/efi" \
+    --boot-directory="$TARGET_MNT/boot" \
+    --bootloader-id=ubuntu --recheck; then
+  log "grub-install: OK"
 else
-  echo "WARNING: grub-install failed"
+  log "WARNING: grub-install failed"
 fi
-if [[ -f /boot/efi/EFI/ubuntu/grubx64.efi ]]; then
-  mkdir -p /boot/efi/EFI/BOOT
-  cp -f /boot/efi/EFI/ubuntu/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
-  echo "Copied grubx64.efi to removable fallback path EFI/BOOT/BOOTX64.EFI"
+if [[ -f "$TARGET_MNT/boot/efi/EFI/ubuntu/grubx64.efi" ]]; then
+  mkdir -p "$TARGET_MNT/boot/efi/EFI/BOOT"
+  cp -f "$TARGET_MNT/boot/efi/EFI/ubuntu/grubx64.efi" "$TARGET_MNT/boot/efi/EFI/BOOT/BOOTX64.EFI"
+  log "Copied grubx64.efi to removable fallback path EFI/BOOT/BOOTX64.EFI"
 else
-  echo "WARNING: /boot/efi/EFI/ubuntu/grubx64.efi missing after grub-install — no binary to copy to the fallback path."
+  log "WARNING: $TARGET_MNT/boot/efi/EFI/ubuntu/grubx64.efi missing after grub-install — no binary to copy to the fallback path."
 fi
-if [[ -f /boot/efi/EFI/BOOT/BOOTX64.EFI || -f /boot/efi/EFI/ubuntu/grubx64.efi ]]; then
-  echo "GRUB binaries present on ESP."
+if [[ -f "$TARGET_MNT/boot/efi/EFI/BOOT/BOOTX64.EFI" || -f "$TARGET_MNT/boot/efi/EFI/ubuntu/grubx64.efi" ]]; then
+  log "GRUB binaries present on ESP."
 else
-  echo "WARNING: no GRUB binaries found on ESP after grub-install — internal disk may not boot."
+  log "WARNING: no GRUB binaries found on ESP after grub-install — internal disk may not boot."
 fi
 
 # "grub-install: OK" doesn't guarantee the module set actually landed on disk.
-# Field report: grub.cfg present and correct, GRUB's EFI stub loads fine from
-# firmware, but `insmod normal` fails with "no such file" and drops to a
-# rescue shell — meaning /boot/grub/x86_64-efi/ is missing files despite
-# grub-install reporting success. Verify normal.mod directly and, if it's not
-# there, copy the module set straight from this system's own compiled GRUB
-# install instead of trusting grub-install's copy step blindly.
-if [[ ! -f /boot/grub/x86_64-efi/normal.mod ]]; then
-  echo "WARNING: /boot/grub/x86_64-efi/normal.mod missing after grub-install; copying modules directly from /usr/lib/grub/x86_64-efi/"
-  mkdir -p /boot/grub/x86_64-efi
-  cp -f /usr/lib/grub/x86_64-efi/*.mod /boot/grub/x86_64-efi/ 2>/dev/null || true
-  cp -f /usr/lib/grub/x86_64-efi/*.lst /boot/grub/x86_64-efi/ 2>/dev/null || true
+# Verify normal.mod directly and, if it's not there, copy the module set
+# straight from this (USB stick) system's own compiled GRUB install.
+if [[ ! -f "$TARGET_MNT/boot/grub/x86_64-efi/normal.mod" ]]; then
+  log "WARNING: normal.mod missing after grub-install; copying modules directly from /usr/lib/grub/x86_64-efi/"
+  mkdir -p "$TARGET_MNT/boot/grub/x86_64-efi"
+  cp -f /usr/lib/grub/x86_64-efi/*.mod "$TARGET_MNT/boot/grub/x86_64-efi/" 2>/dev/null || true
+  cp -f /usr/lib/grub/x86_64-efi/*.lst "$TARGET_MNT/boot/grub/x86_64-efi/" 2>/dev/null || true
 fi
-if [[ -f /boot/grub/x86_64-efi/normal.mod ]]; then
-  echo "normal.mod present: OK"
+if [[ -f "$TARGET_MNT/boot/grub/x86_64-efi/normal.mod" ]]; then
+  log "normal.mod present: OK"
 else
-  echo "WARNING: normal.mod still missing after fallback copy — /usr/lib/grub/x86_64-efi/ likely doesn't exist on this system (grub-efi-amd64-bin may not have installed correctly)."
+  log "WARNING: normal.mod still missing after fallback copy — /usr/lib/grub/x86_64-efi/ likely doesn't exist on this system (grub-efi-amd64-bin may not have installed correctly)."
 fi
 
-# Deliberately skip update-grub/grub-mkconfig here — same reasoning as the USB
-# stick's own build (see build-sbc-flash-image.sh, inject_pc_thin_client_boot):
-# grub-probe can't reliably resolve the root device from inside a chroot, so
-# grub-mkconfig silently emits a boot menu with zero OS entries instead of
-# erroring. Write a minimal, self-contained grub.cfg by hand instead, using
-# the ext4 label this same script already sets at mkfs time — no device
-# detection needed. Matches the manual recovery sequence confirmed working in
-# the field (search/set root, linux, initrd, boot).
-mkdir -p /boot/grub
-cat > /boot/grub/grub.cfg <<'CFG'
+# Deliberately skip update-grub/grub-mkconfig here — same grub-probe
+# unreliability as above, and unnecessary anyway. Write a minimal,
+# self-contained grub.cfg by hand instead, using the ext4 label this same
+# script already sets at mkfs time — no device detection needed at boot.
+# Matches the manual recovery sequence confirmed working in the field
+# (search/set root, linux, initrd, boot).
+mkdir -p "$TARGET_MNT/boot/grub"
+cat > "$TARGET_MNT/boot/grub/grub.cfg" <<'CFG'
 set timeout=5
 set default=0
 
@@ -401,24 +416,12 @@ menuentry 'MT-Billing' {
   initrd /boot/initrd.img
 }
 CFG
-if grep -q '^[[:space:]]*linux[[:space:]]' /boot/grub/grub.cfg; then
-  echo "Wrote self-contained grub.cfg (label-based, no grub-probe needed): OK"
+if grep -q '^[[:space:]]*linux[[:space:]]' "$TARGET_MNT/boot/grub/grub.cfg"; then
+  log "Wrote self-contained grub.cfg (label-based, no grub-probe needed): OK"
 else
-  echo "WARNING: failed to write grub.cfg"
+  log "WARNING: failed to write grub.cfg"
 fi
 sync
-GRUB
-chmod +x "$TARGET_MNT/tmp/install-grub.sh"
-
-log "Installing UEFI GRUB on $TARGET_DISK…"
-mount --bind /dev "$TARGET_MNT/dev"
-mount --bind /proc "$TARGET_MNT/proc"
-mount --bind /sys "$TARGET_MNT/sys"
-chroot "$TARGET_MNT" /tmp/install-grub.sh || log "WARNING: GRUB chroot script exited non-zero; check $LOG for details."
-umount "$TARGET_MNT/sys" 2>/dev/null || true
-umount "$TARGET_MNT/proc" 2>/dev/null || true
-umount "$TARGET_MNT/dev" 2>/dev/null || true
-rm -f "$TARGET_MNT/tmp/install-grub.sh"
 
 sync
 umount "$TARGET_MNT/boot/efi" 2>/dev/null || true
