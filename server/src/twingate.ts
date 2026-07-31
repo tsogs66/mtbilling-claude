@@ -208,12 +208,14 @@ function parseStatusOutput(stdout: string): {
   installed: string;
   network: string;
   resources: number;
+  dns: string;
 } {
   const status = (stdout.match(/^status=(.+)$/m) || [])[1]?.trim() || 'stopped';
   const installed = (stdout.match(/^installed=(.+)$/m) || [])[1]?.trim() || 'no';
   const network = (stdout.match(/^network=(.*)$/m) || [])[1]?.trim() || '';
   const resources = Number((stdout.match(/^resources=(.+)$/m) || [])[1]?.trim() || 0) || 0;
-  return { status, installed, network, resources };
+  const dns = (stdout.match(/^dns=(.+)$/m) || [])[1]?.trim() || 'unknown';
+  return { status, installed, network, resources, dns };
 }
 
 twingateRouter.get('/twingate/settings', (_req, res) => {
@@ -272,6 +274,7 @@ twingateRouter.get('/twingate', async (_req, res) => {
     installed: 'no',
     network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
     resources: 0,
+    dns: 'unknown',
   };
   if (result.code === 0) {
     live = { ...live, ...parseStatusOutput(result.stdout) };
@@ -296,12 +299,15 @@ twingateRouter.get('/twingate', async (_req, res) => {
     network: live.network || s.twingate_network || '',
     nodeName: s.twingate_node_name || 'panel-host',
     resourceCount: live.resources,
+    dns: live.dns,
     message: !configured
       ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
+      : live.status === 'error'
+        ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
       : live.status !== 'online'
         ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
         : live.resources === 0
-          ? 'Connected, but no Resources are assigned yet. Add OLT/router CIDRs in Twingate Admin and grant this Service Account access.'
+          ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
           : null,
     warning: result.code !== 0 ? result.stderr || undefined : undefined,
   });
@@ -362,7 +368,7 @@ twingateRouter.post('/twingate/apply', (_req, res) => {
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'error',
         'twingate',
-        `Twingate apply failed (exit ${code})`
+        `Twingate apply failed or rolled back to protect panel connectivity (exit ${code})`
       );
     }
   });
@@ -379,13 +385,15 @@ twingateRouter.post('/twingate/toggle', (_req, res) => {
     }
     const started = startTwingateJob(['--from-db', 'start'], 'start', (code) => {
       db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(
-        code === 0 ? 'online' : 'offline',
+        code === 0 ? 'online' : code === 1 ? 'error' : 'offline',
         code === 0 ? 1 : 0
       );
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         code === 0 ? 'info' : 'error',
         'twingate',
-        code === 0 ? 'Twingate started' : `Twingate start failed (exit ${code})`
+        code === 0
+          ? 'Twingate started'
+          : `Twingate start failed or rolled back to protect panel connectivity (exit ${code})`
       );
     });
     if (!started.ok) return res.status(409).json({ error: started.error });
@@ -398,9 +406,27 @@ twingateRouter.post('/twingate/toggle', (_req, res) => {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       code === 0 ? 'info' : 'error',
       'twingate',
-      code === 0 ? 'Twingate stopped' : `Twingate stop failed (exit ${code})`
+      code === 0 ? 'Twingate stopped (DNS restored)' : `Twingate stop failed (exit ${code})`
     );
   });
   if (!started.ok) return res.status(409).json({ error: started.error });
   res.json({ ok: true, started: true, action: 'stop' });
+});
+
+/** Force-stop Twingate and restore host DNS — recovery when panel looks "disconnected". */
+twingateRouter.post('/twingate/emergency-restore', (_req, res) => {
+  const started = startTwingateJob(['emergency-restore'], 'emergency-restore', (code) => {
+    db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = 0 WHERE id = 1').run(
+      code === 0 ? 'stopped' : 'error'
+    );
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      code === 0 ? 'warn' : 'error',
+      'twingate',
+      code === 0
+        ? 'Emergency restore: Twingate stopped and host DNS restored'
+        : `Emergency restore failed (exit ${code})`
+    );
+  });
+  if (!started.ok) return res.status(409).json({ error: started.error });
+  res.json({ ok: true, started: true, action: 'emergency-restore' });
 });
