@@ -37,33 +37,20 @@ export default function Twingate() {
   }, [job?.log]);
 
   const load = () => {
-    // Settings is DB-only (fast). Live status can hang on twingate CLI — hard timeout.
+    // Fast path: DB-only /twingate (never shells out — Proxmox UI must not hang).
     api
-      .get('/twingate/settings')
+      .get('/twingate', { timeout: 5000 })
       .then((r) => {
-        setSettings(r.data);
-        setForm((f) => ({ ...f, nodeName: r.data.nodeName || '' }));
-        if (!r.data.serviceKeySet) setSetupOpen(true);
-        // Paint page immediately from DB so we never sit on Loading forever
-        setData((prev: any) =>
-          prev || {
-            configured: !!r.data.serviceKeySet,
-            online: r.data.status === 'online',
-            status: r.data.status || 'stopped',
-            network: r.data.network || '',
-            nodeName: r.data.nodeName || 'panel-host',
-            installed: false,
-            resourceCount: 0,
-            message: 'Loading live Twingate status…',
-          }
-        );
+        setData(r.data);
+        setSettings((s: any) => s || {
+          serviceKeySet: !!r.data.configured,
+          network: r.data.network,
+          nodeName: r.data.nodeName,
+          status: r.data.status,
+        });
+        setForm((f) => ({ ...f, nodeName: r.data.nodeName || f.nodeName || '' }));
+        if (!r.data.configured) setSetupOpen(true);
       })
-      .catch(() => {
-        /* ignore */
-      });
-    api
-      .get('/twingate', { timeout: 12000 })
-      .then((r) => setData(r.data))
       .catch(() =>
         setData((prev: any) => ({
           configured: prev?.configured ?? false,
@@ -71,10 +58,28 @@ export default function Twingate() {
           status: prev?.status || 'stopped',
           network: prev?.network || '',
           nodeName: prev?.nodeName || 'panel-host',
-          message:
-            'Could not load live Twingate status (timeout). If the whole panel is slow, run Emergency restore and mask twingate.',
+          message: 'Could not load Twingate status from the panel API.',
         }))
       );
+
+    // Background live probe (may be slow) — never blocks first paint
+    api
+      .get('/twingate/live', { timeout: 6000 })
+      .then((r) => setData(r.data))
+      .catch(() => {
+        /* keep fast snapshot */
+      });
+
+    api
+      .get('/twingate/settings', { timeout: 5000 })
+      .then((r) => {
+        setSettings(r.data);
+        setForm((f) => ({ ...f, nodeName: r.data.nodeName || '' }));
+        if (!r.data.serviceKeySet) setSetupOpen(true);
+      })
+      .catch(() => {
+        /* ignore */
+      });
   };
 
   useEffect(() => {

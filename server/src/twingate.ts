@@ -346,12 +346,9 @@ twingateRouter.put('/twingate/settings', (req, res) => {
   });
 });
 
-twingateRouter.get('/twingate', async (_req, res) => {
-  const s = getTg();
-  const configured = !!s.twingate_service_key;
-  // Hard cap — hung `twingate status` used to freeze this page (and feel like the whole panel stalled).
-  const result = await runTwingateScript(['status'], { timeoutMs: 8000 });
-  let live: {
+function buildTwingatePayload(
+  s: ReturnType<typeof getTg>,
+  live: {
     status: string;
     installed: string;
     network: string;
@@ -359,36 +356,15 @@ twingateRouter.get('/twingate', async (_req, res) => {
     dns: string;
     tun: string;
     arch: string;
-  } = {
-    status: s.twingate_status || 'stopped',
-    installed: 'no',
-    network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
-    resources: 0,
-    dns: 'unknown',
-    tun: fs.existsSync('/dev/net/tun') ? 'yes' : 'no',
-    arch: String(process.arch || ''),
-  };
-  if (result.code === 0) {
-    live = { ...live, ...parseStatusOutput(result.stdout) };
-    const enabled = live.status === 'online' || live.status === 'authenticating' ? 1 : 0;
-    if (live.network) {
-      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_network = ?, twingate_enabled = ? WHERE id = 1').run(
-        live.status,
-        live.network,
-        enabled
-      );
-    } else {
-      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(live.status, enabled);
-    }
-  } else if (result.stdout && /status=/.test(result.stdout)) {
-    // Partial output before timeout — still useful
-    live = { ...live, ...parseStatusOutput(result.stdout) };
-  }
+  },
+  extra?: { timedOut?: boolean; warning?: string }
+) {
+  const configured = !!s.twingate_service_key;
   const connecting = live.status === 'authenticating';
   const tunMissing = live.tun === 'no';
   const unsupportedArch = /^(armv7l|armhf|armv6l|armel)$/i.test(live.arch || '');
-  const timedOut = result.code === 124;
-  res.json({
+  const timedOut = !!extra?.timedOut;
+  return {
     configured,
     online: live.status === 'online',
     connecting,
@@ -420,11 +396,71 @@ twingateRouter.get('/twingate', async (_req, res) => {
                     : live.resources === 0
                       ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
                       : null,
-    warning: result.code !== 0 ? result.stderr || undefined : undefined,
-  });
+    warning: extra?.warning,
+  };
+}
+
+function dbStatusSnapshot() {
+  const s = getTg();
+  return {
+    status: s.twingate_status || 'stopped',
+    installed: fs.existsSync('/usr/sbin/twingated') || fs.existsSync('/usr/bin/twingate') ? 'yes' : 'no',
+    network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
+    resources: 0,
+    dns: 'unknown',
+    tun: fs.existsSync('/dev/net/tun') ? 'yes' : 'no',
+    arch: String(process.arch || ''),
+  };
+}
+
+/** Fast path — DB + filesystem only. Never shells out (Proxmox UI must not hang). */
+twingateRouter.get('/twingate', (_req, res) => {
+  const s = getTg();
+  res.json(buildTwingatePayload(s, dbStatusSnapshot()));
+});
+
+/** Optional live probe — short timeout; used in background after page paint. */
+twingateRouter.get('/twingate/live', async (_req, res) => {
+  const s = getTg();
+  let live = dbStatusSnapshot();
+  const result = await runTwingateScript(['status'], { timeoutMs: 4000 });
+  if (result.code === 0 || (result.stdout && /status=/.test(result.stdout))) {
+    live = { ...live, ...parseStatusOutput(result.stdout) };
+    if (result.code === 0) {
+      const enabled = live.status === 'online' || live.status === 'authenticating' ? 1 : 0;
+      if (live.network) {
+        db.prepare(
+          'UPDATE app_settings SET twingate_status = ?, twingate_network = ?, twingate_enabled = ? WHERE id = 1'
+        ).run(live.status, live.network, enabled);
+      } else {
+        db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(
+          live.status,
+          enabled
+        );
+      }
+    }
+  }
+  res.json(
+    buildTwingatePayload(s, live, {
+      timedOut: result.code === 124,
+      warning: result.code !== 0 && result.code !== 124 ? result.stderr || undefined : undefined,
+    })
+  );
 });
 
 twingateRouter.get('/twingate/job', (_req, res) => {
+  // Auto-fail stuck jobs so the UI "Working…" spinner cannot last forever
+  if (tgJob.running && tgJob.startedAt && Date.now() - tgJob.startedAt > 120000) {
+    tgJob = { ...tgJob, running: false, code: 124 };
+    try {
+      fs.appendFileSync(
+        TG_JOB_LOG,
+        '\n[ERROR] Job marked timed out after 120s (UI watchdog). Run Emergency restore if needed.\n'
+      );
+    } catch {
+      /* ignore */
+    }
+  }
   let log = '';
   try {
     log = fs.readFileSync(TG_JOB_LOG, 'utf8').slice(-8000);
@@ -441,7 +477,7 @@ twingateRouter.get('/twingate/job', (_req, res) => {
 });
 
 twingateRouter.get('/twingate/status', async (_req, res) => {
-  const result = await runTwingateScript(['status']);
+  const result = await runTwingateScript(['status'], { timeoutMs: 4000 });
   const s = getTg();
   if (result.code === 0) {
     const parsed = parseStatusOutput(result.stdout);
@@ -459,7 +495,7 @@ twingateRouter.get('/twingate/status', async (_req, res) => {
 });
 
 async function syncLiveStatusAfterJob(fallbackNet: string): Promise<{ status: string; resources: number }> {
-  const result = await runTwingateScript(['status']);
+  const result = await runTwingateScript(['status'], { timeoutMs: 5000 });
   if (result.code === 0) {
     const parsed = parseStatusOutput(result.stdout);
     const enabled = parsed.status === 'online' || parsed.status === 'authenticating' ? 1 : 0;
