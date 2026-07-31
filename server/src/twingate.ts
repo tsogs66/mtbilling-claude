@@ -317,8 +317,10 @@ twingateRouter.get('/twingate', async (_req, res) => {
       : live.status === 'error'
         ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
         : connecting
-          ? 'Client is authenticating. In Twingate Admin: confirm a Connector is Online on the remote network, and grant this Service Account access to Resources (specific remote device IPs — not broad LAN CIDRs). Status refreshes automatically.'
-          : live.status !== 'online'
+          ? 'Client is authenticating (Service Key auth is automatic — there is no Accept button). In Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs). Status refreshes automatically.'
+          : live.status === 'not-running'
+            ? 'Twingate client daemon is not running on this host (not an Admin Accept step). Update the panel and retry Install & connect, or SSH: sudo systemctl restart twingate && sudo journalctl -u twingate -n 50'
+            : live.status !== 'online'
             ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
             : live.resources === 0
               ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'

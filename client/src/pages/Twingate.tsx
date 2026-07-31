@@ -237,8 +237,9 @@ export default function Twingate() {
         <Card title="Twingate setup" className="max-w-4xl mb-5" interactive>
           <div className="space-y-3">
             <p className="text-sm text-slate-500">
-              In Twingate Admin: create a <b>Connector</b> on the remote LAN, add <b>Resources</b> (OLT/router IPs), create
-              a <b>Service</b> + Service Key, and grant this Service access to those Resources. Paste the JSON key below.
+              Use a <b>Service Key</b> (Admin → Services) — headless auth is automatic; there is no Accept / approve
+              click. You need: an online <b>Connector</b> (your Proxmox one is fine), <b>Resources</b> (OLT/router IPs),
+              and this Service granted those Resources. Paste the JSON key below, then Install &amp; connect.
             </p>
             <FormField
               label="Service Key (JSON)"

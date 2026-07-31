@@ -398,8 +398,45 @@ tg_client_status() {
   twingate status 2>/dev/null || echo offline
 }
 
-# Wait until `twingate status` reports online. systemd "active" alone is not enough —
-# the client often sits in "authenticating" until a Connector accepts the Service Key.
+dump_twingate_logs() {
+  log_warn "Recent twingate service logs:"
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u "$UNIT_NAME" -n 40 --no-pager 2>/dev/null | sed 's/^/  /' || true
+  fi
+  if [[ -f /var/log/twingated.log ]]; then
+    log_warn "Tail of /var/log/twingated.log:"
+    tail -n 20 /var/log/twingated.log 2>/dev/null | sed 's/^/  /' || true
+  fi
+}
+
+ensure_client_started() {
+  local st
+  st="$(tg_client_status)"
+  if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+    return 0
+  fi
+  log_info "Client status is ${st} — starting Twingate daemon"
+  # Headless clients have no browser "Accept" step. Service Key auth is automatic
+  # once twingated is running and the key + Connector + Resource grants are valid.
+  systemctl restart "$UNIT_NAME" 2>/dev/null || true
+  twingate start 2>/dev/null || true
+  sleep 3
+  st="$(tg_client_status)"
+  if [[ "$st" == "not-running" || "$st" == "offline" || "$st" == "not-installed" ]]; then
+    # Re-apply headless setup in case key/config was incomplete
+    if [[ -f "$KEY_FILE" ]]; then
+      log_info "Re-running headless setup from $KEY_FILE"
+      twingate setup --headless "$KEY_FILE" || true
+      systemctl restart "$UNIT_NAME" 2>/dev/null || twingate start 2>/dev/null || true
+      sleep 3
+    fi
+  fi
+  st="$(tg_client_status)"
+  [[ "$st" != "not-running" && "$st" != "not-installed" ]]
+}
+
+# Wait until `twingate status` reports online.
+# Note: Service Account / headless mode has NO interactive "Accept auth" in Twingate Admin.
 wait_for_client_online() {
   local timeout="${1:-90}"
   local i=0
@@ -411,8 +448,23 @@ wait_for_client_online() {
       log_ok "Twingate client status: online"
       return 0
     fi
+    if [[ "$st" == "not-running" ]]; then
+      log_warn "Client is not-running — daemon did not stay up (no Admin 'Accept' step for Service Keys)"
+      ensure_client_started || true
+      st="$(tg_client_status)"
+      if [[ "$st" == "not-running" ]]; then
+        return 1
+      fi
+    fi
     if [[ $((i % 10)) -eq 0 ]]; then
-      log_info "Client status: ${st} (waiting for Connector / Service Account auth…)"
+      case "$st" in
+        authenticating)
+          log_info "Client status: authenticating (Service Key auth is automatic — check Connector Online + Resource grants)"
+          ;;
+        *)
+          log_info "Client status: ${st}"
+          ;;
+      esac
     fi
     sleep 2
     i=$((i + 2))
@@ -433,6 +485,7 @@ do_start() {
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
     systemctl restart "$UNIT_NAME" || twingate start || true
     sleep 3
+    ensure_client_started || true
     apply_coexist_after_twingate
 
     local unit_ok=0
@@ -440,8 +493,21 @@ do_start() {
     local st
     st="$(tg_client_status)"
 
+    if [[ "$st" == "not-running" ]]; then
+      log_err "Twingate client is not-running after start attempts"
+      log_err "There is nothing to 'Accept' in Twingate Admin for a Service Key."
+      log_err "On this host, check: sudo systemctl status twingate && sudo journalctl -u twingate -n 50"
+      log_err "In Admin: Connector Online + Service Account granted Resources (specific remote IPs)."
+      dump_twingate_logs
+      kill_daemon_hard
+      restore_resolv
+      set_db_status offline
+      return 1
+    fi
+
     if [[ "$unit_ok" -ne 1 && "$st" != "online" && "$st" != "authenticating" ]]; then
       log_err "Twingate failed to start (status=${st}) — restoring DNS"
+      dump_twingate_logs
       kill_daemon_hard
       restore_resolv
       set_db_status offline
@@ -459,16 +525,26 @@ do_start() {
     fi
 
     st="$(tg_client_status)"
+    if [[ "$st" == "not-running" ]]; then
+      log_err "Client stayed not-running — daemon crashed or never started"
+      dump_twingate_logs
+      kill_daemon_hard
+      restore_resolv
+      set_db_status offline
+      return 1
+    fi
+
     # Host DNS/LAN still healthy (coexist). Leave client running so it can finish auth.
-    if [[ "$st" == "authenticating" ]] || [[ "$unit_ok" -eq 1 ]]; then
+    if [[ "$st" == "authenticating" ]] || [[ "$unit_ok" -eq 1 && "$st" != "offline" ]]; then
       set_db_status authenticating "$(network_from_key)"
-      log_warn "Client is still authenticating — Twingate Admin: Connector must be Online,"
-      log_warn "  and this Service Account needs Resources (prefer specific remote IPs)."
+      log_warn "Client is still authenticating — no Admin 'Accept' click for Service Keys."
+      log_warn "  Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs)."
       log_warn "Host network is OK (coexistence kept). Re-check status in a minute."
       return 0
     fi
 
     log_err "Twingate failed to come online (status=${st}) — restoring DNS"
+    dump_twingate_logs
     kill_daemon_hard
     restore_resolv
     set_db_status offline
@@ -496,10 +572,11 @@ do_start() {
   st="$(tg_client_status)"
   if [[ "$st" == "authenticating" ]]; then
     set_db_status authenticating "$(network_from_key)"
-    log_warn "Client still authenticating — check Connector / Resources in Twingate Admin"
+    log_warn "Client still authenticating — check Connector Online + Resource grants (no Accept click)"
     return 0
   fi
   log_warn "Twingate status: ${st} — restoring DNS"
+  dump_twingate_logs
   kill_daemon_hard
   restore_resolv
   set_db_status offline
