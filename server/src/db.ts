@@ -29,6 +29,10 @@ if (fs.existsSync(pendingPath)) {
 
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+// SD-card / flash hosts (RPi, Wyse) often hit SQLITE_BUSY under concurrent
+// writers (NOC probe, Twingate status, audit). Wait briefly instead of failing
+// panel saves with a generic "Save failed".
+db.pragma('busy_timeout = 8000');
 
 export function initSchema() {
   db.exec(`
