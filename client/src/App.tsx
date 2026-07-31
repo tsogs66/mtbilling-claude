@@ -37,6 +37,8 @@ import Invoices from './pages/Invoices';
 import Finance from './pages/Finance';
 import ClientPortal from './pages/ClientPortal';
 import RogueMacs from './pages/RogueMacs';
+import Twingate from './pages/Twingate';
+import Noc from './pages/Noc';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -108,6 +110,7 @@ export default function App() {
                 <Route path="/finance" element={<Finance />} />
                 <Route path="/job-orders" element={<JobOrders />} />
                 <Route path="/rogue-macs" element={<RogueMacs />} />
+                <Route path="/noc" element={<Noc />} />
                 <Route path="/pay-portal" element={<PayPortal />} />
                 <Route path="/usage" element={<UsageStats />} />
                 <Route path="/fair-use" element={<FairUseAlerts />} />
@@ -125,6 +128,7 @@ export default function App() {
                 <Route path="/network" element={<Network />} />
                 <Route path="/files" element={<MikrotikFiles />} />
                 <Route path="/zerotier" element={<ZeroTier />} />
+                <Route path="/twingate" element={<Twingate />} />
                 <Route path="/settings" element={<SystemSettings />} />
                 <Route path="/cloudflare" element={<CloudflareAccess />} />
                 <Route path="/roles" element={<PanelRoles />} />
