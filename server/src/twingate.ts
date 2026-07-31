@@ -213,9 +213,37 @@ function startTwingateJob(
       return;
     }
     const [cmd, cmdArgs] = tryCmds[i];
-    const child = spawn(cmd, cmdArgs, { env: process.env });
+    const child = spawn(cmd, cmdArgs, { env: process.env, detached: true });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const jobTimeoutMs = /apply|start/.test(actionLabel) ? 90000 : 180000;
+    const killJob = (reason: string) => {
+      if (settled) return;
+      settled = true;
+      appendLog(`\n[ERROR] ${reason}\n`);
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+      }
+      // Also reap hung Twingate CLI helpers that rewrite DNS while stuck
+      try {
+        spawn('sudo', ['-n', 'pkill', '-9', '-f', 'twingate start'], { stdio: 'ignore' });
+      } catch {
+        /* ignore */
+      }
+      tgJob = { ...tgJob, running: false, code: 124 };
+      onDone(124);
+    };
+    const timer = setTimeout(
+      () => killJob(`Twingate ${actionLabel} timed out after ${Math.round(jobTimeoutMs / 1000)}s — killed. Run Emergency restore if SSH feels broken.`),
+      jobTimeoutMs
+    );
     child.stdout?.on('data', (d) => {
       const s = String(d);
       stdout += s;
@@ -226,8 +254,14 @@ function startTwingateJob(
       stderr += s;
       appendLog(s);
     });
-    child.on('error', () => runNext(i + 1));
+    child.on('error', () => {
+      clearTimeout(timer);
+      if (settled) return;
+      runNext(i + 1);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
+      if (settled) return;
       if (
         i === 0 &&
         code !== 0 &&
@@ -236,6 +270,7 @@ function startTwingateJob(
         runNext(i + 1);
         return;
       }
+      settled = true;
       const finalCode = code ?? 1;
       tgJob = { ...tgJob, running: false, code: finalCode };
       onDone(finalCode);

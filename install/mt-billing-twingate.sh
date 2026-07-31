@@ -558,32 +558,90 @@ dump_twingate_logs() {
   fi
 }
 
-# twingate start can hang forever printing "Waiting for status..." when TUN
-# is missing or the daemon never becomes ready — always bound it.
+# NEVER call bare `twingate start` — on flash images it prints
+# "Waiting for status…" and blocks forever (timeout often cannot kill it cleanly
+# because the CLI waits on IPC). Use systemd --no-block + poll instead.
 run_timeout() {
   local secs="$1"
   shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout --signal=KILL "${secs}s" "$@" 2>/dev/null || return $?
+    timeout --foreground --signal=KILL "${secs}s" "$@" || return $?
   else
-    "$@"
+    # No coreutils timeout — run in background and kill
+    "$@" &
+    local pid=$!
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+      if [[ $i -ge $secs ]]; then
+        kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        return 124
+      fi
+      sleep 1
+      i=$((i + 1))
+    done
+    wait "$pid"
+    return $?
   fi
 }
 
+kill_hung_twingate_cli() {
+  pkill -9 -f 'twingate start' 2>/dev/null || true
+  pkill -9 -f 'twingate status' 2>/dev/null || true
+}
+
 tg_cli_start() {
-  log_info "Starting Twingate daemon (timeout 25s — will not hang on 'Waiting for status…')"
-  # Prefer systemd; fall back to CLI. Both can block — wrap with timeout.
+  kill_hung_twingate_cli
+  log_info "Starting Twingate via systemd --no-block (never waits on 'Waiting for status…')"
+
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    run_timeout 20 systemctl restart "$UNIT_NAME" || true
-    # If still activating/stuck, force-kill and try once more briefly
-    if ! systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
-      systemctl kill -s SIGKILL "$UNIT_NAME" 2>/dev/null || true
-      run_timeout 15 systemctl start "$UNIT_NAME" || true
-    fi
+    # Short start timeout so systemd itself won't sit in activating forever
+    mkdir -p /etc/systemd/system/twingate.service.d
+    cat >/etc/systemd/system/twingate.service.d/mt-billing-timeout.conf <<'EOF'
+[Service]
+TimeoutStartSec=12
+TimeoutStopSec=8
+Restart=no
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
+    systemctl stop "$UNIT_NAME" 2>/dev/null || true
+    systemctl kill -s SIGKILL "$UNIT_NAME" 2>/dev/null || true
+    pkill -9 twingated 2>/dev/null || true
+    sleep 1
+    # Critical: --no-block returns immediately; we poll status ourselves
+    systemctl start --no-block "$UNIT_NAME" 2>/dev/null || systemctl start --no-block "$UNIT_NAME" || true
+
+    local i=0 st
+    while [[ $i -lt 15 ]]; do
+      sleep 1
+      i=$((i + 1))
+      st="$(tg_client_status)"
+      if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+        log_ok "Daemon responded: status=${st} (${i}s)"
+        return 0
+      fi
+      if systemctl is-failed --quiet "$UNIT_NAME" 2>/dev/null; then
+        log_warn "twingate.service failed (status=${st})"
+        return 1
+      fi
+      if [[ $((i % 5)) -eq 0 ]]; then
+        log_info "Waiting for daemon… status=${st} (${i}s)"
+      fi
+    done
+    st="$(tg_client_status)"
+    log_warn "Daemon did not become ready in 15s (status=${st})"
+    # Do NOT fall through to `twingate start` — that hangs the apply job
+    return 1
   fi
-  # CLI start often prints "Waiting for status..." and never exits on flash images
-  run_timeout 20 twingate start || log_warn "twingate start timed out or failed (status=$(tg_client_status))"
-  sleep 2
+
+  # Non-systemd fallback only: start twingated binary directly (no CLI wait)
+  log_info "No systemd — starting twingated binary in background"
+  pkill -9 twingated 2>/dev/null || true
+  mkdir -p /var/lib/twingate /run/twingate
+  (cd /var/lib/twingate && /usr/sbin/twingated >/var/log/twingated.log 2>&1 &) || true
+  sleep 3
+  return 0
 }
 
 ensure_client_started() {
@@ -593,16 +651,12 @@ ensure_client_started() {
     return 0
   fi
   log_info "Client status is ${st} — starting Twingate daemon"
-  # Headless clients have no browser "Accept" step. Service Key auth is automatic
-  # once twingated is running and the key + Connector + Resource grants are valid.
-  tg_cli_start
-  st="$(tg_client_status)"
-  if [[ "$st" == "not-running" || "$st" == "offline" || "$st" == "not-installed" ]]; then
-    # Re-apply headless setup in case key/config was incomplete
+  if ! tg_cli_start; then
+    # One setup retry then one more no-block start
     if [[ -f "$KEY_FILE" ]]; then
       log_info "Re-running headless setup from $KEY_FILE"
-      run_timeout 45 twingate setup --headless "$KEY_FILE" || true
-      tg_cli_start
+      run_timeout 30 twingate setup --headless "$KEY_FILE" || true
+      tg_cli_start || true
     fi
   fi
   st="$(tg_client_status)"
@@ -613,10 +667,9 @@ ensure_client_started() {
 # Wait until `twingate status` reports online.
 # Note: Service Account / headless mode has NO interactive "Accept auth" in Twingate Admin.
 wait_for_client_online() {
-  local timeout="${1:-60}"
+  local timeout="${1:-30}"
   local i=0
   local st
-  local retried_start=0
   log_info "Waiting for Twingate client to reach online (up to ${timeout}s)…"
   while [[ $i -lt $timeout ]]; do
     st="$(tg_client_status)"
@@ -625,15 +678,8 @@ wait_for_client_online() {
       return 0
     fi
     if [[ "$st" == "not-running" ]]; then
-      log_warn "Client is not-running — daemon did not stay up"
-      if [[ "$retried_start" -eq 0 ]]; then
-        retried_start=1
-        ensure_client_started || true
-        st="$(tg_client_status)"
-      fi
-      if [[ "$st" == "not-running" ]]; then
-        return 1
-      fi
+      log_warn "Client is not-running — giving up wait (will not call twingate start)"
+      return 1
     fi
     if [[ $((i % 10)) -eq 0 ]]; then
       case "$st" in
@@ -667,7 +713,7 @@ do_start() {
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
-    tg_cli_start
+    # Single start path — ensure_client_started uses systemd --no-block (no twingate start)
     ensure_client_started || true
     apply_coexist_after_twingate
 
@@ -682,7 +728,7 @@ do_start() {
         print_tun_fix
       else
         log_err "TUN is present but daemon still not-running — see journal below."
-        log_err "Common on flash images: run sudo modprobe tun; check journalctl -u twingate -n 50"
+        log_err "Common on flash images: sudo modprobe tun; sudo journalctl -u twingate -n 50"
         dump_twingate_logs
       fi
       kill_daemon_hard
@@ -704,7 +750,8 @@ do_start() {
       return 1
     fi
 
-    if wait_for_client_online 60; then
+    # Short wait only — do not re-call twingate start on not-running
+    if wait_for_client_online 30; then
       set_db_status online "$(network_from_key)"
       log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
       return 0
