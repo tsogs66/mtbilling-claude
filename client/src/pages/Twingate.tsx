@@ -231,21 +231,42 @@ export default function Twingate() {
           <div className="flex gap-3 text-sm text-rose-950">
             <AlertTriangle size={18} className="shrink-0 mt-0.5 text-rose-600" />
             <div className="space-y-1">
-              <p className="font-semibold">Proxmox LXC: /dev/net/tun missing</p>
+              <p className="font-semibold">Missing /dev/net/tun (Twingate cannot start)</p>
               <p>
-                Twingate needs a TUN device. Unprivileged LXCs usually block it — that is why the client stays{' '}
-                <b>not-running</b>. Run this on the <b>Proxmox host</b> (not inside the guest), then retry Install &amp;
-                connect:
+                Works on Proxmox once TUN is passed into the LXC. On <b>Raspberry Pi / Dell Wyse / PC flash</b> images,
+                load the kernel module first:
               </p>
               <pre className="text-xs font-mono bg-white/90 border border-rose-200 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap">
-                {`# replace CTID with your container id (pct list)
-sudo bash /path/to/MT-Billing/scripts/proxmox-enable-twingate-tun.sh CTID
-
-# or manually:
-echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >> /etc/pve/lxc/CTID.conf
-echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >> /etc/pve/lxc/CTID.conf
-pct reboot CTID`}
+                {`sudo modprobe tun
+ls -l /dev/net/tun
+echo tun | sudo tee /etc/modules-load.d/tun.conf
+# then retry Install & connect`}
               </pre>
+              <p className="text-xs">
+                Raspberry Pi 3 must be <b>64-bit</b> (<code className="font-mono">mt-billing-rpi-arm64</code> /{' '}
+                <code className="font-mono">aarch64</code>). Twingate has no 32-bit armhf client. Wyse 3040 uses{' '}
+                <code className="font-mono">mt-billing-pc-usb-amd64</code>.
+              </p>
+              <p className="text-xs">
+                Proxmox LXC only: on the host run{' '}
+                <code className="font-mono">scripts/proxmox-enable-twingate-tun.sh CTID</code> then{' '}
+                <code className="font-mono">pct reboot CTID</code>.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {data.unsupportedArch && (
+        <Card className="max-w-4xl mb-5 border-rose-200 bg-rose-50/70" interactive>
+          <div className="flex gap-3 text-sm text-rose-950">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-rose-600" />
+            <div className="space-y-1">
+              <p className="font-semibold">Unsupported CPU architecture for Twingate ({data.arch})</p>
+              <p>
+                Re-flash Raspberry Pi with the 64-bit image <code className="font-mono">mt-billing-rpi-arm64.img.xz</code>.
+                Twingate Client supports <b>amd64</b> and <b>arm64</b> only.
+              </p>
             </div>
           </div>
         </Card>

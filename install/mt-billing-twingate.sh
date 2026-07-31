@@ -335,13 +335,15 @@ read_key_from_db() {
 }
 
 install_twingate_client() {
+  ensure_supported_arch || exit 1
   if command -v twingate >/dev/null 2>&1 && [[ -x /usr/sbin/twingated ]]; then
     log_ok "Twingate client already installed: $(twingate version 2>/dev/null | head -1 || echo ok)"
     return 0
   fi
-  log_info "Installing Twingate Linux Client"
+  log_info "Installing Twingate Linux Client (arch=$(host_arch))"
   if ! curl -fsSL https://binaries.twingate.com/client/linux/install.sh | bash; then
     log_err "Twingate install script failed"
+    log_err "Supported: Ubuntu/Debian on amd64 or arm64. RPi3 needs mt-billing-rpi-arm64 (64-bit)."
     exit 1
   fi
   if ! command -v twingate >/dev/null 2>&1; then
@@ -390,18 +392,34 @@ prefer_resolved() {
   fi
 }
 
-# Twingate needs /dev/net/tun (creates sdwan0). Proxmox unprivileged LXCs often
-# omit it → twingated exits with "Failed to initialize Network Manager(TUN device)".
+# Twingate needs /dev/net/tun (creates sdwan0).
+# - Proxmox unprivileged LXC: host must passthrough TUN (proxmox-enable-twingate-tun.sh)
+# - Bare metal (RPi / Wyse / PC flash): usually just needs `modprobe tun`
 print_tun_fix() {
-  log_err "Missing /dev/net/tun — Twingate client cannot start in this container/LXC."
-  log_err "Fix on the Proxmox HOST (not inside the guest), then retry Install & connect:"
-  log_err "  # from a clone on the host:"
-  log_err "  sudo bash scripts/proxmox-enable-twingate-tun.sh <CTID>"
-  log_err "  # or one-liner (replace CTID):"
-  log_err "  CONF=/etc/pve/lxc/<CTID>.conf"
-  log_err "  echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >>\$CONF"
-  log_err "  echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >>\$CONF"
-  log_err "  pct reboot <CTID>"
+  local in_lxc=0
+  if [[ -f /proc/1/environ ]] && tr '\0' '\n' </proc/1/environ 2>/dev/null | grep -q container=lxc; then
+    in_lxc=1
+  elif [[ -f /run/systemd/container ]] && grep -qi lxc /run/systemd/container 2>/dev/null; then
+    in_lxc=1
+  elif grep -qaE 'container=lxc|/lxc/' /proc/1/cgroup 2>/dev/null; then
+    in_lxc=1
+  fi
+
+  log_err "Missing /dev/net/tun — Twingate client cannot create its VPN interface (sdwan0)."
+  if [[ "$in_lxc" -eq 1 ]]; then
+    log_err "This looks like a Proxmox/LXC guest. Fix on the Proxmox HOST:"
+    log_err "  sudo bash scripts/proxmox-enable-twingate-tun.sh <CTID>"
+    log_err "  # or:"
+    log_err "  echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >> /etc/pve/lxc/<CTID>.conf"
+    log_err "  echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >> /etc/pve/lxc/<CTID>.conf"
+    log_err "  pct reboot <CTID>"
+  else
+    log_err "Bare metal / VM (RPi, Dell Wyse, PC flash image) — try:"
+    log_err "  sudo modprobe tun"
+    log_err "  ls -l /dev/net/tun"
+    log_err "  echo tun | sudo tee /etc/modules-load.d/tun.conf"
+    log_err "Then retry Install & connect. If modprobe fails, the kernel lacks TUN support."
+  fi
   log_err "Docs: https://www.twingate.com/docs/linux-headless/ (needs /dev/net/tun + NET_ADMIN)"
 }
 
@@ -409,18 +427,56 @@ ensure_tun_device() {
   if [[ -c /dev/net/tun ]]; then
     return 0
   fi
-  log_warn "/dev/net/tun missing — attempting to create (works on VMs / privileged CTs only)"
+
+  log_warn "/dev/net/tun missing — loading TUN module / creating device node"
+  # Bare-metal flash images often ship without tun loaded at boot
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe tun 2>/dev/null || true
+  fi
+  mkdir -p /etc/modules-load.d 2>/dev/null || true
+  if [[ ! -f /etc/modules-load.d/tun.conf ]]; then
+    echo tun >/etc/modules-load.d/tun.conf 2>/dev/null || true
+  fi
+
   mkdir -p /dev/net 2>/dev/null || true
   if [[ ! -e /dev/net/tun ]]; then
     mknod /dev/net/tun c 10 200 2>/dev/null || true
   fi
   chmod 666 /dev/net/tun 2>/dev/null || true
+
+  # udev sometimes creates it after modprobe
+  sleep 1
   if [[ -c /dev/net/tun ]]; then
-    log_ok "Created /dev/net/tun"
+    log_ok "TUN device ready (/dev/net/tun)"
     return 0
   fi
   print_tun_fix
   return 1
+}
+
+host_arch() {
+  uname -m 2>/dev/null || echo unknown
+}
+
+# Twingate Client packages: amd64 + arm64 only (NOT 32-bit armhf).
+ensure_supported_arch() {
+  local a
+  a="$(host_arch)"
+  case "$a" in
+    x86_64|amd64|aarch64|arm64)
+      return 0
+      ;;
+    armv7l|armhf|armv6l|armel)
+      log_err "Twingate Linux Client does not support 32-bit ARM ($a)."
+      log_err "Raspberry Pi 3 must use the 64-bit image: mt-billing-rpi-arm64.img.xz"
+      log_err "  (not a 32-bit / armhf OS). Twingate supports amd64 + arm64 only."
+      return 1
+      ;;
+    *)
+      log_warn "Unfamiliar CPU arch ($a) — Twingate may not have a package for this board"
+      return 0
+      ;;
+  esac
 }
 
 tg_client_status() {
@@ -682,6 +738,7 @@ do_status() {
   else
     echo "tun=no"
   fi
+  echo "arch=$(host_arch)"
   if grep -qE '100\.95\.0\.25' /etc/resolv.conf 2>/dev/null; then
     first_ns="$(grep -E '^\s*nameserver\s+' /etc/resolv.conf | head -1 | awk '{print $2}')"
     if [[ "$first_ns" == 100.95.* ]]; then

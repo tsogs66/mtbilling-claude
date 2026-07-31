@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / Pa-North
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # First-boot installer for Raspberry Pi / Orange Pi / PC flash images.
 # Runs once via systemd, installs Node.js + MT-Billing, configures nginx.
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${MT_INSTALL_DIR:-/opt/mt-billing}"
-REPO_URL="${MT_REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}"
+REPO_URL="${MT_REPO_URL:-https://github.com/tsogs66/MT-Billing.git}"
 REPO_BRANCH="${MT_REPO_BRANCH:-main}"
 SERVICE_USER="${MT_SERVICE_USER:-mtbilling}"
 API_PORT="${MT_API_PORT:-4000}"
@@ -24,6 +24,18 @@ echo "==== MT-Billing first-boot $(date -Is) ===="
 echo "Arch: $(uname -m)  Kernel: $(uname -r)"
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Twingate (and similar VPN clients) need TUN. Flash images often don't load it by default.
+ensure_tun_module() {
+  mkdir -p /etc/modules-load.d
+  echo tun >/etc/modules-load.d/tun.conf
+  modprobe tun 2>/dev/null || true
+  if [[ -c /dev/net/tun ]]; then
+    echo "TUN device OK: /dev/net/tun"
+  else
+    echo "WARN: /dev/net/tun still missing after modprobe tun (Twingate will not start until fixed)"
+  fi
+}
 
 detect_board() {
   local model="" arch
@@ -141,6 +153,7 @@ EOF
 }
 
 detect_board
+ensure_tun_module
 ensure_swap_if_low_ram
 ensure_console_user
 
