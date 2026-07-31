@@ -6,6 +6,7 @@ import { Card, StatTile, TabPills, DataTable, Flash } from '../components/ui';
 import ReceiptPrintModal from '../components/ReceiptPrintModal';
 import { api, peso } from '../api';
 import { openReceiptForPrint, type PaymentReceipt } from '../lib/receiptPrint';
+import { openSalesReportPrint } from '../lib/invoicePrint';
 
 const GROUPS = [
   { key: 'month', label: 'Monthly' },
@@ -95,6 +96,26 @@ export default function SalesReport() {
         <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
       )}
 
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <TabPills tabs={GROUPS} active={range} onChange={setRange} />
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() =>
+            openSalesReportPrint({
+              title: 'Sales Report',
+              rangeLabel: range === 'year' ? 'Yearly' : 'Monthly',
+              total: Number(sales?.total || 0),
+              rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),
+              meta: `${sales?.transactions ?? 0} transactions · avg/day ${peso(sales?.avgPerDay ?? 0)} · best ${peso(sales?.best ?? 0)}`,
+            })
+          }
+          disabled={!sales}
+        >
+          <Printer size={16} /> Print sales report
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
         <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
         <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
@@ -102,7 +123,7 @@ export default function SalesReport() {
         <StatTile label="Best day" value={peso(sales?.best ?? 0)} icon={CalendarDays} accent="from-emerald-500/15 to-transparent" tone="text-emerald-600" delay={150} />
       </div>
 
-      <Card title="Revenue" interactive right={<TabPills tabs={GROUPS} active={range} onChange={setRange} />}>
+      <Card title="Revenue" interactive>
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={sales?.series ?? []} margin={{ top: 28, right: 12, left: 8, bottom: 4 }}>

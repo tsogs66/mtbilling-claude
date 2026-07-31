@@ -167,6 +167,16 @@ export default function Notifications() {
   };
 
   const setS = (patch: any) => setSettings((s: any) => ({ ...s, ...patch }));
+
+  const previewFill = (text: string) =>
+    String(text || '')
+      .replace(/\{name\}/gi, 'Juan Dela Cruz')
+      .replace(/\{account\}/gi, '1001')
+      .replace(/\{plan\}/gi, 'Fiber 25')
+      .replace(/\{amount\}/gi, '₱1,500.00')
+      .replace(/\{due\}/gi, '2026-08-15')
+      .replace(/\{username\}/gi, 'juan.d');
+
   const smsProvider = String(settings?.sms_provider || 'isms').toLowerCase();
   const setSmsProvider = (provider: string) => {
     const defaults = SMS_PROVIDER_DEFAULTS[provider] || SMS_PROVIDER_DEFAULTS.isms;
@@ -272,6 +282,48 @@ export default function Notifications() {
                 </p>
               )}
             </FormField>
+
+            {/* Live preview of what subscribers will receive */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Preview</div>
+              <p className="text-xs text-slate-400">
+                Sample fill:{' '}
+                <code className="text-slate-600">
+                  {'{name}=Juan · {account}=1001 · {plan}=Fiber 25 · {amount}=₱1,500.00 · {due}=2026-08-15'}
+                </code>
+              </p>
+              {(channel === 'email' || channel === 'both') && (
+                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-sm">
+                  <div className="px-3 py-2 bg-slate-800 text-white text-xs flex items-center gap-2">
+                    <Mail size={14} /> Email preview
+                  </div>
+                  <div className="px-4 py-3 space-y-2 text-sm">
+                    <div>
+                      <span className="text-xs text-slate-400">Subject</span>
+                      <div className="font-medium text-slate-800">{previewFill(subject) || '(no subject)'}</div>
+                    </div>
+                    <div className="border-t border-slate-100 pt-2 whitespace-pre-wrap text-slate-700 leading-relaxed">
+                      {previewFill(message) || <span className="text-slate-400 italic">Message body…</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {(channel === 'sms' || channel === 'both') && (
+                <div className="max-w-sm rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-sm">
+                  <div className="text-xs text-emerald-700 font-semibold mb-2 flex items-center gap-1.5">
+                    <MessageSquare size={14} /> SMS preview
+                  </div>
+                  <div className="rounded-2xl rounded-bl-md bg-white border border-emerald-100 px-3 py-2 text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
+                    {previewFill(message) || <span className="text-slate-400 italic">SMS text…</span>}
+                    <div className="text-xs text-slate-400 mt-2">— (company name signature appended on send)</div>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-2 text-right">
+                    ~{previewFill(message).length} chars
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button type="button" className="btn-primary" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
             </button>
