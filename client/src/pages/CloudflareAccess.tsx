@@ -8,8 +8,9 @@ import { copyTextOrPrompt } from '../lib/clipboard';
 type TunnelJob = { action: string; log: string; running: boolean; code: number | null; startedAt: number };
 
 /**
- * Dedicated Cloudflare Tunnel setup: connector token + public website access link
- * (same public base used by subscriber payment links).
+ * Cloudflare Tunnel setup: connector token + public pay-portal base URL.
+ * Staff panel login stays on the LAN IP — Cloudflare Access / Bot Fight on the
+ * tunnel hostname commonly breaks POST /api/login.
  */
 export default function CloudflareAccess() {
   const [app, setApp] = useState<any>(null);
@@ -20,6 +21,8 @@ export default function CloudflareAccess() {
   const [source, setSource] = useState('none');
   const [warning, setWarning] = useState<string | null>(null);
   const [cloudflareUrl, setCloudflareUrl] = useState<string | null>(null);
+  const [adminLoginUrl, setAdminLoginUrl] = useState('');
+  const [loginWarning, setLoginWarning] = useState('');
   const [job, setJob] = useState<TunnelJob | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const jobPollRef = useRef<number | null>(null);
@@ -51,17 +54,8 @@ export default function CloudflareAccess() {
       setSource(r.data.source || 'none');
       setWarning(r.data.warning || null);
       setCloudflareUrl(r.data.cloudflareUrl || null);
+      if (r.data.lanBaseUrl) setAdminLoginUrl(`${String(r.data.lanBaseUrl).replace(/\/$/, '')}/login`);
     });
-
-  const load = () => {
-    loadApp().catch(() => setApp({}));
-    loadPublic().catch(() => undefined);
-  };
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const refreshStatus = async () => {
     try {
@@ -72,6 +66,8 @@ export default function CloudflareAccess() {
         cf_tunnel_url: r.data.url || r.data.cf_tunnel_url,
         public_base_url: r.data.public_base_url ?? s?.public_base_url,
       }));
+      if (r.data.adminLoginUrl) setAdminLoginUrl(r.data.adminLoginUrl);
+      if (r.data.loginWarning) setLoginWarning(r.data.loginWarning);
       // A stale "Apply failed" banner from an earlier client-side error (e.g. a
       // request that outran a proxy/browser timeout while the install script
       // kept running and finished successfully server-side) is just wrong once
@@ -83,6 +79,17 @@ export default function CloudflareAccess() {
       /* ignore */
     }
   };
+
+  const load = () => {
+    loadApp().catch(() => setApp({}));
+    loadPublic().catch(() => undefined);
+    void refreshStatus();
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveSettings = async (extra: Record<string, unknown> = {}) => {
     const payload = { ...app, ...extra };
@@ -177,24 +184,33 @@ export default function CloudflareAccess() {
     }
   };
 
-  const websiteUrl = (() => {
+  const payPortalUrl = (() => {
     const base = (effective || cloudflareUrl || '').replace(/\/$/, '');
     if (!base) return '';
-    return `${base}/login`;
+    return `${base}/pay/`;
   })();
 
-  const copyWebsite = async () => {
-    if (!websiteUrl) {
-      flash('No public website URL yet — save a Cloudflare hostname/token and start the tunnel.');
+  const copyPayPortal = async () => {
+    if (!payPortalUrl) {
+      flash('No public URL yet — save a Cloudflare hostname/token and start the tunnel.');
       return;
     }
-    const ok = await copyTextOrPrompt(websiteUrl, 'Website access link — copy:');
-    flash(ok ? 'Website link copied' : 'Copy from the dialog, then share the link');
+    const ok = await copyTextOrPrompt(payPortalUrl, 'Pay portal base — copy:');
+    flash(ok ? 'Pay portal base copied' : 'Copy from the dialog, then share the link');
+  };
+
+  const copyAdminLogin = async () => {
+    if (!adminLoginUrl) {
+      flash('LAN IP not detected — open http://<panel-lan-ip>/login for staff login.');
+      return;
+    }
+    const ok = await copyTextOrPrompt(adminLoginUrl, 'Admin login (LAN) — copy:');
+    flash(ok ? 'Admin LAN login copied' : 'Copy from the dialog');
   };
 
   if (!app) {
     return (
-      <Layout title="Cloudflare Access">
+      <Layout title="Cloudflare Tunnel">
         <LoadingPage />
       </Layout>
     );
@@ -219,8 +235,16 @@ export default function CloudflareAccess() {
               : 'not configured';
 
   return (
-    <Layout title="Cloudflare Access">
+    <Layout title="Cloudflare Tunnel">
       <Flash message={banner} onDismiss={() => setBanner('')} />
+
+      <Card className="mb-5 border-amber-200 bg-amber-50/70">
+        <p className="text-sm text-amber-950">
+          <b>Staff login stays on LAN.</b>{' '}
+          {loginWarning ||
+            'Do not enable Cloudflare Access (Zero Trust Application) or Bot Fight Mode on this tunnel hostname — they block panel login. Use the LAN admin URL below.'}
+        </p>
+      </Card>
 
       <Card className="mb-5 border-sky-200 bg-sky-50/50">
         <p className="text-sm text-sky-900">
@@ -236,24 +260,38 @@ export default function CloudflareAccess() {
             <Globe2 size={20} />
           </div>
           <div className="min-w-0">
-            <div className="font-semibold text-slate-800">Website access link</div>
+            <div className="font-semibold text-slate-800">Pay portal (public)</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Same public base as payment links — opens the panel login for staff or remote access over the internet.
+              Subscriber payment links use this Cloudflare hostname. This is not the staff admin login.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
-            {websiteUrl || '(Configure Cloudflare Tunnel below to generate a public link)'}
+            {payPortalUrl || '(Configure Cloudflare Tunnel below to generate a public link)'}
           </div>
-          <button type="button" className="btn-primary" onClick={copyWebsite} disabled={!websiteUrl}>
-            <Copy size={16} /> Copy link
+          <button type="button" className="btn-primary" onClick={copyPayPortal} disabled={!payPortalUrl}>
+            <Copy size={16} /> Copy pay base
           </button>
-          {websiteUrl && (
-            <a className="btn-secondary" href={websiteUrl} target="_blank" rel="noreferrer">
+          {payPortalUrl && (
+            <a className="btn-secondary" href={payPortalUrl} target="_blank" rel="noreferrer">
               <ExternalLink size={16} /> Open
             </a>
           )}
+        </div>
+        <div className="mt-4">
+          <div className="font-semibold text-slate-800 text-sm">Admin login (LAN)</div>
+          <p className="text-xs text-slate-500 mt-0.5 mb-2">
+            Use this after installing the tunnel — not the Cloudflare hostname.
+          </p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
+              {adminLoginUrl || '(Click Refresh status to detect LAN IP)'}
+            </div>
+            <button type="button" className="btn-secondary" onClick={copyAdminLogin} disabled={!adminLoginUrl}>
+              <Copy size={16} /> Copy admin login
+            </button>
+          </div>
         </div>
         <div className="mt-3 text-xs text-slate-500 space-y-1">
           <div>
@@ -275,7 +313,7 @@ export default function CloudflareAccess() {
             return (
               <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 flex flex-wrap items-center gap-2">
                 <span>
-                  Website/pay link (<span className="font-mono">{activeHost}</span>) differs from tunnel hostname (
+                  Pay link (<span className="font-mono">{activeHost}</span>) differs from tunnel hostname (
                   <span className="font-mono">{tunnelHost}</span>).
                 </span>
                 <button
@@ -289,7 +327,7 @@ export default function CloudflareAccess() {
                         sync_public_from_tunnel: true,
                         public_base_url: `https://${tunnelHost}`,
                       });
-                      flash(`Website & pay links now use https://${tunnelHost}`);
+                      flash(`Pay links now use https://${tunnelHost}`);
                       load();
                     } catch (e: any) {
                       flash(e?.response?.data?.error || 'Could not sync public URL');

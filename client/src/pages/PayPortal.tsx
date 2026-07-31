@@ -234,11 +234,11 @@ export default function PayPortal() {
             <Link2 size={20} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="font-semibold text-slate-800">Website access link</div>
+            <div className="font-semibold text-slate-800">Pay portal public base</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Public panel login URL (same Cloudflare / public base as pay links). Configure the tunnel under{' '}
+              Subscriber payment links (Cloudflare Tunnel / public base). Staff admin login stays on the LAN IP — see{' '}
               <Link to="/cloudflare" className="text-brand-600 hover:underline font-medium">
-                Cloudflare Access
+                Cloudflare Tunnel
               </Link>
               .
             </p>
@@ -246,19 +246,19 @@ export default function PayPortal() {
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
-            {effective ? `${String(effective).replace(/\/$/, '')}/login` : '(No public URL yet)'}
+            {effective ? `${String(effective).replace(/\/$/, '')}/pay/` : '(No public URL yet)'}
           </div>
           <button
             type="button"
             className="btn-primary"
             disabled={!effective}
             onClick={async () => {
-              const url = `${String(effective).replace(/\/$/, '')}/login`;
-              const ok = await copyTextOrPrompt(url, 'Website access link — copy:');
-              show(ok ? 'Website link copied' : 'Copy from the dialog');
+              const url = `${String(effective).replace(/\/$/, '')}/pay/`;
+              const ok = await copyTextOrPrompt(url, 'Pay portal base — copy:');
+              show(ok ? 'Pay portal base copied' : 'Copy from the dialog');
             }}
           >
-            <Copy size={16} /> Copy website link
+            <Copy size={16} /> Copy pay base
           </button>
         </div>
       </Card>

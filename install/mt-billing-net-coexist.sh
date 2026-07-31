@@ -119,8 +119,16 @@ write_coexist_resolv() {
   local tmp tw_online=0
   tmp="$(mktemp)"
 
-  if command -v twingate >/dev/null 2>&1 && [[ "$(twingate status 2>/dev/null || true)" == "online" ]]; then
-    tw_online=1
+  # Never call bare `twingate status` — it can hang and freeze Cloudflare apply
+  # (and then the panel feels like login is broken while the job is stuck).
+  if command -v twingate >/dev/null 2>&1; then
+    local st=""
+    if command -v timeout >/dev/null 2>&1; then
+      st="$(timeout --signal=KILL 3s twingate status 2>/dev/null || true)"
+    else
+      st="$(twingate status 2>/dev/null || true)"
+    fi
+    [[ "$st" == "online" ]] && tw_online=1
   fi
 
   {
@@ -169,7 +177,7 @@ cloudflare_still_ok() {
       _coexist_log_ok "cloudflared ($CF_UNIT) still active"
       return 0
     fi
-    _coexist_log_warn "cloudflared unit present but not active — leaving alone (start from Cloudflare Access page)"
+    _coexist_log_warn "cloudflared unit present but not active — leaving alone (start from Cloudflare Tunnel page)"
   fi
   return 0
 }

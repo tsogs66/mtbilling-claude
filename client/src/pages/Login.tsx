@@ -39,8 +39,29 @@ export default function Login() {
       }
     } catch (err: any) {
       const apiMsg = err?.response?.data?.error;
-      if (apiMsg) setError(apiMsg);
-      else if (!err?.response) setError('Cannot reach the API. Is the server running?');
+      const status = err?.response?.status;
+      const ct = String(err?.response?.headers?.['content-type'] || '');
+      const raw =
+        typeof err?.response?.data === 'string'
+          ? err.response.data
+          : typeof err?.response?.data === 'object'
+            ? JSON.stringify(err.response.data)
+            : '';
+      if (
+        /text\/html/i.test(ct) ||
+        /cloudflareaccess\.com|CF_Authorization|cf-browser-verification|Just a moment|Attention Required/i.test(
+          raw
+        )
+      ) {
+        setError(
+          'Cloudflare is blocking login (Access app or Bot Fight). Open the panel by LAN IP (http://<server-ip>/login), and disable Access/Bot Fight on the tunnel hostname.'
+        );
+      } else if (status === 404) {
+        setError(
+          'Login API is not available on this hostname (pay-only public host). Use the panel LAN IP for staff login.'
+        );
+      } else if (apiMsg) setError(apiMsg);
+      else if (!err?.response) setError('Cannot reach the API. Is the server running? Try the LAN IP if you used a Cloudflare URL.');
       else setError('Login failed');
     } finally {
       setLoading(false);

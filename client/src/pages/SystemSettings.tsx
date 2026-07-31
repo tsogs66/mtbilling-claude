@@ -270,7 +270,7 @@ function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
           Expose the panel website and subscriber payment links with Cloudflare Tunnel — no port-forwarding or DynDNS required.
           Prefer the dedicated{' '}
           <Link to="/cloudflare" className="text-brand-600 hover:underline font-medium">
-            Cloudflare Access
+            Cloudflare Tunnel
           </Link>{' '}
           page to paste your connector token and copy the website login link.
           Create a tunnel in{' '}

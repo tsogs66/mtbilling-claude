@@ -64,7 +64,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'System',
     items: [
       { to: '/company', label: 'Company', icon: Building2, permission: 'company' },
-      { to: '/cloudflare', label: 'Cloudflare Access', icon: Cloud, permission: 'settings' },
+      { to: '/cloudflare', label: 'Cloudflare Tunnel', icon: Cloud, permission: 'settings' },
       { to: '/settings', label: 'System Settings', icon: Settings, permission: 'settings' },
       { to: '/roles', label: 'Panel Roles', icon: ShieldCheck, permission: 'roles' },
       { to: '/uptime', label: 'Uptime Monitor', icon: Activity, permission: 'uptime' },

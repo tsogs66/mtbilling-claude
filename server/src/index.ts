@@ -140,6 +140,26 @@ import {
   sendPaymentConfirmationSms,
 } from './notify.js';
 
+/**
+ * Last-resort safety net. node-routeros's underlying Connector can emit a
+ * stray 'error' on itself after its own connect-phase listeners already fired
+ * once and were removed (e.g. an OS-level socket error arriving after the
+ * app-level connect timeout already rejected) — observed crashing the entire
+ * panel (billing, PPPoE, everything) from ONE unreachable/flaky router, which
+ * is an ordinary, frequent condition for an ISP (WAN flaps, reboots, a
+ * mistyped IP), not an exceptional one. mikrotik.ts's withRouter now also
+ * attaches a listener at the actual emission point, but this stays as a
+ * backstop against the same class of event-emitter quirk elsewhere.
+ * systemd's Restart=on-failure remains the fallback for genuinely fatal
+ * conditions this doesn't (and shouldn't try to) paper over.
+ */
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException (panel kept running):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection (panel kept running):', reason);
+});
+
 initSchema();
 migrate();
 seed();
@@ -1715,6 +1735,7 @@ app.get('/api/payment-links/config', (_req, res) => {
     .get() as any;
   const resolved = resolvePublicBaseUrl();
   const lanBaseUrl = detectLanBaseUrl() || null;
+  const lanIp = detectLanIpv4();
   res.json({
     publicBaseUrl: app?.public_base_url || '',
     envPublicBaseUrl: process.env.PUBLIC_BASE_URL || null,
@@ -1723,8 +1744,11 @@ app.get('/api/payment-links/config', (_req, res) => {
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url || (app?.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : null)
         : null,
-    websiteUrl: resolved.baseUrl ? `${String(resolved.baseUrl).replace(/\/$/, '')}/login` : null,
-    lanIp: detectLanIpv4(),
+    // Pay portal base — not staff login. Staff login stays on LAN (Access/Bot Fight break /api/login).
+    payPortalUrl: resolved.baseUrl ? `${String(resolved.baseUrl).replace(/\/$/, '')}/pay/` : null,
+    websiteUrl: lanBaseUrl ? `${String(lanBaseUrl).replace(/\/$/, '')}/login` : null,
+    adminLoginUrl: lanBaseUrl ? `${String(lanBaseUrl).replace(/\/$/, '')}/login` : lanIp ? `http://${lanIp}/login` : null,
+    lanIp,
     lanBaseUrl,
     effective: resolved.baseUrl || null,
     source: resolved.source,

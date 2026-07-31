@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Install and run Cloudflare Tunnel (cloudflared) so subscriber payment links
 # are reachable without opening router ports or using DynDNS.
@@ -229,15 +229,19 @@ probe_token() {
 
 set_public_base_url() {
   local base="$1"
+  # Quote for systemd EnvironmentFile so a restart never fails to parse .env
+  # (unquoted edge cases after Cloudflare install were a login-outage cause).
+  local safe="${base//\"/}"
   mkdir -p "$(dirname "$ENV_FILE")"
   if [[ -f "$ENV_FILE" ]]; then
-    if grep -q '^PUBLIC_BASE_URL=' "$ENV_FILE" 2>/dev/null; then
-      sed -i "s|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=${base}|" "$ENV_FILE"
+    if grep -qE '^PUBLIC_BASE_URL=' "$ENV_FILE" 2>/dev/null; then
+      sed -i "s|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=\"${safe}\"|" "$ENV_FILE"
     else
-      printf '\nPUBLIC_BASE_URL=%s\n' "$base" >>"$ENV_FILE"
+      printf '\nPUBLIC_BASE_URL="%s"\n' "$safe" >>"$ENV_FILE"
     fi
   else
-    printf 'PUBLIC_BASE_URL=%s\n' "$base" >"$ENV_FILE"
+    # Never create a .env that only has PUBLIC_BASE_URL — JWT lives in that file.
+    log_warn "server/.env missing — skipping PUBLIC_BASE_URL env write (DB updated)"
   fi
 
   if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
@@ -535,34 +539,28 @@ do_apply() {
   fi
   do_start
 
-  if systemctl is-active --quiet mt-billing-api 2>/dev/null; then
-    # This script itself was invoked (via sudo) BY mt-billing-api handling the
-    # panel's HTTP request — a synchronous `systemctl restart mt-billing-api`
-    # here kills that same process before it can send its response, so nginx
-    # sees "upstream prematurely closed connection" and the panel shows a
-    # generic "Apply failed" even though everything above succeeded. Defer the
-    # restart a couple of seconds via a transient systemd timer, decoupled
-    # from this process tree, so the response goes out first.
-    log_info "Scheduling mt-billing-api restart (to load PUBLIC_BASE_URL) in 2s"
-    if ! systemd-run --on-active=2 --unit="mt-billing-api-restart-deferred-$$" \
-        systemctl restart mt-billing-api >/dev/null 2>&1; then
-      log_warn "Could not schedule deferred restart; PUBLIC_BASE_URL may need a manual: systemctl restart mt-billing-api"
-    fi
-  fi
+  # Do NOT restart mt-billing-api here. Pay/public URLs are read from SQLite
+  # (and the panel hot-sets process.env.PUBLIC_BASE_URL after apply). A deferred
+  # restart after Cloudflare install was a common cause of "UI cannot login"
+  # (API crash-loop / brief outage / EnvironmentFile parse edge cases).
+  log_info "Skipping mt-billing-api restart (PUBLIC_BASE_URL is in DB; login stays on LAN)"
 
   echo
   log_ok "Done"
   echo "  Hostname    : ${HOSTNAME:-'(set in Cloudflare + panel)'}"
   echo "  Local port  : ${LOCAL_PORT} (must match Cloudflare service URL)"
   echo "  Pay links   : https://${HOSTNAME:-YOUR_HOST}/pay/<token>"
+  echo "  Admin login : use LAN IP http://<panel-lan-ip>/login (not the Cloudflare hostname)"
   echo
   echo "Checklist:"
   echo "  1. Cloudflare Tunnel public hostname points to http://127.0.0.1:${LOCAL_PORT}"
   echo "  2. nginx (or the panel) is listening on that port"
   echo "  3. Payment Links → Active base shows https://${HOSTNAME:-YOUR_HOST}"
   echo "  4. Open a full pay link https://${HOSTNAME:-YOUR_HOST}/pay/<token> (not bare /pay/)"
-  echo "  5. If Cloudflare shows 502 Host Error: cloudflared or nginx is down — run: $0 status"
-  echo "  6. If /pay/ returns 403: remove leftover dist/pay/ or re-run public-host / reinstall nginx config"
+  echo "  5. Do NOT enable Cloudflare Access (Zero Trust app) or Bot Fight on this hostname"
+  echo "     — they block POST /api/login. Staff panel login stays on the LAN IP."
+  echo "  6. If Cloudflare shows 502 Host Error: cloudflared or nginx is down — run: $0 status"
+  echo "  7. If /pay/ returns 403: remove leftover dist/pay/ or re-run public-host / reinstall nginx config"
 }
 
 case "$ACTION" in

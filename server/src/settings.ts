@@ -9,8 +9,31 @@ import { db, backupsDir, dbPath, dataDir } from './db.js';
 import { probeRouter } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
+import { detectLanBaseUrl, detectLanIpv4 } from './billing.js';
 
 export const settingsRouter = express.Router();
+
+function hotSetPublicBaseUrl(url: string) {
+  // Avoid restarting mt-billing-api after Cloudflare apply — a restart was a
+  // common cause of "UI cannot login" while the unit was bouncing / crash-looping.
+  try {
+    process.env.PUBLIC_BASE_URL = url;
+  } catch {
+    /* ignore */
+  }
+}
+
+function cloudflareLoginHints(url: string) {
+  const lan = detectLanBaseUrl() || '';
+  const lanIp = detectLanIpv4() || '';
+  return {
+    payPortalBase: url || '',
+    adminLoginUrl: lan ? `${lan.replace(/\/$/, '')}/login` : lanIp ? `http://${lanIp}/login` : '',
+    lanIp,
+    loginWarning:
+      'Staff panel login stays on the LAN IP. Do not enable Cloudflare Access (Zero Trust Application) or Bot Fight Mode on the tunnel hostname — they block POST /api/login.',
+  };
+}
 
 // ---------- Panel / app settings ----------
 const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key', 'cursor_api_key', 'cf_tunnel_token'];
@@ -280,15 +303,18 @@ settingsRouter.get('/cloudflare-tunnel/status', async (_req, res) => {
   const result = await runCloudflareTunnel(['status']);
   if (result.code === 0) {
     const parsed = parseTunnelStatusOutput(result.stdout);
-    res.json({ ...parsed, ...publicApp(), output: result.stdout.trim() });
+    const url = parsed.url || '';
+    res.json({ ...parsed, ...publicApp(), ...cloudflareLoginHints(url), output: result.stdout.trim() });
     return;
   }
   // Fallback to DB values when systemd/script unavailable (dev)
   const s = getApp();
+  const url = s.cf_tunnel_url || (s.cf_tunnel_hostname ? `https://${s.cf_tunnel_hostname}` : '');
   res.json({
     status: s.cf_tunnel_status || 'stopped',
-    url: s.cf_tunnel_url || (s.cf_tunnel_hostname ? `https://${s.cf_tunnel_hostname}` : ''),
+    url,
     ...publicApp(),
+    ...cloudflareLoginHints(url),
     warning: result.stderr || undefined,
   });
 });
@@ -308,6 +334,7 @@ settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
         `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
            public_base_url = ? WHERE id = 1`
       ).run(url, url);
+      hotSetPublicBaseUrl(url);
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'info',
         'cloudflare',
@@ -322,7 +349,7 @@ settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
     }
   });
   if (!started.ok) return res.status(409).json({ error: started.error });
-  res.json({ ok: true, started: true });
+  res.json({ ok: true, started: true, ...cloudflareLoginHints(url) });
 });
 
 settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
@@ -342,6 +369,7 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
           `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
              public_base_url = ? WHERE id = 1`
         ).run(url, url);
+        hotSetPublicBaseUrl(url);
         db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', `Tunnel started at ${url}`);
       } else {
         db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('error', 'cloudflare', `Tunnel start failed (exit ${code})`);
@@ -355,7 +383,7 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
       if (!retried.ok) onStarted(code);
     });
     if (!started.ok) return res.status(409).json({ error: started.error });
-    return res.json({ ok: true, started: true });
+    return res.json({ ok: true, started: true, ...cloudflareLoginHints(url) });
   }
 
   const started = startCloudflareJob(['stop'], 'stop', (code) => {
