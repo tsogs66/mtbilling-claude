@@ -2,9 +2,69 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Globe2, Loader2, RefreshCw, Settings, Shield, Unplug } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Flash, FormField, LoadingPage, PageHeader, StatusBadge } from '../components/ui';
-import { api } from '../api';
+import { api, publicApi } from '../api';
 
 type TgJob = { action: string; log: string; running: boolean; code: number | null; startedAt: number };
+
+function formatTgError(e: any, fallback: string) {
+  const data = e?.response?.data;
+  if (typeof data?.error === 'string' && data.error.trim()) return data.error;
+  if (typeof data?.message === 'string' && data.message.trim()) return data.message;
+  if (e?.code === 'ECONNABORTED') {
+    return 'Request timed out — panel API is slow or stuck. On the RPi/PC console run: sudo systemctl restart mt-billing-api nginx';
+  }
+  if (e?.message === 'Network Error' || (e?.isAxiosError && !e?.response)) {
+    return 'Cannot reach panel API. Open the panel by LAN IP (not hostname), then: sudo systemctl restart mt-billing-api nginx — or: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore';
+  }
+  // Client-side Error (validation) — surface its message
+  if (typeof e?.message === 'string' && e.message.trim() && !e?.response && !e?.isAxiosError) {
+    return e.message;
+  }
+  if (e?.response?.status) return `${fallback} (HTTP ${e.response.status})`;
+  return fallback;
+}
+
+/** Pre-flight parse of Twingate Service Key paste (full JSON required). */
+function validateServiceKeyPaste(raw: string): { ok: true; cleaned: string } | { ok: false; error: string } {
+  let s = String(raw || '')
+    .replace(/^\uFEFF/, '')
+    .trim();
+  if (!s) return { ok: false, error: 'Paste the full Service Key JSON first.' };
+  if (/^```/.test(s)) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  }
+  s = s.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
+  if (!s.startsWith('{')) {
+    const start = s.indexOf('{');
+    const end = s.lastIndexOf('}');
+    if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  }
+  let j: any;
+  try {
+    j = JSON.parse(s);
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: `Service Key is not valid JSON (${e?.message || 'parse error'}). Re-copy the entire key from Twingate Admin → Services — include "version", "network", and the full private_key.`,
+    };
+  }
+  if (!j?.network) {
+    return {
+      ok: false,
+      error:
+        'Service Key JSON is missing "network". You likely pasted only part of the key (private_key/key_id). Copy the complete JSON from Twingate Admin.',
+    };
+  }
+  const pk = String(j.private_key || j.privateKey || '');
+  if (!pk || !/BEGIN .*PRIVATE KEY/.test(pk)) {
+    return {
+      ok: false,
+      error:
+        'Service Key JSON is missing a full "private_key" block. Do not truncate it — paste the complete JSON.',
+    };
+  }
+  return { ok: true, cleaned: JSON.stringify(j) };
+}
 
 /**
  * Twingate headless client — lets this panel reach OLTs / routers on remote
@@ -18,10 +78,12 @@ export default function Twingate() {
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [apiDown, setApiDown] = useState(false);
   const [job, setJob] = useState<TgJob | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const jobPollRef = useRef<number | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
+  const saveAbortRef = useRef<AbortController | null>(null);
 
   const stopJobPoll = () => {
     if (jobPollRef.current != null) {
@@ -36,12 +98,24 @@ export default function Twingate() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [job?.log]);
 
+  const pingApi = async () => {
+    try {
+      await publicApi.get('/health', { timeout: 3000 });
+      setApiDown(false);
+      return true;
+    } catch {
+      setApiDown(true);
+      return false;
+    }
+  };
+
   const load = (opts?: { live?: boolean }) => {
     const wantLive = !!opts?.live;
     // Fast path: DB-only /twingate (never shells out — Proxmox UI must not hang).
     api
       .get('/twingate', { timeout: 5000 })
       .then((r) => {
+        setApiDown(false);
         setData(r.data);
         setSettings((s: any) => s || {
           serviceKeySet: !!r.data.configured,
@@ -52,7 +126,8 @@ export default function Twingate() {
         setForm((f) => ({ ...f, nodeName: r.data.nodeName || f.nodeName || '' }));
         if (!r.data.configured) setSetupOpen(true);
       })
-      .catch(() =>
+      .catch(() => {
+        setApiDown(true);
         setData((prev: any) => ({
           configured: prev?.configured ?? false,
           online: false,
@@ -60,15 +135,19 @@ export default function Twingate() {
           network: prev?.network || '',
           nodeName: prev?.nodeName || 'panel-host',
           message: 'Could not load Twingate status from the panel API.',
-        }))
-      );
+          apiDown: true,
+        }));
+      });
 
     // Live probe only on Refresh / after jobs — auto-load must never shell out
     // (hung twingate status on Proxmox LXC freezes Node workers / feels like UI hang).
     if (wantLive) {
       api
         .get('/twingate/live', { timeout: 6000 })
-        .then((r) => setData(r.data))
+        .then((r) => {
+          setApiDown(false);
+          setData(r.data);
+        })
         .catch(() => {
           /* keep fast snapshot */
         });
@@ -98,7 +177,10 @@ export default function Twingate() {
         message: null,
       }
     );
-    load({ live: false });
+    void pingApi().then((ok) => {
+      if (ok) load({ live: false });
+      else load({ live: false }); // still try — message set on failure
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -111,18 +193,59 @@ export default function Twingate() {
   }, [data?.connecting, data?.status]);
 
   const save = async () => {
+    if (saving) return;
     setSaving(true);
+    setFlash(null);
+    saveAbortRef.current?.abort();
+    const ac = new AbortController();
+    saveAbortRef.current = ac;
+    const hangTimer = window.setTimeout(() => ac.abort(), 15000);
     try {
-      await api.put('/twingate/settings', {
-        serviceKey: form.serviceKey || undefined,
-        nodeName: form.nodeName,
-      });
+      const pasted = form.serviceKey.trim();
+      let serviceKey: string | undefined;
+      if (pasted) {
+        const v = validateServiceKeyPaste(pasted);
+        if (!v.ok) {
+          setFlash({ type: 'error', msg: v.error });
+          throw new Error(v.error);
+        }
+        serviceKey = v.cleaned;
+      }
+
+      const healthy = await pingApi();
+      if (!healthy) {
+        const msg =
+          'Panel API is not responding. On the device console (monitor+keyboard or SSH by LAN IP): sudo systemctl restart mt-billing-api nginx — if Twingate broke DNS: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore';
+        setFlash({ type: 'error', msg });
+        throw new Error(msg);
+      }
+
+      await api.put(
+        '/twingate/settings',
+        {
+          serviceKey,
+          nodeName: form.nodeName,
+        },
+        { timeout: 12000, signal: ac.signal }
+      );
       setFlash({ type: 'success', msg: 'Twingate settings saved.' });
       setForm((f) => ({ ...f, serviceKey: '' }));
+      setApiDown(false);
       load({ live: false });
     } catch (e: any) {
-      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Save failed' });
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError' || e?.name === 'AbortError') {
+        setFlash({
+          type: 'error',
+          msg: 'Save timed out after 15s — API is stuck. Restart: sudo systemctl restart mt-billing-api',
+        });
+      } else {
+        const msg = formatTgError(e, 'Save failed');
+        // Avoid double-flashing the same client-side validation message
+        setFlash((prev) => (prev?.type === 'error' && prev.msg === e?.message ? prev : { type: 'error', msg }));
+      }
+      throw e;
     } finally {
+      window.clearTimeout(hangTimer);
       setSaving(false);
     }
   };
@@ -134,7 +257,7 @@ export default function Twingate() {
     setElapsed(0);
     const tick = async () => {
       try {
-        const r = await api.get('/twingate/job');
+        const r = await api.get('/twingate/job', { timeout: 5000 });
         setElapsed(Math.round((Date.now() - startedAt) / 1000));
         setJob((j) => (j ? { ...j, log: r.data.log || '' } : j));
         if (!r.data.running) {
@@ -154,7 +277,16 @@ export default function Twingate() {
           setBusy(false);
         }
       } catch {
-        /* keep polling */
+        /* keep polling — but bail if API stays down too long */
+        if (Date.now() - startedAt > 90000) {
+          stopJobPoll();
+          setBusy(false);
+          setJob((j) => (j ? { ...j, running: false, code: 124 } : j));
+          setFlash({
+            type: 'error',
+            msg: 'Lost contact with panel API while Twingate was working. Restart API / run Emergency restore on the console.',
+          });
+        }
       }
     };
     void tick();
@@ -165,22 +297,22 @@ export default function Twingate() {
     setBusy(true);
     try {
       if (form.serviceKey.trim()) await save();
-      await api.post('/twingate/apply');
+      await api.post('/twingate/apply', null, { timeout: 15000 });
       pollJob('apply');
     } catch (e: any) {
       setBusy(false);
-      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Apply failed' });
+      setFlash({ type: 'error', msg: formatTgError(e, 'Apply failed') });
     }
   };
 
   const toggle = async () => {
     setBusy(true);
     try {
-      const r = await api.post('/twingate/toggle');
+      const r = await api.post('/twingate/toggle', null, { timeout: 15000 });
       pollJob(r.data.action || 'toggle');
     } catch (e: any) {
       setBusy(false);
-      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Toggle failed' });
+      setFlash({ type: 'error', msg: formatTgError(e, 'Toggle failed') });
     }
   };
 
@@ -188,11 +320,11 @@ export default function Twingate() {
     if (!confirm('Stop Twingate and restore host DNS? Use this if the panel lost internet after connecting.')) return;
     setBusy(true);
     try {
-      await api.post('/twingate/emergency-restore');
+      await api.post('/twingate/emergency-restore', null, { timeout: 20000 });
       pollJob('emergency-restore');
     } catch (e: any) {
       setBusy(false);
-      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Emergency restore failed' });
+      setFlash({ type: 'error', msg: formatTgError(e, 'Emergency restore failed — run the same command on the console via SSH/LAN.') });
     }
   };
 
@@ -207,6 +339,43 @@ export default function Twingate() {
   return (
     <Layout title="Twingate">
       {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
+
+      {(apiDown || data?.apiDown || data?.message?.includes('Could not load')) && (
+        <Card className="max-w-4xl mb-5 border-rose-300 bg-rose-50/80" interactive>
+          <div className="flex gap-3 text-sm text-rose-950">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-rose-600" />
+            <div className="space-y-2">
+              <p className="font-semibold">Panel API not responding</p>
+              <p>
+                The page shell loaded, but <code className="font-mono text-xs">/api</code> is down or hung — that is why
+                Save stays on &quot;Saving…&quot; and status shows stopped. Common after a bad Twingate attempt on RPi/PC.
+              </p>
+              <p className="font-medium">On the device (monitor+keyboard or SSH to the LAN IP):</p>
+              <pre className="text-xs font-mono bg-white/90 border border-rose-200 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap">
+{`sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore
+sudo systemctl restart mt-billing-api nginx
+# then open the panel by LAN IP (e.g. http://192.168.x.x) — not the Cloudflare hostname`}
+              </pre>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={() => {
+                  void pingApi().then((ok) => {
+                    if (ok) {
+                      setFlash({ type: 'success', msg: 'API is back.' });
+                      load({ live: false });
+                    } else {
+                      setFlash({ type: 'error', msg: 'API still down — run the console commands above.' });
+                    }
+                  });
+                }}
+              >
+                <RefreshCw size={14} /> Retry API
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <PageHeader
@@ -355,15 +524,17 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
           <div className="space-y-3">
             <p className="text-sm text-slate-500">
               Use a <b>Service Key</b> (Admin → Services) — headless auth is automatic; there is no Accept / approve
-              click. You need: an online <b>Connector</b> (your Proxmox one is fine), <b>Resources</b> (OLT/router IPs),
-              and this Service granted those Resources. Paste the JSON key below, then Install &amp; connect.
+              click. Paste the <b>entire</b> JSON (must include <code className="font-mono text-xs">version</code>,{' '}
+              <code className="font-mono text-xs">network</code>, and the full <code className="font-mono text-xs">private_key</code>
+              ). You need an online <b>Connector</b>, <b>Resources</b> (OLT/router IPs), and this Service granted those
+              Resources. Then Save, then Install &amp; connect.
             </p>
             <FormField
               label="Service Key (JSON)"
               hint={
                 settings?.serviceKeySet
                   ? 'Key is saved. Leave blank to keep current.'
-                  : 'From Admin Console → Services → Service Key'
+                  : 'Must start with {"version":…,"network":"your-net",…} — not just private_key'
               }
             >
               <textarea
@@ -382,10 +553,25 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
               />
             </FormField>
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-secondary" onClick={save} disabled={saving}>
-                {saving ? 'Saving…' : 'Save settings'}
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  void save().catch(() => {
+                    /* flash already set */
+                  });
+                }}
+                disabled={saving || busy}
+              >
+                {saving ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> Saving…
+                  </>
+                ) : (
+                  'Save settings'
+                )}
               </button>
-              <button type="button" className="btn-primary" onClick={apply} disabled={busy}>
+              <button type="button" className="btn-primary" onClick={apply} disabled={busy || saving}>
                 {busy && job?.running ? (
                   <>
                     <Loader2 size={16} className="animate-spin" /> Working… {elapsed}s
@@ -394,7 +580,7 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
                   'Install & connect'
                 )}
               </button>
-              <button type="button" className="btn-secondary" onClick={toggle} disabled={busy || !data.configured}>
+              <button type="button" className="btn-secondary" onClick={toggle} disabled={busy || saving || !data.configured}>
                 {data.online || data.connecting || data.status === 'authenticating' ? 'Disconnect' : 'Start'}
               </button>
             </div>

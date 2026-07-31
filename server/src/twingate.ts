@@ -28,9 +28,18 @@ export function initTwingate() {
   ] as [string, string][]) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
   }
+  ensureSettingsRow();
+}
+
+function ensureSettingsRow() {
+  const row = db.prepare('SELECT id FROM app_settings WHERE id = 1').get();
+  if (!row) {
+    db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
+  }
 }
 
 function getTg() {
+  ensureSettingsRow();
   return db
     .prepare(
       `SELECT twingate_service_key, twingate_network, twingate_status, twingate_enabled, twingate_node_name
@@ -43,6 +52,62 @@ function getTg() {
     twingate_enabled: number | null;
     twingate_node_name: string | null;
   };
+}
+
+/** Normalize pasted Service Key JSON (BOM, smart quotes, markdown fences, surrounding junk). */
+function normalizeServiceKeyPaste(raw: string): string {
+  let s = String(raw || '')
+    .replace(/^\uFEFF/, '')
+    .trim();
+  // Strip markdown code fences
+  if (/^```/.test(s)) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  }
+  // Smart quotes → ASCII
+  s = s.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
+  // If user pasted with leading/trailing prose, extract the outermost {…}
+  if (!s.startsWith('{')) {
+    const start = s.indexOf('{');
+    const end = s.lastIndexOf('}');
+    if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  }
+  return s.trim();
+}
+
+function parseServiceKey(rawInput: string): { ok: true; key: string; network: string } | { ok: false; error: string } {
+  const raw = normalizeServiceKeyPaste(rawInput);
+  if (!raw) return { ok: false, error: 'Service Key JSON is empty.' };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: `Service Key must be valid JSON from Twingate Admin (Services → Service Key). ${e?.message || 'Parse error'}`,
+    };
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { ok: false, error: 'Service Key JSON must be an object.' };
+  }
+  const network = String(parsed.network || '').trim();
+  const privateKey = String(parsed.private_key || parsed.privateKey || '').trim();
+  if (!network) {
+    return { ok: false, error: 'Service Key JSON is missing "network" (your Twingate network slug).' };
+  }
+  if (!privateKey || !/BEGIN .*PRIVATE KEY/.test(privateKey)) {
+    return {
+      ok: false,
+      error:
+        'Service Key JSON is missing a full "private_key" (must include -----BEGIN PRIVATE KEY-----). Re-copy the entire JSON from Twingate Admin — do not truncate it.',
+    };
+  }
+  // Canonicalize so install script always sees private_key + network
+  const canonical = {
+    ...parsed,
+    network,
+    private_key: privateKey,
+  };
+  return { ok: true, key: JSON.stringify(canonical), network: network.replace(/\.twingate\.com$/i, '') || network };
 }
 
 function networkFromKey(raw: string | null | undefined): string {
@@ -319,51 +384,109 @@ function parseStatusOutput(stdout: string): {
   return { status, installed, network, resources, dns, tun, arch };
 }
 
+/** Fast path — DB + filesystem only. Never shells out (Proxmox UI must not hang). */
+twingateRouter.get('/twingate', (_req, res) => {
+  try {
+    const s = getTg();
+    res.json(buildTwingatePayload(s, dbStatusSnapshot()));
+  } catch (e: any) {
+    console.error('[twingate] GET /twingate failed:', e);
+    res.status(500).json({
+      configured: false,
+      online: false,
+      status: 'error',
+      network: '',
+      nodeName: 'panel-host',
+      message: `Twingate status error: ${e?.message || e}`,
+      error: String(e?.message || e),
+    });
+  }
+});
+
 twingateRouter.get('/twingate/settings', (_req, res) => {
-  const s = getTg();
-  res.json({
-    serviceKeySet: !!s.twingate_service_key,
-    network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
-    nodeName: s.twingate_node_name || '',
-    status: s.twingate_status || 'stopped',
-    enabled: !!s.twingate_enabled,
-  });
+  try {
+    const s = getTg();
+    res.json({
+      serviceKeySet: !!s.twingate_service_key,
+      network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
+      nodeName: s.twingate_node_name || '',
+      status: s.twingate_status || 'stopped',
+      enabled: !!s.twingate_enabled,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: `Could not read Twingate settings: ${e?.message || e}` });
+  }
 });
 
 twingateRouter.put('/twingate/settings', (req, res) => {
-  const b = req.body || {};
-  const cur = getTg();
-  let key = cur.twingate_service_key;
-  if (b.serviceKey != null && String(b.serviceKey).trim() !== '') {
-    const raw = String(b.serviceKey).trim();
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed.network || !parsed.private_key) {
-        return res.status(400).json({ error: 'Service Key JSON must include network and private_key.' });
-      }
-      key = JSON.stringify(parsed);
-    } catch {
-      return res.status(400).json({ error: 'Service Key must be valid JSON from the Twingate Admin Console.' });
+  try {
+    const b = req.body || {};
+    const cur = getTg();
+    let key = cur.twingate_service_key;
+    let network = cur.twingate_network || '';
+    if (b.serviceKey != null && String(b.serviceKey).trim() !== '') {
+      const parsed = parseServiceKey(String(b.serviceKey));
+      if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+      key = parsed.key;
+      network = parsed.network || network;
     }
+    if (!key && !cur.twingate_service_key) {
+      // Allow saving node name alone only when a key already exists OR none is required yet —
+      // but surface a clear tip if they intended to paste a key and it was empty after trim.
+      if (b.serviceKey != null && String(b.serviceKey).length > 0 && !String(b.serviceKey).trim()) {
+        return res.status(400).json({ error: 'Service Key looks empty after trimming whitespace.' });
+      }
+    }
+    const nodeName = b.nodeName != null ? String(b.nodeName).trim() : cur.twingate_node_name;
+    network = networkFromKey(key) || network || '';
+    const info = db
+      .prepare(
+        `UPDATE app_settings SET twingate_service_key = ?, twingate_network = ?, twingate_node_name = ? WHERE id = 1`
+      )
+      .run(key, network || null, nodeName || null);
+    if (!info.changes) {
+      ensureSettingsRow();
+      db.prepare(
+        `UPDATE app_settings SET twingate_service_key = ?, twingate_network = ?, twingate_node_name = ? WHERE id = 1`
+      ).run(key, network || null, nodeName || null);
+    }
+    // Persist key file immediately so Install works even if sqlite3 CLI is missing on RPi
+    if (key) {
+      try {
+        writeTwingateKeyFile(key);
+      } catch (e: any) {
+        return res.status(500).json({
+          error: `Saved to DB but could not write key file under data/: ${e?.message || e}. Check disk space and permissions.`,
+        });
+      }
+    }
+    try {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'twingate',
+        'Twingate settings updated'
+      );
+    } catch {
+      /* never fail save on log write */
+    }
+    const s = getTg();
+    res.json({
+      serviceKeySet: !!s.twingate_service_key,
+      network: s.twingate_network || '',
+      nodeName: s.twingate_node_name || '',
+      status: s.twingate_status || 'stopped',
+      enabled: !!s.twingate_enabled,
+    });
+  } catch (e: any) {
+    const msg = String(e?.message || e || 'Save failed');
+    const busy = /busy|locked/i.test(msg);
+    console.error('[twingate] settings save failed:', e);
+    res.status(busy ? 503 : 500).json({
+      error: busy
+        ? 'Database is busy (common on Raspberry Pi under load). Wait a few seconds and tap Save again.'
+        : `Save failed: ${msg}`,
+    });
   }
-  const nodeName = b.nodeName != null ? String(b.nodeName) : cur.twingate_node_name;
-  const network = networkFromKey(key) || cur.twingate_network || '';
-  db.prepare(
-    `UPDATE app_settings SET twingate_service_key = ?, twingate_network = ?, twingate_node_name = ? WHERE id = 1`
-  ).run(key, network, nodeName || null);
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-    'info',
-    'twingate',
-    'Twingate settings updated'
-  );
-  const s = getTg();
-  res.json({
-    serviceKeySet: !!s.twingate_service_key,
-    network: s.twingate_network || '',
-    nodeName: s.twingate_node_name || '',
-    status: s.twingate_status || 'stopped',
-    enabled: !!s.twingate_enabled,
-  });
 });
 
 function buildTwingatePayload(
@@ -432,12 +555,6 @@ function dbStatusSnapshot() {
     arch: String(process.arch || ''),
   };
 }
-
-/** Fast path — DB + filesystem only. Never shells out (Proxmox UI must not hang). */
-twingateRouter.get('/twingate', (_req, res) => {
-  const s = getTg();
-  res.json(buildTwingatePayload(s, dbStatusSnapshot()));
-});
 
 /** Optional live probe — short timeout; used in background after page paint. */
 twingateRouter.get('/twingate/live', async (_req, res) => {
