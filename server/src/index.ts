@@ -4295,7 +4295,7 @@ server.listen(PORT, () => {
   startStatusHub(5 * 60_000);
   startOutageMonitor(3 * 60_000);
   startUptime(90000);
-  startNocMonitor(60_000);
+  startNocMonitor(5 * 60 * 1000);
   setTimeout(() => startUsageScheduler(60_000), 15_000);
   setTimeout(() => startRouterSyncScheduler(3 * 60 * 1000), 30_000);
   setTimeout(() => startNotifyScheduler(5 * 60 * 1000), 45_000);

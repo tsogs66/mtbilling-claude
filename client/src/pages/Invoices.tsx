@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
-import { FileText, Plus, Wallet, AlertTriangle, KeyRound } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Pie, PieChart, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+} from 'recharts';
+import { FileText, Plus, Wallet, AlertTriangle, KeyRound, Printer, Eye } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, DataTable, Modal, ModalFooter, FormField, StatTile, StatusBadge } from '../components/ui';
+import { Card, DataTable, Modal, ModalFooter, FormField, StatTile, StatusBadge, PageHeader } from '../components/ui';
 import { api, peso } from '../api';
+import { openInvoicePrint } from '../lib/invoicePrint';
+
+const AGING_COLORS = ['#10b981', '#f59e0b', '#f97316', '#f43f5e'];
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState<any[]>([]);
@@ -12,6 +18,7 @@ export default function Invoices() {
   const [portalUser, setPortalUser] = useState<any>(null);
   const [subs, setSubs] = useState<any[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState<number | null>(null);
 
   const load = () =>
     api.get('/invoices').then((r) => {
@@ -31,6 +38,26 @@ export default function Invoices() {
     }).catch(() => {});
   }, []);
 
+  const agingPie = useMemo(
+    () =>
+      [
+        { name: 'Current', value: Number(aging.current || 0) },
+        { name: '1–30d', value: Number(aging.d1_30 || 0) },
+        { name: '31–60d', value: Number(aging.d31_60 || 0) },
+        { name: '61d+', value: Number(aging.d61_plus || 0) },
+      ].filter((x) => x.value > 0),
+    [aging]
+  );
+
+  const statusBars = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const inv of invoices) {
+      const s = String(inv.status || 'unpaid');
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return Object.entries(counts).map(([status, count]) => ({ status, count }));
+  }, [invoices]);
+
   const batch = async () => {
     if (!confirm('Generate unpaid invoices for all active subscribers with a plan price?')) return;
     setBatchBusy(true);
@@ -49,6 +76,29 @@ export default function Invoices() {
     load();
   };
 
+  const printInvoice = async (id: number) => {
+    setPreviewBusy(id);
+    try {
+      const r = await api.get(`/invoices/${id}/soa`);
+      openInvoicePrint({
+        company: r.data.company,
+        invoice: r.data.invoice,
+        history: (r.data.history || []).map((h: any) => ({
+          amount: h.amount,
+          method: h.method,
+          paid_at: h.paid_at || h.created_at,
+          note: h.note || h.reference,
+        })),
+      });
+    } catch (e: any) {
+      const inv = invoices.find((x) => x.id === id);
+      if (inv) openInvoicePrint({ invoice: inv, history: [] });
+      else alert(e?.response?.data?.error || 'Could not load invoice for print');
+    } finally {
+      setPreviewBusy(null);
+    }
+  };
+
   const statusBadge = (s: string) => {
     if (s === 'paid') return <StatusBadge status="Active" />;
     if (s === 'overdue') return <StatusBadge status="Expired" />;
@@ -58,6 +108,14 @@ export default function Invoices() {
 
   return (
     <Layout title="Invoices & AR">
+      <div className="mb-5">
+        <PageHeader
+          title="Invoices & receivables"
+          description="Aging, status mix, and printable invoice / SOA for collectors."
+          icon={FileText}
+        />
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5">
         <StatTile label="Total AR" value={peso(aging.total_ar || 0)} icon={Wallet} tone="text-rose-600" delay={0} />
         <StatTile label="Current" value={peso(aging.current || 0)} icon={FileText} delay={40} />
@@ -65,6 +123,41 @@ export default function Invoices() {
         <StatTile label="31–60 days" value={peso(aging.d31_60 || 0)} icon={AlertTriangle} tone="text-orange-600" delay={120} />
         <StatTile label="61+ days" value={peso(aging.d61_plus || 0)} icon={AlertTriangle} tone="text-rose-600" delay={160} />
         <StatTile label="Paid MTD" value={peso(aging.paid_this_month || 0)} icon={Wallet} tone="text-emerald-600" delay={200} />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
+        <Card title="AR aging mix">
+          <div className="h-52">
+            {agingPie.length === 0 ? (
+              <p className="text-sm text-slate-400 p-6">No open receivables.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={agingPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80}>
+                    {agingPie.map((_, i) => (
+                      <Cell key={i} fill={AGING_COLORS[i % AGING_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v: number) => peso(v)} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </Card>
+        <Card title="Invoice status counts">
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={statusBars} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="status" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} width={32} />
+                <Tooltip />
+                <Bar dataKey="count" fill="#0ea5e9" radius={[6, 6, 0, 0]} name="Invoices" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
       </div>
 
       <Card
@@ -106,7 +199,17 @@ export default function Invoices() {
               peso(inv.amount),
               peso(inv.amount_paid),
               statusBadge(inv.status),
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="btn-secondary text-xs !py-1 inline-flex items-center gap-1"
+                  onClick={() => printInvoice(inv.id)}
+                  disabled={previewBusy === inv.id}
+                  title="Preview & print invoice"
+                >
+                  {previewBusy === inv.id ? <Eye size={12} /> : <Printer size={12} />}
+                  Print
+                </button>
                 {inv.status !== 'paid' && inv.status !== 'void' && (
                   <button className="btn-secondary text-xs !py-1" onClick={() => setPayId(inv.id)}>Record pay</button>
                 )}
@@ -149,6 +252,7 @@ export default function Invoices() {
     </Layout>
   );
 }
+
 
 function CreateInvoiceModal({ subs, onClose, onSaved }: any) {
   const [form, setForm] = useState<any>({ pppoe_user_id: '', due_date: new Date().toISOString().slice(0, 10) });

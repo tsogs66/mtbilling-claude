@@ -33,6 +33,14 @@ export function initNoc() {
       model TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS noc_probe_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_key TEXT NOT NULL,
+      online INTEGER NOT NULL,
+      latency_ms INTEGER,
+      probed_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_noc_probe_history_key ON noc_probe_history(device_key, probed_at);
   `);
   for (const [col, type] of [
     ['ports', "TEXT DEFAULT ''"],
@@ -47,6 +55,9 @@ export function initNoc() {
     ['sys_name', 'TEXT'],
     ['vendor', 'TEXT'],
     ['model', 'TEXT'],
+    ['ssh_port', 'INTEGER DEFAULT 22'],
+    ['ssh_user', 'TEXT'],
+    ['ssh_pass', 'TEXT'],
   ] as [string, string][]) {
     if (!columnExists('noc_devices', col)) db.exec(`ALTER TABLE noc_devices ADD COLUMN ${col} ${type}`);
   }
@@ -124,6 +135,18 @@ function persistProbe(
     probe.model,
     id
   );
+  recordHistory(`custom:${id}`, probe.online, probe.latencyMs);
+}
+
+function recordHistory(deviceKey: string, online: boolean, latencyMs: number | null) {
+  try {
+    db.prepare(
+      `INSERT INTO noc_probe_history (device_key, online, latency_ms) VALUES (?, ?, ?)`
+    ).run(deviceKey, online ? 1 : 0, latencyMs);
+    db.prepare(`DELETE FROM noc_probe_history WHERE probed_at < datetime('now', '-2 day')`).run();
+  } catch {
+    /* table may be mid-migrate */
+  }
 }
 
 async function probeLinkedRouters(): Promise<
@@ -179,7 +202,10 @@ async function probeLinkedRouters(): Promise<
         latencyMs: p.online ? Date.now() - t0 : null,
         board: p.board || p.identity || r.board || null,
         error: p.error,
+        sshCapable: true,
+        routerId: r.id,
       });
+      recordHistory(`router:${r.id}`, !!p.online, p.online ? Date.now() - t0 : null);
     } catch (e: any) {
       out.push({
         source: 'router',
@@ -193,6 +219,7 @@ async function probeLinkedRouters(): Promise<
         board: r.board || null,
         error: e?.message || 'Probe failed',
       });
+      recordHistory(`router:${r.id}`, false, null);
     }
   }
   return out;
@@ -256,6 +283,7 @@ async function probeLinkedOlts(): Promise<
       model: p.model || o.model,
       error: p.error,
     });
+    recordHistory(`olt:${o.id}`, p.online, p.online ? Date.now() - t0 : null);
     try {
       db.prepare(
         `UPDATE naps SET status = ?, last_probe_at = CURRENT_TIMESTAMP, probe_error = ?,
@@ -335,11 +363,16 @@ nocRouter.get('/noc', async (req, res) => {
   const devices = db
     .prepare('SELECT * FROM noc_devices ORDER BY kind, name')
     .all()
-    .map((d: any) => ({
-      ...d,
-      source: 'custom' as const,
-      online: d.status === 'online',
-    }));
+    .map((d: any) => {
+      const { ssh_pass, ...rest } = d;
+      return {
+        ...rest,
+        source: 'custom' as const,
+        online: d.status === 'online',
+        ssh_pass_set: !!ssh_pass,
+        sshCapable: !!(d.ssh_user && d.host),
+      };
+    });
 
   let linked: any[] = [];
   if (live) {
@@ -360,6 +393,8 @@ nocRouter.get('/noc', async (req, res) => {
         online: r.status === 'online',
         latencyMs: null,
         board: r.board || null,
+        sshCapable: true,
+        routerId: r.id,
         note: 'Refresh with live probe for status',
       }))
     );
@@ -422,6 +457,69 @@ nocRouter.post('/noc/test', async (req, res) => {
   res.json(probe);
 });
 
+/** Health series for graphic display (uptime-style). Defaults to last 24h. */
+nocRouter.get('/noc/health', (req, res) => {
+  const hours = Math.min(72, Math.max(1, Number(req.query.hours) || 24));
+  const rows = db
+    .prepare(
+      `SELECT device_key, online, latency_ms, probed_at
+       FROM noc_probe_history
+       WHERE probed_at >= datetime('now', ?)
+       ORDER BY probed_at ASC`
+    )
+    .all(`-${hours} hours`) as any[];
+  const byKey: Record<string, { t: string; online: number; latency: number | null }[]> = {};
+  for (const r of rows) {
+    const k = r.device_key;
+    if (!byKey[k]) byKey[k] = [];
+    byKey[k].push({
+      t: r.probed_at,
+      online: r.online ? 1 : 0,
+      latency: r.latency_ms,
+    });
+  }
+  const summary = Object.entries(byKey).map(([key, series]) => {
+    const up = series.filter((s) => s.online).length;
+    return {
+      key,
+      samples: series.length,
+      uptimePct: series.length ? Math.round((up / series.length) * 1000) / 10 : null,
+      series,
+    };
+  });
+  res.json({ hours, devices: summary, probedAt: new Date().toISOString() });
+});
+
+nocRouter.get('/noc/devices/:id/info', async (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM noc_devices WHERE id = ?').get(id) as any;
+  if (!row) return res.status(404).json({ error: 'Device not found' });
+  const probe = await probeNocDevice(row);
+  persistProbe(id, probe);
+  const fresh = db.prepare('SELECT * FROM noc_devices WHERE id = ?').get(id) as any;
+  const { ssh_pass: _p, ...pub } = fresh;
+  res.json({
+    device: { ...pub, ssh_pass_set: !!fresh.ssh_pass },
+    probe,
+    sshCapable: !!(fresh.ssh_user && fresh.host),
+  });
+});
+
+nocRouter.get('/noc/devices/:id/history', (req, res) => {
+  const id = Number(req.params.id);
+  const source = String(req.query.source || 'custom').toLowerCase();
+  const key =
+    source === 'router' ? `router:${id}` : source === 'olt' ? `olt:${id}` : `custom:${id}`;
+  const rows = db
+    .prepare(
+      `SELECT online, latency_ms AS latencyMs, probed_at AS probedAt
+       FROM noc_probe_history WHERE device_key = ? ORDER BY id DESC LIMIT 120`
+    )
+    .all(key)
+    .reverse();
+  res.json({ deviceKey: key, history: rows });
+});
+
 nocRouter.post('/noc/devices', async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim();
@@ -430,8 +528,8 @@ nocRouter.post('/noc/devices', async (req, res) => {
   if (!name || !host) return res.status(400).json({ error: 'Name and host are required.' });
   const info = db
     .prepare(
-      `INSERT INTO noc_devices (name, kind, host, ports, snmp_port, snmp_community, notes, enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      `INSERT INTO noc_devices (name, kind, host, ports, snmp_port, snmp_community, notes, enabled, ssh_port, ssh_user, ssh_pass)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
     )
     .run(
       name,
@@ -440,7 +538,10 @@ nocRouter.post('/noc/devices', async (req, res) => {
       portsToStore(b.ports),
       Number(b.snmpPort ?? b.snmp_port ?? 161) || 161,
       String(b.snmpCommunity ?? b.snmp_community ?? 'public'),
-      b.notes != null ? String(b.notes) : null
+      b.notes != null ? String(b.notes) : null,
+      Number(b.sshPort ?? b.ssh_port ?? 22) || 22,
+      b.sshUser ?? b.ssh_user ?? null,
+      b.sshPass ?? b.ssh_pass ?? null
     );
   const id = Number(info.lastInsertRowid);
   const probe = await probeNocDevice({
@@ -465,7 +566,7 @@ nocRouter.put('/noc/devices/:id', async (req, res) => {
   if (!name || !host) return res.status(400).json({ error: 'Name and host are required.' });
   db.prepare(
     `UPDATE noc_devices SET name=?, kind=?, host=?, ports=?, snmp_port=?, snmp_community=?, notes=?,
-       enabled=? WHERE id=?`
+       enabled=?, ssh_port=?, ssh_user=?, ssh_pass=COALESCE(?, ssh_pass) WHERE id=?`
   ).run(
     name,
     kind,
@@ -479,6 +580,9 @@ nocRouter.put('/noc/devices/:id', async (req, res) => {
       : existing.snmp_community,
     b.notes != null ? String(b.notes) : existing.notes,
     b.enabled != null ? (b.enabled ? 1 : 0) : existing.enabled,
+    b.sshPort != null || b.ssh_port != null ? Number(b.sshPort ?? b.ssh_port) || 22 : existing.ssh_port || 22,
+    b.sshUser != null || b.ssh_user != null ? String(b.sshUser ?? b.ssh_user) : existing.ssh_user,
+    b.sshPass != null || b.ssh_pass != null ? String(b.sshPass ?? b.ssh_pass) : null,
     id
   );
   if (b.probe !== false) {

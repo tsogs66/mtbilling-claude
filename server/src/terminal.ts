@@ -252,7 +252,18 @@ export function initTerminalWs(server: Server) {
     };
 
     ws.on('message', (raw) => {
-      let msg: { type?: string; routerId?: number; data?: string };
+      let msg: {
+        type?: string;
+        routerId?: number;
+        nocDeviceId?: number;
+        data?: string;
+        direct?: boolean;
+        host?: string;
+        port?: number;
+        user?: string;
+        password?: string;
+        name?: string;
+      };
       try {
         msg = JSON.parse(raw.toString());
       } catch {
@@ -263,6 +274,95 @@ export function initTerminalWs(server: Server) {
         session?.close();
         session = null;
         lineFallback = null;
+
+        // NOC custom device — load SSH creds from DB
+        if (msg.nocDeviceId) {
+          const d = db
+            .prepare('SELECT id, name, host, ssh_port, ssh_user, ssh_pass FROM noc_devices WHERE id = ?')
+            .get(Number(msg.nocDeviceId)) as
+            | {
+                id: number;
+                name: string;
+                host: string;
+                ssh_port: number | null;
+                ssh_user: string | null;
+                ssh_pass: string | null;
+              }
+            | undefined;
+          if (!d?.host || !d.ssh_user) {
+            ws.send(
+              JSON.stringify({
+                type: 'status',
+                mode: 'error',
+                message: 'NOC device missing host or SSH username. Edit the device and set SSH credentials.',
+              })
+            );
+            return;
+          }
+          router = {
+            id: d.id,
+            name: d.name,
+            host: d.host,
+            port: 8728,
+            api_user: d.ssh_user,
+            api_pass: d.ssh_pass || '',
+            ssh_port: d.ssh_port || 22,
+            board: null,
+            type: 'noc',
+            status: 'unknown',
+          };
+          ws.send(JSON.stringify({ type: 'status', mode: 'connecting', host: d.host }));
+          session = attachSsh(ws, router, () => {
+            ws.send(
+              JSON.stringify({
+                type: 'status',
+                mode: 'error',
+                message: 'SSH unreachable — check host, port, and credentials on the NOC device.',
+              })
+            );
+          });
+          return;
+        }
+
+        // Direct SSH (explicit host) — no RouterOS API fallback
+        if (msg.direct || (!msg.routerId && msg.host)) {
+          const host = String(msg.host || '').trim();
+          const user = String(msg.user || '').trim();
+          if (!host || !user) {
+            ws.send(
+              JSON.stringify({
+                type: 'status',
+                mode: 'error',
+                message: 'SSH host and username are required.',
+              })
+            );
+            return;
+          }
+          router = {
+            id: 0,
+            name: msg.name || host,
+            host,
+            port: 8728,
+            api_user: user,
+            api_pass: String(msg.password || ''),
+            ssh_port: Number(msg.port) || 22,
+            board: null,
+            type: 'noc',
+            status: 'unknown',
+          };
+          ws.send(JSON.stringify({ type: 'status', mode: 'connecting', host }));
+          session = attachSsh(ws, router, () => {
+            ws.send(
+              JSON.stringify({
+                type: 'status',
+                mode: 'error',
+                message: 'SSH unreachable — check host, port, and credentials.',
+              })
+            );
+          });
+          return;
+        }
+
         router = getRouter(Number(msg.routerId)) || null;
         if (!router?.host) {
           ws.send(JSON.stringify({ type: 'status', mode: 'error', message: 'Router host not configured.' }));
