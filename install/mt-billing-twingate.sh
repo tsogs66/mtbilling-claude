@@ -553,6 +553,34 @@ dump_twingate_logs() {
   fi
 }
 
+# twingate start can hang forever printing "Waiting for status..." when TUN
+# is missing or the daemon never becomes ready — always bound it.
+run_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=KILL "${secs}s" "$@" 2>/dev/null || return $?
+  else
+    "$@"
+  fi
+}
+
+tg_cli_start() {
+  log_info "Starting Twingate daemon (timeout 25s — will not hang on 'Waiting for status…')"
+  # Prefer systemd; fall back to CLI. Both can block — wrap with timeout.
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    run_timeout 20 systemctl restart "$UNIT_NAME" || true
+    # If still activating/stuck, force-kill and try once more briefly
+    if ! systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+      systemctl kill -s SIGKILL "$UNIT_NAME" 2>/dev/null || true
+      run_timeout 15 systemctl start "$UNIT_NAME" || true
+    fi
+  fi
+  # CLI start often prints "Waiting for status..." and never exits on flash images
+  run_timeout 20 twingate start || log_warn "twingate start timed out or failed (status=$(tg_client_status))"
+  sleep 2
+}
+
 ensure_client_started() {
   local st
   st="$(tg_client_status)"
@@ -562,29 +590,28 @@ ensure_client_started() {
   log_info "Client status is ${st} — starting Twingate daemon"
   # Headless clients have no browser "Accept" step. Service Key auth is automatic
   # once twingated is running and the key + Connector + Resource grants are valid.
-  systemctl restart "$UNIT_NAME" 2>/dev/null || true
-  twingate start 2>/dev/null || true
-  sleep 3
+  tg_cli_start
   st="$(tg_client_status)"
   if [[ "$st" == "not-running" || "$st" == "offline" || "$st" == "not-installed" ]]; then
     # Re-apply headless setup in case key/config was incomplete
     if [[ -f "$KEY_FILE" ]]; then
       log_info "Re-running headless setup from $KEY_FILE"
-      twingate setup --headless "$KEY_FILE" || true
-      systemctl restart "$UNIT_NAME" 2>/dev/null || twingate start 2>/dev/null || true
-      sleep 3
+      run_timeout 45 twingate setup --headless "$KEY_FILE" || true
+      tg_cli_start
     fi
   fi
   st="$(tg_client_status)"
+  log_info "Client status after start attempts: ${st}"
   [[ "$st" != "not-running" && "$st" != "not-installed" ]]
 }
 
 # Wait until `twingate status` reports online.
 # Note: Service Account / headless mode has NO interactive "Accept auth" in Twingate Admin.
 wait_for_client_online() {
-  local timeout="${1:-90}"
+  local timeout="${1:-60}"
   local i=0
   local st
+  local retried_start=0
   log_info "Waiting for Twingate client to reach online (up to ${timeout}s)…"
   while [[ $i -lt $timeout ]]; do
     st="$(tg_client_status)"
@@ -593,9 +620,12 @@ wait_for_client_online() {
       return 0
     fi
     if [[ "$st" == "not-running" ]]; then
-      log_warn "Client is not-running — daemon did not stay up (no Admin 'Accept' step for Service Keys)"
-      ensure_client_started || true
-      st="$(tg_client_status)"
+      log_warn "Client is not-running — daemon did not stay up"
+      if [[ "$retried_start" -eq 0 ]]; then
+        retried_start=1
+        ensure_client_started || true
+        st="$(tg_client_status)"
+      fi
       if [[ "$st" == "not-running" ]]; then
         return 1
       fi
@@ -632,8 +662,7 @@ do_start() {
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
-    systemctl restart "$UNIT_NAME" || twingate start || true
-    sleep 3
+    tg_cli_start
     ensure_client_started || true
     apply_coexist_after_twingate
 
@@ -647,9 +676,8 @@ do_start() {
       if [[ ! -c /dev/net/tun ]]; then
         print_tun_fix
       else
-        log_err "There is nothing to 'Accept' in Twingate Admin for a Service Key."
-        log_err "On this host, check: sudo systemctl status twingate && sudo journalctl -u twingate -n 50"
-        log_err "In Admin: Connector Online + Service Account granted Resources (specific remote IPs)."
+        log_err "TUN is present but daemon still not-running — see journal below."
+        log_err "Common on flash images: run sudo modprobe tun; check journalctl -u twingate -n 50"
         dump_twingate_logs
       fi
       kill_daemon_hard
@@ -671,7 +699,7 @@ do_start() {
       return 1
     fi
 
-    if wait_for_client_online 90; then
+    if wait_for_client_online 60; then
       set_db_status online "$(network_from_key)"
       log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
       return 0
