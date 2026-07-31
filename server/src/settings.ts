@@ -13,6 +13,28 @@ import { detectLanBaseUrl, detectLanIpv4 } from './billing.js';
 
 export const settingsRouter = express.Router();
 
+function writeCfTokenFile(token: string): string {
+  const tokenPath = path.join(dataDir, 'cloudflare-tunnel.token');
+  fs.writeFileSync(tokenPath, String(token || '').trim(), { mode: 0o600 });
+  try {
+    fs.chmodSync(tokenPath, 0o600);
+  } catch {
+    /* ignore */
+  }
+  return tokenPath;
+}
+
+/** Build apply/start args without --from-db (avoids sqlite3 CLI on RPi/PC flash). */
+function cloudflareApplyArgs(s: any): string[] {
+  const token = String(s.cf_tunnel_token || '');
+  const host = String(s.cf_tunnel_hostname || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/$/, '');
+  const port = String(s.cf_tunnel_port || 80);
+  const tokenPath = writeCfTokenFile(token);
+  return ['--token-file', tokenPath, '--hostname', host, '--port', port];
+}
+
 function hotSetPublicBaseUrl(url: string) {
   // Avoid restarting mt-billing-api after Cloudflare apply — a restart was a
   // common cause of "UI cannot login" while the unit was bouncing / crash-looping.
@@ -243,7 +265,9 @@ function startCloudflareJob(
   const script = cloudflareTunnelScript();
   cfJob = { running: true, action: actionLabel, code: null, startedAt: Date.now() };
   try {
-    fs.writeFileSync(CF_JOB_LOG, `$ sudo bash ${script} ${args.join(' ')}\n`);
+    // Never log the raw token path contents; redact token-file path for privacy
+    const safeArgs = args.map((a, i) => (args[i - 1] === '--token-file' ? '<token-file>' : a));
+    fs.writeFileSync(CF_JOB_LOG, `$ sudo bash ${script} ${safeArgs.join(' ')}\n`);
   } catch {
     /* best-effort — job still runs without a visible log */
   }
@@ -328,7 +352,7 @@ settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
     return res.status(400).json({ error: 'Set the public hostname (e.g. pay.yourisp.com) first.' });
   }
   const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
-  const started = startCloudflareJob(['--from-db', 'apply'], 'apply', (code) => {
+  const started = startCloudflareJob([...cloudflareApplyArgs(s), 'apply'], 'apply', (code) => {
     if (code === 0) {
       db.prepare(
         `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
@@ -377,9 +401,9 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
     };
     // Prefer full apply (installs the unit if missing); fall back to a plain
     // start if apply itself fails (e.g. unit already configured correctly).
-    const started = startCloudflareJob(['--from-db', 'apply'], 'start', (code) => {
+    const started = startCloudflareJob([...cloudflareApplyArgs(s), 'apply'], 'start', (code) => {
       if (code === 0) { onStarted(0); return; }
-      const retried = startCloudflareJob(['--from-db', 'start'], 'start', onStarted);
+      const retried = startCloudflareJob([...cloudflareApplyArgs(s), 'start'], 'start', onStarted);
       if (!retried.ok) onStarted(code);
     });
     if (!started.ok) return res.status(409).json({ error: started.error });

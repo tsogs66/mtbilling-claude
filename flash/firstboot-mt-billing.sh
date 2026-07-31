@@ -287,7 +287,7 @@ systemctl enable nginx
 systemctl reload nginx
 
 echo "[7/9] Granting panel passwordless sudo (Cloudflare Tunnel + Updater)…"
-# One-time: lets Cloudflare Access / Application Updater work from the UI without SSH.
+# One-time: lets Cloudflare Tunnel / Application Updater work from the UI without SSH.
 if [[ -x "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" ]]; then
   bash "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" || true
 elif [[ -f "${INSTALL_DIR}/install/mt-billing-sudoers" ]]; then
@@ -298,6 +298,11 @@ elif [[ -f "${INSTALL_DIR}/install/mt-billing-sudoers" ]]; then
     "${INSTALL_DIR}/install/mt-billing-sudoers" >/etc/sudoers.d/mt-billing
   chmod 440 /etc/sudoers.d/mt-billing
   visudo -cf /etc/sudoers.d/mt-billing >/dev/null 2>&1 || rm -f /etc/sudoers.d/mt-billing
+fi
+
+# Keep SSH/panel alive if Twingate later rewrites DNS (PC/RPi flash disconnects)
+if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
+  bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
 fi
 
 echo "[8/9] Enabling auto-update timer (checks GitHub every 10 minutes)…"

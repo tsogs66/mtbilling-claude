@@ -24,6 +24,7 @@
 #
 # Options:
 #   --token TOKEN     Cloudflare tunnel connector token
+#   --token-file PATH Read token from file (preferred from panel; no sqlite3 CLI)
 #   --hostname HOST   Public hostname (sets pay portal URL to https://HOST)
 #   --port N          Local service port cloudflared should reach (default 80)
 #                     Note: hostname→service URL is configured in Cloudflare;
@@ -52,6 +53,7 @@ if [[ -f "$COEXIST_SCRIPT" ]]; then
 fi
 
 TOKEN=""
+TOKEN_FILE_ARG=""
 HOSTNAME=""
 LOCAL_PORT="80"
 FROM_DB=0
@@ -70,6 +72,13 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --token) TOKEN="${2:-}"; shift 2 ;;
+    --token-file)
+      TOKEN_FILE_ARG="${2:-}"
+      if [[ -n "$TOKEN_FILE_ARG" && -f "$TOKEN_FILE_ARG" ]]; then
+        TOKEN="$(tr -d '\r\n\t ' <"$TOKEN_FILE_ARG" || true)"
+      fi
+      shift 2
+      ;;
     --hostname) HOSTNAME="${2:-}"; shift 2 ;;
     --port) LOCAL_PORT="${2:-80}"; shift 2 ;;
     --from-db) FROM_DB=1; shift ;;
@@ -102,21 +111,63 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-# The Node app talks to SQLite via the bundled better-sqlite3 native addon —
-# it never needs the `sqlite3` CLI. This script does (read_from_db,
-# set_public_base_url, set_db_status, do_status all shell out to it), but
-# flash images only ever apt-get install libsqlite3-dev (headers, needed to
-# build better-sqlite3), not the `sqlite3` package itself. Result: every
-# --from-db call fails with "Cannot read settings from DB" even though the DB
-# file is right there and the panel is clearly running. Self-install it here,
-# the same way install_cloudflared() below self-installs cloudflared, so
-# existing machines heal by just re-fetching this script (no image rebuild).
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  log_info "Installing sqlite3 (CLI, required to read/write MT-Billing settings)"
+# Prefer panel-supplied --token / --token-file (no sqlite3 CLI needed).
+# Flash images often lack the sqlite3 package and apt mirrors 404 — that used
+# to break every RPi/PC "Install tunnel" from the UI (--from-db).
+# Only try apt for sqlite3 when we still need --from-db / DB status writes.
+need_sqlite_cli=0
+if [[ "$FROM_DB" == "1" && -z "$TOKEN" ]]; then
+  need_sqlite_cli=1
+fi
+if ! command -v sqlite3 >/dev/null 2>&1 && [[ "$need_sqlite_cli" == "1" ]]; then
+  log_info "Installing sqlite3 (CLI) for --from-db…"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq || true
-  apt-get install -y -qq sqlite3 || log_warn "Could not install sqlite3 — --from-db options will fail"
+  apt-get install -y -qq sqlite3 || log_warn "Could not install sqlite3 — use panel apply (token-file) instead of --from-db"
 fi
+
+# DB helper: sqlite3 CLI if present, else python3 stdlib (always on flash images)
+db_exec() {
+  local sql="$1"
+  [[ -f "$DB_PATH" ]] || return 0
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_PATH" "$sql" 2>/dev/null || true
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    SQLITE_DB="$DB_PATH" SQLITE_SQL="$sql" python3 - <<'PY' 2>/dev/null || true
+import os, sqlite3
+db = sqlite3.connect(os.environ["SQLITE_DB"])
+db.execute(os.environ["SQLITE_SQL"])
+db.commit()
+db.close()
+PY
+    return 0
+  fi
+  return 1
+}
+
+db_query() {
+  local sql="$1"
+  [[ -f "$DB_PATH" ]] || return 1
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 -separator '|' "$DB_PATH" "$sql" 2>/dev/null
+    return $?
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    SQLITE_DB="$DB_PATH" SQLITE_SQL="$sql" python3 - <<'PY' 2>/dev/null
+import os, sqlite3
+db = sqlite3.connect(os.environ["SQLITE_DB"])
+cur = db.execute(os.environ["SQLITE_SQL"])
+rows = cur.fetchall()
+for r in rows:
+    print("|".join("" if v is None else str(v) for v in r))
+db.close()
+PY
+    return $?
+  fi
+  return 1
+}
 
 normalize_host() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's|^https\?://||' -e 's|/.*||' -e 's|:.*||' -e 's/\.$//'
@@ -244,32 +295,30 @@ set_public_base_url() {
     log_warn "server/.env missing — skipping PUBLIC_BASE_URL env write (DB updated)"
   fi
 
-  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$DB_PATH" "UPDATE app_settings SET public_base_url = '${base//\'/\'\'}', cf_tunnel_url = '${base//\'/\'\'}', cf_tunnel_status = 'running', cf_tunnel_enabled = 1 WHERE id = 1;" 2>/dev/null || true
-  fi
+  db_exec "UPDATE app_settings SET public_base_url = '${base//\'/\'\'}', cf_tunnel_url = '${base//\'/\'\'}', cf_tunnel_status = 'running', cf_tunnel_enabled = 1 WHERE id = 1;"
 }
 
 set_db_status() {
   local status="$1"
   local url="${2:-}"
-  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    if [[ -n "$url" ]]; then
-      sqlite3 "$DB_PATH" "UPDATE app_settings SET cf_tunnel_status = '${status//\'/\'\'}', cf_tunnel_url = '${url//\'/\'\'}', cf_tunnel_enabled = $([[ "$status" == running ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
-    else
-      sqlite3 "$DB_PATH" "UPDATE app_settings SET cf_tunnel_status = '${status//\'/\'\'}', cf_tunnel_enabled = $([[ "$status" == running ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
-    fi
+  local enabled
+  enabled="$([[ "$status" == running ]] && echo 1 || echo 0)"
+  if [[ -n "$url" ]]; then
+    db_exec "UPDATE app_settings SET cf_tunnel_status = '${status//\'/\'\'}', cf_tunnel_url = '${url//\'/\'\'}', cf_tunnel_enabled = ${enabled} WHERE id = 1;"
+  else
+    db_exec "UPDATE app_settings SET cf_tunnel_status = '${status//\'/\'\'}', cf_tunnel_enabled = ${enabled} WHERE id = 1;"
   fi
 }
 
 read_from_db() {
-  if [[ ! -f "$DB_PATH" ]] || ! command -v sqlite3 >/dev/null 2>&1; then
+  if [[ ! -f "$DB_PATH" ]]; then
     log_err "Cannot read settings from DB ($DB_PATH)"
     exit 1
   fi
   local row
-  row="$(sqlite3 -separator '|' "$DB_PATH" "SELECT IFNULL(cf_tunnel_token,''), IFNULL(cf_tunnel_hostname,''), IFNULL(cf_tunnel_port,80) FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
+  row="$(db_query "SELECT IFNULL(cf_tunnel_token,''), IFNULL(cf_tunnel_hostname,''), IFNULL(cf_tunnel_port,80) FROM app_settings WHERE id = 1;" || true)"
   if [[ -z "$row" ]]; then
-    log_err "No app_settings row found"
+    log_err "No app_settings row found (need sqlite3 CLI or python3)"
     exit 1
   fi
   IFS='|' read -r TOKEN HOSTNAME LOCAL_PORT <<<"$row"
@@ -302,23 +351,31 @@ install_cloudflared() {
   local deb="/tmp/cloudflared-linux-${asset}.deb"
   local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${asset}.deb"
   local ok=0
-  if curl -fsSL "$url" -o "$deb"; then
-    if DEBIAN_FRONTEND=noninteractive dpkg -i "$deb" >/dev/null 2>&1; then
-      ok=1
+  local try=0
+  for try in 1 2 3; do
+    if curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$deb"; then
+      if DEBIAN_FRONTEND=noninteractive dpkg -i "$deb" >/dev/null 2>&1; then
+        ok=1
+        break
+      else
+        # Rare: arch tag mismatch — try force, then fall through to binary.
+        DEBIAN_FRONTEND=noninteractive dpkg -i --force-architecture "$deb" >/dev/null 2>&1 && ok=1 && break || true
+        apt-get install -f -y >/dev/null 2>&1 || true
+      fi
     else
-      # Rare: arch tag mismatch — try force, then fall through to binary.
-      DEBIAN_FRONTEND=noninteractive dpkg -i --force-architecture "$deb" >/dev/null 2>&1 && ok=1 || true
-      apt-get install -f -y >/dev/null 2>&1 || true
+      log_warn "Download attempt ${try}/3 failed for cloudflared (${asset})"
+      sleep 2
     fi
-  fi
+  done
   rm -f "$deb"
 
   if [[ "$ok" -ne 1 ]] || ! command -v cloudflared >/dev/null 2>&1; then
     log_info "dpkg install failed or missing; installing cloudflared binary for ${asset}"
     local bin_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${asset}"
     local bin_tmp="/tmp/cloudflared-linux-${asset}"
-    if ! curl -fsSL "$bin_url" -o "$bin_tmp"; then
+    if ! curl -fsSL --connect-timeout 15 --max-time 180 "$bin_url" -o "$bin_tmp"; then
       log_err "Failed to download cloudflared from GitHub releases (${asset})"
+      log_err "On RPi: check internet/DNS (ping 1.1.1.1), then retry. Prefer 64-bit image mt-billing-rpi-arm64."
       exit 1
     fi
     install -m 0755 "$bin_tmp" /usr/local/bin/cloudflared
@@ -465,12 +522,10 @@ do_status() {
     active="error"
   fi
   local url=""
-  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    url="$(sqlite3 "$DB_PATH" "SELECT IFNULL(cf_tunnel_url,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
-  fi
-  if [[ -z "$url" && -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
+  url="$(db_query "SELECT IFNULL(cf_tunnel_url,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
+  if [[ -z "$url" ]]; then
     local h
-    h="$(sqlite3 "$DB_PATH" "SELECT IFNULL(cf_tunnel_hostname,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
+    h="$(db_query "SELECT IFNULL(cf_tunnel_hostname,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
     [[ -n "$h" ]] && url="https://$(normalize_host "$h")"
   fi
   set_db_status "$active" "$url"
@@ -514,9 +569,7 @@ do_apply() {
     exit 1
   fi
 
-  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$DB_PATH" "UPDATE app_settings SET cf_tunnel_token = '${TOKEN//\'/\'\'}', cf_tunnel_hostname = '${HOSTNAME//\'/\'\'}', cf_tunnel_port = ${LOCAL_PORT:-80} WHERE id = 1;" 2>/dev/null || true
-  fi
+  db_exec "UPDATE app_settings SET cf_tunnel_token = '${TOKEN//\'/\'\'}', cf_tunnel_hostname = '${HOSTNAME//\'/\'\'}', cf_tunnel_port = ${LOCAL_PORT:-80} WHERE id = 1;"
 
   install_cloudflared
   write_unit
@@ -538,6 +591,13 @@ do_apply() {
     return 0
   fi
   do_start
+
+  # Protect SSH/panel if Twingate later rewrites DNS (common on PC flash)
+  if [[ -f "$(dirname "${BASH_SOURCE[0]}")/mt-billing-net-watchdog.sh" ]]; then
+    bash "$(dirname "${BASH_SOURCE[0]}")/mt-billing-net-watchdog.sh" install >/dev/null 2>&1 \
+      && log_ok "Network watchdog enabled (keeps SSH/panel if Twingate rewrites DNS)" \
+      || true
+  fi
 
   # Do NOT restart mt-billing-api here. Pay/public URLs are read from SQLite
   # (and the panel hot-sets process.env.PUBLIC_BASE_URL after apply). A deferred
@@ -561,15 +621,20 @@ do_apply() {
   echo "     — they block POST /api/login. Staff panel login stays on the LAN IP."
   echo "  6. If Cloudflare shows 502 Host Error: cloudflared or nginx is down — run: $0 status"
   echo "  7. If /pay/ returns 403: remove leftover dist/pay/ or re-run public-host / reinstall nginx config"
+  echo "  8. If SSH/panel dies later: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore"
 }
 
 case "$ACTION" in
   apply) do_apply ;;
   start)
-    [[ "$FROM_DB" == "1" ]] && read_from_db
-    # Prefer hostname from DB if not passed
-    if [[ -z "$HOSTNAME" && -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-      HOSTNAME="$(sqlite3 "$DB_PATH" "SELECT IFNULL(cf_tunnel_hostname,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
+    # Prefer explicit token/hostname; fall back to DB only if needed
+    if [[ -z "$TOKEN" ]]; then
+      if [[ "$FROM_DB" == "1" ]] || [[ -f "$DB_PATH" ]]; then
+        read_from_db || true
+      fi
+    fi
+    if [[ -z "$HOSTNAME" && -f "$DB_PATH" ]]; then
+      HOSTNAME="$(db_query "SELECT IFNULL(cf_tunnel_hostname,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
     fi
     do_start
     ;;

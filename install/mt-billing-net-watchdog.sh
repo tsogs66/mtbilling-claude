@@ -39,7 +39,12 @@ tg_status() {
     echo "not-installed"
     return 0
   fi
-  twingate status 2>/dev/null || echo offline
+  # Bare `twingate status` can hang forever on flash images — never block the watchdog
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=KILL 3s twingate status 2>/dev/null || echo offline
+  else
+    twingate status 2>/dev/null || echo offline
+  fi
 }
 
 first_nameserver() {
@@ -150,8 +155,13 @@ run_once() {
       age=$((now - since))
       # Keep safe DNS while authenticating
       rewrite_safe_dns
-      if [[ "$age" -gt 300 ]] && ! dns_ok; then
-        log "WATCHDOG: authenticating >5m and DNS broken — emergency restore"
+      if [[ "$age" -gt 120 ]] && ! dns_ok; then
+        log "WATCHDOG: authenticating >2m and DNS broken — emergency restore"
+        emergency_stop_twingate
+      elif [[ "$age" -gt 180 ]]; then
+        # Even if DNS looks OK briefly, stuck authenticating on PC/RPi usually
+        # means Twingate will rewrite resolv.conf again and kill SSH/panel.
+        log "WATCHDOG: authenticating >3m — emergency restore (prevent disconnect loop)"
         emergency_stop_twingate
       fi
       ;;
@@ -179,13 +189,16 @@ run_once() {
 
   # Last resort: DNS still broken
   if ! dns_ok; then
-    log "WATCHDOG: DNS still failing — writing public resolvers"
+    log "WATCHDOG: DNS still failing — writing public resolvers + stopping Twingate if present"
     {
       echo "nameserver 8.8.8.8"
       echo "nameserver 1.1.1.1"
       echo "nameserver 9.9.9.9"
     } >/etc/resolv.conf
     restore_uplink
+    if pgrep -x twingated >/dev/null 2>&1 || systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+      emergency_stop_twingate
+    fi
   fi
 }
 
@@ -213,9 +226,9 @@ EOF
 Description=Run MT-Billing network watchdog every minute
 
 [Timer]
-OnBootSec=45s
-OnUnitActiveSec=60s
-AccuracySec=15s
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=10s
 Persistent=true
 
 [Install]
