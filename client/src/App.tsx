@@ -32,6 +32,11 @@ import PayPortal from './pages/PayPortal';
 import UsageStats from './pages/UsageStats';
 import FairUseAlerts from './pages/FairUseAlerts';
 import TechTools from './pages/TechTools';
+import JobOrders from './pages/JobOrders';
+import Invoices from './pages/Invoices';
+import Finance from './pages/Finance';
+import ClientPortal from './pages/ClientPortal';
+import RogueMacs from './pages/RogueMacs';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -87,6 +92,7 @@ export default function App() {
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/pay/:token" element={<SubscriberPay />} />
+      <Route path="/portal" element={<ClientPortal />} />
       <Route
         path="/*"
         element={
@@ -98,6 +104,10 @@ export default function App() {
                 <Route path="/ipoe" element={<IPoE />} />
                 <Route path="/map" element={<ClientsMap />} />
                 <Route path="/sales" element={<SalesReport />} />
+                <Route path="/invoices" element={<Invoices />} />
+                <Route path="/finance" element={<Finance />} />
+                <Route path="/job-orders" element={<JobOrders />} />
+                <Route path="/rogue-macs" element={<RogueMacs />} />
                 <Route path="/pay-portal" element={<PayPortal />} />
                 <Route path="/usage" element={<UsageStats />} />
                 <Route path="/fair-use" element={<FairUseAlerts />} />

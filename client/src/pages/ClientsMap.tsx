@@ -16,13 +16,13 @@ interface ServerNode {
 }
 interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
+  usedPorts?: number; availablePorts?: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
   splitterRatio?: string | null; splitterType?: 'FBT' | 'PLC' | 'FBTC' | null; fbtcLeg?: 'through' | 'tap' | null; txDbm?: number | null;
   originSplitterId?: number | null;
   ponPort?: number | null;
   host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
   firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
-  usedPorts?: number; availablePorts?: number;
 }
 interface Splitter {
   id: number; name: string; type: 'FBT' | 'PLC' | 'FBTC'; ratio: string; ports?: number | null;
@@ -1086,6 +1086,18 @@ export default function ClientsMap() {
             <span>OLTs: <b className="text-slate-700">{stats.olts ?? '—'}</b></span>
             <span>NAPs: <b className="text-slate-700">{stats.naps ?? '—'}</b></span>
             <span>
+              NAP ports:{' '}
+              <b className="text-slate-700">
+                {napNodes.reduce((s, n) => s + (n.usedPorts ?? 0), 0)}/
+                {napNodes.reduce((s, n) => s + (n.ports || 0), 0)} used
+              </b>
+              {napNodes.some((n) => (n.availablePorts ?? 1) <= 0) && (
+                <span className="text-rose-600 ml-1">
+                  · {napNodes.filter((n) => (n.availablePorts ?? 1) <= 0).length} full
+                </span>
+              )}
+            </span>
+            <span>
               Clients with location:{' '}
               <b className="text-slate-700">{(stats.totalClients ?? 0) - (stats.withoutLocation || 0)}</b>
               <span className="text-slate-400"> ({stats.withoutLocation ?? 0} not shown)</span>
@@ -1258,13 +1270,20 @@ export default function ClientsMap() {
                         : parent
                           ? `${parent.kind === 'nap' ? 'NAP' : 'OLT'} ${parent.name}`
                           : null;
+                      const used = n.usedPorts ?? 0;
+                      const free = n.availablePorts ?? Math.max(0, (n.ports || 0) - used);
+                      const full = free <= 0;
+                      const nearly = !full && free <= 2;
                       return (
                       <TopoRow
                         key={n.id}
                         name={n.code ? `${n.code}` : n.name}
-                        sub={`${n.name}${fromLabel ? ` · From: ${fromLabel}` : ''}${n.ponPort ? ` · PON ${n.ponPort}` : ''}`}
+                        sub={`${n.name}${fromLabel ? ` · From: ${fromLabel}` : ''}${n.ponPort ? ` · PON ${n.ponPort}` : ''} · Ports ${used}/${n.ports}${full ? ' FULL' : nearly ? ' low' : ''}`}
                         right={
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 items-center">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${full ? 'bg-rose-100 text-rose-700' : nearly ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                              {free} free
+                            </span>
                             <button type="button" className="text-xs text-sky-600" onClick={() => openEditNap(n)}>Edit</button>
                             <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button>
                           </div>

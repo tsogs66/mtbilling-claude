@@ -2,7 +2,8 @@ import {
   LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, Link2, PieChart,
-  ShieldAlert, Cloud, Satellite, RadioTower, Cable,
+  ShieldAlert, Cloud, Satellite, RadioTower, Cable, ClipboardList, FileText,
+  TrendingUp, ScanSearch,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -40,9 +41,18 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    title: 'Operations',
+    items: [
+      { to: '/job-orders', label: 'Job Orders', icon: ClipboardList, permission: 'job-orders' },
+      { to: '/rogue-macs', label: 'Rogue MACs', icon: ScanSearch, permission: 'rogue' },
+    ],
+  },
+  {
     title: 'Billing',
     items: [
       { to: '/sales', label: 'Sales Report', icon: BarChart3, permission: 'sales' },
+      { to: '/invoices', label: 'Invoices & AR', icon: FileText, permission: 'invoices' },
+      { to: '/finance', label: 'Finance & MRR', icon: TrendingUp, permission: 'finance' },
       { to: '/pay-portal', label: 'Payment Links', icon: Link2, permission: 'sales' },
       { to: '/inventory', label: 'Stock & Inventory', icon: Boxes, permission: 'inventory' },
       { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications' },
@@ -97,14 +107,14 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     label: 'Network',
     icon: Network,
     permission: 'network',
-    matchPaths: ['/network', '/map', '/terminal', '/ai-scripting', '/files', '/zerotier', '/super-router', '/routers', '/tech-tools'],
+    matchPaths: ['/network', '/map', '/terminal', '/ai-scripting', '/files', '/zerotier', '/super-router', '/routers', '/tech-tools', '/rogue-macs'],
   },
   {
     to: '/sales',
     label: 'Billing',
     icon: BarChart3,
     permission: 'sales',
-    matchPaths: ['/sales', '/pay-portal', '/inventory', '/notifications'],
+    matchPaths: ['/sales', '/invoices', '/finance', '/pay-portal', '/inventory', '/notifications', '/job-orders'],
   },
 ];
 
@@ -140,6 +150,10 @@ export function permissionForPath(pathname: string): string {
     '/tech-tools': 'tech-tools',
     '/files': 'files',
     '/sales': 'sales',
+    '/invoices': 'invoices',
+    '/finance': 'finance',
+    '/job-orders': 'job-orders',
+    '/rogue-macs': 'rogue',
     '/pay-portal': 'sales',
     '/usage': 'pppoe',
     '/fair-use': 'pppoe',
