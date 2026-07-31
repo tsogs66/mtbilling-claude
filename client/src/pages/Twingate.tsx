@@ -291,6 +291,11 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
               sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore
             </pre>
             <p>
+              If SSH / remote terminal dies after Install &amp; connect, plug in a monitor+keyboard and run the same
+              command (or <code className="font-mono text-xs">sudo bash /opt/mt-billing/install/mt-billing-net-rescue.sh</code>
+              ). Then reconnect by <b>LAN IP</b>, not hostname.
+            </p>
+            <p>
               In Twingate Admin: keep the Connector online, and define Resources as <b>specific device IPs</b> — not broad{' '}
               <code className="font-mono text-xs">192.168.0.0/16</code> ranges that include this panel.
             </p>

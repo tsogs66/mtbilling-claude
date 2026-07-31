@@ -256,15 +256,57 @@ cleanup_sdwan() {
 }
 
 kill_daemon_hard() {
+  # Mask first so Restart=on-failure cannot crash-loop and keep rewriting DNS/routes
+  # (that is what kills SSH on RPi/Wyse during a bad apply).
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl mask "$UNIT_NAME" 2>/dev/null || true
     systemctl stop "$UNIT_NAME" 2>/dev/null || true
     systemctl disable "$UNIT_NAME" 2>/dev/null || true
+    systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
   fi
   twingate stop 2>/dev/null || true
   pkill -9 twingated 2>/dev/null || true
   pkill -9 -f '/usr/sbin/twingated' 2>/dev/null || true
   sleep 1
   cleanup_sdwan
+}
+
+# Allow start again after emergency-restore / successful configure
+unmask_twingate_unit() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    systemctl unmask "$UNIT_NAME" 2>/dev/null || true
+    # Prevent crash-loops from taking down SSH while we try to come online
+    mkdir -p /etc/systemd/system/twingate.service.d
+    cat >/etc/systemd/system/twingate.service.d/mt-billing-restart.conf <<'EOF'
+# MT-Billing: do not auto-restart on failure — crash-loops rewrite DNS and kill SSH.
+[Service]
+Restart=no
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+}
+
+restore_default_route() {
+  local state="${MT_CONF}/net-coexist.state"
+  if [[ -f "$state" ]]; then
+    # shellcheck disable=SC1090
+    source "$state" 2>/dev/null || true
+    if [[ -n "${COEXIST_DEFAULT_GW:-}" && -n "${COEXIST_DEFAULT_DEV:-}" ]]; then
+      ip route del default dev sdwan0 2>/dev/null || true
+      ip route replace default via "$COEXIST_DEFAULT_GW" dev "$COEXIST_DEFAULT_DEV" 2>/dev/null \
+        || ip route add default via "$COEXIST_DEFAULT_GW" dev "$COEXIST_DEFAULT_DEV" 2>/dev/null \
+        || true
+      log_ok "Restored default route via ${COEXIST_DEFAULT_GW} dev ${COEXIST_DEFAULT_DEV}"
+      return 0
+    fi
+  fi
+  # Drop Twingate default if it stole the uplink
+  local def_dev
+  def_dev="$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+  if [[ "$def_dev" == "sdwan0" ]]; then
+    ip route del default dev sdwan0 2>/dev/null || true
+    log_warn "Removed default route via sdwan0 — run DHCP renew if still offline: dhclient -v || networkctl reconfigure"
+  fi
 }
 
 gateway_reachable() {
@@ -573,6 +615,7 @@ do_start() {
     snapshot_default_route
   fi
   prefer_resolved
+  unmask_twingate_unit
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
@@ -691,10 +734,12 @@ do_emergency_restore() {
   log_warn "Emergency restore: stopping Twingate and restoring host DNS/routes"
   kill_daemon_hard
   restore_resolv
+  restore_default_route
   set_db_status stopped
   # Quick verify
   if dns_works || gateway_reachable; then
     log_ok "Emergency restore complete — network should be usable again"
+    log_ok "SSH tip: connect by LAN IP (not hostname) if DNS is still settling"
     return 0
   fi
   # Last resort public DNS
@@ -703,7 +748,15 @@ do_emergency_restore() {
     echo "nameserver 1.1.1.1"
     echo "nameserver 9.9.9.9"
   } >/etc/resolv.conf
-  log_ok "Wrote public DNS fallbacks. Retry access to the panel."
+  restore_default_route
+  # Try DHCP renew on common interfaces
+  if command -v dhclient >/dev/null 2>&1; then
+    dhclient -r 2>/dev/null || true
+    dhclient 2>/dev/null || true
+  elif command -v networkctl >/dev/null 2>&1; then
+    networkctl reconfigure eth0 enp1s0 wlan0 2>/dev/null || true
+  fi
+  log_ok "Wrote public DNS fallbacks. Retry SSH by LAN IP."
 }
 
 do_status() {
