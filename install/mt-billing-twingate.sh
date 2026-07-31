@@ -166,9 +166,9 @@ set_db_status() {
   sqlite3_q "ALTER TABLE app_settings ADD COLUMN twingate_network TEXT;" 2>/dev/null || true
   sqlite3_q "ALTER TABLE app_settings ADD COLUMN twingate_enabled INTEGER DEFAULT 0;" 2>/dev/null || true
   if [[ -n "$network" ]]; then
-    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_network = '${network//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
+    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_network = '${network//\'/\'\'}', twingate_enabled = $([[ "$status" == online || "$status" == authenticating ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
   else
-    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
+    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_enabled = $([[ "$status" == online || "$status" == authenticating ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
   fi
 }
 
@@ -390,6 +390,38 @@ prefer_resolved() {
   fi
 }
 
+tg_client_status() {
+  if ! command -v twingate >/dev/null 2>&1; then
+    echo "not-installed"
+    return 0
+  fi
+  twingate status 2>/dev/null || echo offline
+}
+
+# Wait until `twingate status` reports online. systemd "active" alone is not enough —
+# the client often sits in "authenticating" until a Connector accepts the Service Key.
+wait_for_client_online() {
+  local timeout="${1:-90}"
+  local i=0
+  local st
+  log_info "Waiting for Twingate client to reach online (up to ${timeout}s)…"
+  while [[ $i -lt $timeout ]]; do
+    st="$(tg_client_status)"
+    if [[ "$st" == "online" ]]; then
+      log_ok "Twingate client status: online"
+      return 0
+    fi
+    if [[ $((i % 10)) -eq 0 ]]; then
+      log_info "Client status: ${st} (waiting for Connector / Service Account auth…)"
+    fi
+    sleep 2
+    i=$((i + 2))
+  done
+  st="$(tg_client_status)"
+  log_warn "Timed out waiting for online — current status: ${st}"
+  [[ "$st" == "online" ]]
+}
+
 do_start() {
   backup_resolv
   if declare -F snapshot_default_route >/dev/null 2>&1; then
@@ -402,15 +434,41 @@ do_start() {
     systemctl restart "$UNIT_NAME" || twingate start || true
     sleep 3
     apply_coexist_after_twingate
-    if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null || [[ "$(twingate status 2>/dev/null || true)" == "online" ]]; then
-      if health_check_or_rollback; then
-        set_db_status online "$(network_from_key)"
-        log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
-        return 0
-      fi
+
+    local unit_ok=0
+    systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null && unit_ok=1
+    local st
+    st="$(tg_client_status)"
+
+    if [[ "$unit_ok" -ne 1 && "$st" != "online" && "$st" != "authenticating" ]]; then
+      log_err "Twingate failed to start (status=${st}) — restoring DNS"
+      kill_daemon_hard
+      restore_resolv
+      set_db_status offline
       return 1
     fi
-    log_err "Twingate failed to come online — restoring DNS"
+
+    if ! health_check_or_rollback; then
+      return 1
+    fi
+
+    if wait_for_client_online 90; then
+      set_db_status online "$(network_from_key)"
+      log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
+      return 0
+    fi
+
+    st="$(tg_client_status)"
+    # Host DNS/LAN still healthy (coexist). Leave client running so it can finish auth.
+    if [[ "$st" == "authenticating" ]] || [[ "$unit_ok" -eq 1 ]]; then
+      set_db_status authenticating "$(network_from_key)"
+      log_warn "Client is still authenticating — Twingate Admin: Connector must be Online,"
+      log_warn "  and this Service Account needs Resources (prefer specific remote IPs)."
+      log_warn "Host network is OK (coexistence kept). Re-check status in a minute."
+      return 0
+    fi
+
+    log_err "Twingate failed to come online (status=${st}) — restoring DNS"
     kill_daemon_hard
     restore_resolv
     set_db_status offline
@@ -426,15 +484,22 @@ do_start() {
   (cd /var/lib/twingate && /usr/sbin/twingated >/var/log/twingated.log 2>&1 &) || true
   sleep 3
   apply_coexist_after_twingate
-  if [[ "$(twingate status 2>/dev/null || true)" == "online" ]]; then
-    if health_check_or_rollback; then
-      set_db_status online "$(network_from_key)"
-      log_ok "Twingate is online (direct daemon, coexistence applied)"
-      return 0
-    fi
+  if ! health_check_or_rollback; then
     return 1
   fi
-  log_warn "Twingate status: $(twingate status 2>/dev/null || echo unknown) — restoring DNS"
+  if wait_for_client_online 90; then
+    set_db_status online "$(network_from_key)"
+    log_ok "Twingate is online (direct daemon, coexistence applied)"
+    return 0
+  fi
+  local st
+  st="$(tg_client_status)"
+  if [[ "$st" == "authenticating" ]]; then
+    set_db_status authenticating "$(network_from_key)"
+    log_warn "Client still authenticating — check Connector / Resources in Twingate Admin"
+    return 0
+  fi
+  log_warn "Twingate status: ${st} — restoring DNS"
   kill_daemon_hard
   restore_resolv
   set_db_status offline
@@ -485,6 +550,8 @@ do_status() {
   fi
   if [[ "$st" == "online" ]]; then
     set_db_status online "$net"
+  elif [[ "$st" == "authenticating" ]]; then
+    set_db_status authenticating "$net"
   elif [[ "$installed" == "yes" ]]; then
     set_db_status offline "$net"
   fi

@@ -290,22 +290,22 @@ twingateRouter.get('/twingate', async (_req, res) => {
   };
   if (result.code === 0) {
     live = { ...live, ...parseStatusOutput(result.stdout) };
+    const enabled = live.status === 'online' || live.status === 'authenticating' ? 1 : 0;
     if (live.network) {
       db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_network = ?, twingate_enabled = ? WHERE id = 1').run(
         live.status,
         live.network,
-        live.status === 'online' ? 1 : 0
+        enabled
       );
     } else {
-      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(
-        live.status,
-        live.status === 'online' ? 1 : 0
-      );
+      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(live.status, enabled);
     }
   }
+  const connecting = live.status === 'authenticating';
   res.json({
     configured,
     online: live.status === 'online',
+    connecting,
     status: live.status,
     installed: live.installed === 'yes',
     network: live.network || s.twingate_network || '',
@@ -316,11 +316,13 @@ twingateRouter.get('/twingate', async (_req, res) => {
       ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
       : live.status === 'error'
         ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
-      : live.status !== 'online'
-        ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
-        : live.resources === 0
-          ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
-          : null,
+        : connecting
+          ? 'Client is authenticating. In Twingate Admin: confirm a Connector is Online on the remote network, and grant this Service Account access to Resources (specific remote device IPs — not broad LAN CIDRs). Status refreshes automatically.'
+          : live.status !== 'online'
+            ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
+            : live.resources === 0
+              ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
+              : null,
     warning: result.code !== 0 ? result.stderr || undefined : undefined,
   });
 });
@@ -359,6 +361,24 @@ twingateRouter.get('/twingate/status', async (_req, res) => {
   });
 });
 
+async function syncLiveStatusAfterJob(fallbackNet: string): Promise<{ status: string; resources: number }> {
+  const result = await runTwingateScript(['status']);
+  if (result.code === 0) {
+    const parsed = parseStatusOutput(result.stdout);
+    const enabled = parsed.status === 'online' || parsed.status === 'authenticating' ? 1 : 0;
+    const net = parsed.network || fallbackNet;
+    if (net) {
+      db.prepare(
+        'UPDATE app_settings SET twingate_status = ?, twingate_network = COALESCE(NULLIF(?, ""), twingate_network), twingate_enabled = ? WHERE id = 1'
+      ).run(parsed.status, net, enabled);
+    } else {
+      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(parsed.status, enabled);
+    }
+    return { status: parsed.status, resources: parsed.resources };
+  }
+  return { status: 'offline', resources: 0 };
+}
+
 twingateRouter.post('/twingate/apply', (_req, res) => {
   const s = getTg();
   if (!s.twingate_service_key) {
@@ -372,25 +392,29 @@ twingateRouter.post('/twingate/apply', (_req, res) => {
   } catch (e) {
     return res.status(500).json({ error: `Could not write Service Key file: ${(e as Error).message}` });
   }
+  const net = networkFromKey(s.twingate_service_key);
   const started = startTwingateJob(['--key-file', keyPath, 'apply'], 'apply', (code) => {
-    if (code === 0) {
-      const net = networkFromKey(s.twingate_service_key);
-      db.prepare(
-        `UPDATE app_settings SET twingate_status = 'online', twingate_enabled = 1, twingate_network = COALESCE(NULLIF(?, ''), twingate_network) WHERE id = 1`
-      ).run(net);
-      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-        'info',
-        'twingate',
-        `Twingate connected${net ? ` (${net})` : ''}`
-      );
-    } else {
-      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = 0 WHERE id = 1').run('error');
-      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-        'error',
-        'twingate',
-        `Twingate apply failed or rolled back to protect panel connectivity (exit ${code})`
-      );
-    }
+    void (async () => {
+      if (code === 0) {
+        const live = await syncLiveStatusAfterJob(net);
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'info',
+          'twingate',
+          live.status === 'online'
+            ? `Twingate connected${net ? ` (${net})` : ''}`
+            : live.status === 'authenticating'
+              ? `Twingate client authenticating${net ? ` (${net})` : ''} — waiting for Connector / Resources`
+              : `Twingate apply finished with status=${live.status}`
+        );
+      } else {
+        db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = 0 WHERE id = 1').run('error');
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'error',
+          'twingate',
+          `Twingate apply failed or rolled back to protect panel connectivity (exit ${code})`
+        );
+      }
+    })();
   });
   if (!started.ok) return res.status(409).json({ error: started.error });
   res.json({ ok: true, started: true });
@@ -398,8 +422,8 @@ twingateRouter.post('/twingate/apply', (_req, res) => {
 
 twingateRouter.post('/twingate/toggle', (_req, res) => {
   const s = getTg();
-  const starting = s.twingate_status !== 'online';
-  if (starting) {
+  const running = s.twingate_status === 'online' || s.twingate_status === 'authenticating';
+  if (!running) {
     if (!s.twingate_service_key) {
       return res.status(400).json({ error: 'Save your Twingate Service Key first.' });
     }
@@ -410,18 +434,31 @@ twingateRouter.post('/twingate/toggle', (_req, res) => {
     } catch (e) {
       return res.status(500).json({ error: `Could not write Service Key file: ${(e as Error).message}` });
     }
+    const net = networkFromKey(s.twingate_service_key);
     const onStarted = (code: number) => {
-      db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(
-        code === 0 ? 'online' : code === 1 ? 'error' : 'offline',
-        code === 0 ? 1 : 0
-      );
-      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-        code === 0 ? 'info' : 'error',
-        'twingate',
-        code === 0
-          ? 'Twingate started'
-          : `Twingate start failed or rolled back to protect panel connectivity (exit ${code})`
-      );
+      void (async () => {
+        if (code === 0) {
+          const live = await syncLiveStatusAfterJob(net);
+          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+            'info',
+            'twingate',
+            live.status === 'online'
+              ? 'Twingate started'
+              : live.status === 'authenticating'
+                ? 'Twingate started — still authenticating (check Connector / Resources)'
+                : `Twingate start finished with status=${live.status}`
+          );
+        } else {
+          db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = 0 WHERE id = 1').run(
+            code === 1 ? 'error' : 'offline'
+          );
+          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+            'error',
+            'twingate',
+            `Twingate start failed or rolled back to protect panel connectivity (exit ${code})`
+          );
+        }
+      })();
     };
     const started = startTwingateJob(['--key-file', keyPath, 'apply'], 'start', (code) => {
       if (code === 0) {

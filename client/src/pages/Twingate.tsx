@@ -60,6 +60,14 @@ export default function Twingate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-refresh while the client is still authenticating with Twingate.
+  useEffect(() => {
+    if (!data?.connecting && data?.status !== 'authenticating') return;
+    const id = window.setInterval(() => load(), 5000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.connecting, data?.status]);
+
   const save = async () => {
     setSaving(true);
     try {
@@ -97,7 +105,7 @@ export default function Twingate() {
               code === 0
                 ? action === 'stop' || action === 'emergency-restore'
                   ? 'Twingate stopped and host DNS restored.'
-                  : 'Twingate is connected.'
+                  : 'Twingate apply finished. If status is authenticating, wait for the Connector / Resources in Twingate Admin.'
                 : `${action} failed (exit ${code}). If the panel lost internet, run Emergency restore (or SSH: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore).`,
           });
           load();
@@ -269,7 +277,7 @@ export default function Twingate() {
                 )}
               </button>
               <button type="button" className="btn-secondary" onClick={toggle} disabled={busy || !data.configured}>
-                {data.online ? 'Disconnect' : 'Start'}
+                {data.online || data.connecting || data.status === 'authenticating' ? 'Disconnect' : 'Start'}
               </button>
             </div>
           </div>
@@ -292,7 +300,15 @@ export default function Twingate() {
           </div>
           <div className="ml-auto">
             <StatusBadge
-              status={data.online ? 'online' : data.status === 'error' ? 'offline' : data.status || 'offline'}
+              status={
+                data.online
+                  ? 'online'
+                  : data.status === 'authenticating' || data.connecting
+                    ? 'authenticating'
+                    : data.status === 'error'
+                      ? 'offline'
+                      : data.status || 'offline'
+              }
             />
           </div>
         </div>
