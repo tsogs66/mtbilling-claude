@@ -44,6 +44,13 @@ WRAPPER="${CONF_DIR}/run-tunnel.sh"
 UNIT_NAME="cloudflared-mt-billing.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
 
+# Shared Cloudflare + Twingate LAN/DNS coexistence (no-op if Twingate absent)
+COEXIST_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mt-billing-net-coexist.sh"
+if [[ -f "$COEXIST_SCRIPT" ]]; then
+  # shellcheck disable=SC1090
+  source "$COEXIST_SCRIPT"
+fi
+
 TOKEN=""
 HOSTNAME=""
 LOCAL_PORT="80"
@@ -429,6 +436,10 @@ do_start() {
     fi
     log_ok "Cloudflare Tunnel running"
     [[ -n "$url" ]] && echo "  Pay portal : ${url}/pay/<token>"
+    # Re-assert LAN pins + coexist DNS so Twingate (if running) does not steal local/default
+    if declare -F apply_net_coexist >/dev/null 2>&1; then
+      apply_net_coexist || log_warn "Coexistence helper warned — LAN/DNS may need: sudo bash ${COEXIST_SCRIPT:-install/mt-billing-net-coexist.sh} apply"
+    fi
   else
     set_db_status "error"
     dump_failure_logs

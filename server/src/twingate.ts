@@ -430,3 +430,124 @@ twingateRouter.post('/twingate/emergency-restore', (_req, res) => {
   if (!started.ok) return res.status(409).json({ error: started.error });
   res.json({ ok: true, started: true, action: 'emergency-restore' });
 });
+
+function coexistScriptPath(): string {
+  const candidates = [
+    path.join(
+      process.env.INSTALL_DIR || process.env.var_install_dir || '/opt/mt-billing',
+      'install/mt-billing-net-coexist.sh'
+    ),
+    path.resolve(process.cwd(), '../install/mt-billing-net-coexist.sh'),
+    path.resolve(process.cwd(), 'install/mt-billing-net-coexist.sh'),
+    path.resolve(process.cwd(), '../../install/mt-billing-net-coexist.sh'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return candidates[0];
+}
+
+function startCoexistJob(onDone: (code: number) => void): { ok: boolean; error?: string } {
+  if (tgJob.running) {
+    return { ok: false, error: `A Twingate operation (${tgJob.action}) is already running.` };
+  }
+  const script = coexistScriptPath();
+  tgJob = { running: true, action: 'coexist', code: null, startedAt: Date.now() };
+  try {
+    fs.writeFileSync(TG_JOB_LOG, `$ sudo bash ${script} apply\n`);
+  } catch {
+    /* ignore */
+  }
+  const tryCmds = [
+    ['sudo', ['-n', '/bin/bash', script, 'apply']],
+    ['sudo', ['-n', '/usr/bin/bash', script, 'apply']],
+    ['bash', [script, 'apply']],
+  ] as [string, string[]][];
+  const appendLog = (s: string) => {
+    try {
+      fs.appendFileSync(TG_JOB_LOG, stripAnsi(s));
+    } catch {
+      /* ignore */
+    }
+  };
+  const runNext = (i: number) => {
+    if (i >= tryCmds.length) {
+      appendLog('\nCould not run net-coexist helper. Grant updater root, then retry.\n');
+      tgJob = { ...tgJob, running: false, code: 127 };
+      onDone(127);
+      return;
+    }
+    const [cmd, cmdArgs] = tryCmds[i];
+    const child = spawn(cmd, cmdArgs, { env: process.env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => {
+      const s = String(d);
+      stdout += s;
+      appendLog(s);
+    });
+    child.stderr?.on('data', (d) => {
+      const s = String(d);
+      stderr += s;
+      appendLog(s);
+    });
+    child.on('error', () => runNext(i + 1));
+    child.on('close', (code) => {
+      if (
+        i === 0 &&
+        code !== 0 &&
+        /password is required|a password is required|not allowed|No such file/i.test(stderr + stdout)
+      ) {
+        runNext(i + 1);
+        return;
+      }
+      const finalCode = code ?? 1;
+      tgJob = { ...tgJob, running: false, code: finalCode };
+      onDone(finalCode);
+    });
+  };
+  runNext(0);
+  return { ok: true };
+}
+
+/** Re-apply LAN pin + coexist DNS so Cloudflare Tunnel and Twingate don't fight the local network. */
+twingateRouter.post('/twingate/coexist', (_req, res) => {
+  const started = startCoexistJob((code) => {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      code === 0 ? 'info' : 'error',
+      'twingate',
+      code === 0
+        ? 'Applied Cloudflare + Twingate network coexistence'
+        : `Coexistence apply failed (exit ${code})`
+    );
+  });
+  if (!started.ok) return res.status(409).json({ error: started.error });
+  res.json({ ok: true, started: true, action: 'coexist' });
+});
+
+twingateRouter.get('/twingate/coexist', (_req, res) => {
+  const script = coexistScriptPath();
+  if (!fs.existsSync(script)) {
+    return res.json({ ok: false, error: 'coexist script missing' });
+  }
+  const child = spawn('bash', [script, 'status'], { env: process.env });
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.on('data', (d) => {
+    stdout += String(d);
+  });
+  child.stderr?.on('data', (d) => {
+    stderr += String(d);
+  });
+  child.on('close', (code) => {
+    const parsed: Record<string, string> = {};
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/^([^=]+)=(.*)$/);
+      if (m) parsed[m[1]] = m[2];
+    }
+    res.json({ ok: code === 0, ...parsed, raw: stdout.trim(), warning: stderr || undefined });
+  });
+  child.on('error', () => {
+    res.json({ ok: false, error: 'failed to run coexist status' });
+  });
+});

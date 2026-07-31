@@ -176,6 +176,23 @@ export default function Twingate() {
           >
             <Unplug size={16} /> Emergency restore
           </button>
+          <button
+            type="button"
+            className="btn-secondary shrink-0"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api.post('/twingate/coexist');
+                pollJob('coexist');
+              } catch (e: any) {
+                setBusy(false);
+                setFlash({ type: 'error', msg: e?.response?.data?.error || 'Coexist apply failed' });
+              }
+            }}
+            disabled={busy}
+          >
+            <Shield size={16} /> Fix LAN coexistence
+          </button>
           <button type="button" className="btn-secondary shrink-0" onClick={() => setSetupOpen((v) => !v)}>
             <Settings size={16} /> Setup
           </button>
@@ -186,11 +203,16 @@ export default function Twingate() {
         <div className="flex gap-3 text-sm text-amber-900">
           <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
           <div className="space-y-1">
-            <p className="font-semibold">If the panel “disconnects” after Install &amp; connect</p>
+            <p className="font-semibold">Cloudflare Tunnel + Twingate side-by-side</p>
             <p>
-              Twingate rewrites DNS to <code className="font-mono text-xs">100.95.*</code>. When the Connector is offline
-              (or a Resource CIDR overlaps this host’s LAN), outbound DNS fails and the panel looks offline. Click{' '}
-              <b>Emergency restore</b>, or SSH:
+              Both can run together. After connecting Twingate, MT-Billing pins your local LAN routes and puts
+              public DNS first so <b>cloudflared</b> and local devices keep working. Use <b>Fix LAN coexistence</b> anytime
+              routes look wrong. Twingate Resources should be <b>specific remote device IPs</b> — never broad CIDRs that
+              include this panel’s LAN.
+            </p>
+            <p>
+              Twingate rewrites DNS to <code className="font-mono text-xs">100.95.*</code> by default; coexistence rewrites
+              it to public/local first. If the panel still looks offline, click <b>Emergency restore</b>, or SSH:
             </p>
             <pre className="text-xs font-mono bg-white/80 border border-amber-200 rounded-lg px-3 py-2 overflow-x-auto">
               sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore
