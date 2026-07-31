@@ -271,12 +271,14 @@ function DashboardLicensed() {
   const [queues, setQueues] = useState<{ name: string; avgRate: number }[]>([]);
   const [statusCounts, setStatusCounts] = useState<any>(null);
   const [finance, setFinance] = useState<any>(null);
+  const [nocSummary, setNocSummary] = useState<any>(null);
   const [range, setRange] = useState('7d');
   const [queueSearch, setQueueSearch] = useState('');
 
   useEffect(() => {
     api.get('/dashboard/host').then((r) => setHost(r.data));
     api.get('/finance/summary').then((r) => setFinance(r.data)).catch(() => setFinance(null));
+    api.get('/noc/summary').then((r) => setNocSummary(r.data)).catch(() => setNocSummary(null));
   }, []);
 
   useEffect(() => {
@@ -335,6 +337,33 @@ function DashboardLicensed() {
           <StatTile label="Income MTD" value={peso(finance.incomeThisMonth)} icon={Wallet} tone="text-emerald-600" delay={40} />
           <StatTile label="Expenses MTD" value={peso(finance.expensesThisMonth)} icon={Wallet} tone="text-rose-600" delay={80} />
           <StatTile label="Open AR" value={peso(finance.accountsReceivable)} icon={AlertTriangle} tone="text-amber-600" delay={120} />
+        </div>
+      )}
+
+      {nocSummary && (
+        <div className="mb-8">
+          <SectionTitle icon={Activity}>
+            <Link to="/noc" className="hover:text-brand-600">NOC devices</Link>
+          </SectionTitle>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatTile
+              label="Custom online"
+              value={`${nocSummary.customOnline ?? 0}/${nocSummary.customTotal ?? 0}`}
+              icon={CircleDot}
+              tone="text-emerald-600"
+              accent="from-emerald-500/15 to-transparent"
+              delay={0}
+            />
+            <StatTile
+              label="Custom offline"
+              value={String(nocSummary.customOffline ?? 0)}
+              icon={WifiOff}
+              tone="text-rose-600"
+              delay={40}
+            />
+            <StatTile label="Linked routers" value={String(nocSummary.linkedRouters ?? 0)} icon={Server} tone="text-sky-600" delay={80} />
+            <StatTile label="Linked OLTs" value={String(nocSummary.linkedOlts ?? 0)} icon={Server} tone="text-brand-600" delay={120} />
+          </div>
         </div>
       )}
 

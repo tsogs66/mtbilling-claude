@@ -103,6 +103,12 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-sel
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-self-update.sh
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh *
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh *
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-twingate.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-twingate.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-twingate.sh *
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-twingate.sh *
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
@@ -111,6 +117,14 @@ ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start twingate.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop twingate.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart twingate.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl is-active twingate.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start twingate.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop twingate.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart twingate.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active twingate.service
 EOF
   fi
   install -m 440 "$tmp" "$SUDOERS_FILE"

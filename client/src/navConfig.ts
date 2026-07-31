@@ -3,7 +3,7 @@ import {
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, Link2, PieChart,
   ShieldAlert, Cloud, Satellite, RadioTower, Cable, ClipboardList, FileText,
-  TrendingUp, ScanSearch,
+  TrendingUp, ScanSearch, Globe2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -32,9 +32,11 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/network', label: 'Network', icon: Network, permission: 'network' },
       { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
+      { to: '/noc', label: 'NOC Suite', icon: Activity, permission: 'noc' },
       { to: '/terminal', label: 'Terminal', icon: TerminalSquare, permission: 'terminal' },
       { to: '/ai-scripting', label: 'AI Scripting', icon: Bot, permission: 'ai' },
       { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
+      { to: '/twingate', label: 'Twingate', icon: Globe2, permission: 'twingate' },
       { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
       { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
       { to: '/tech-tools', label: 'Tech Tools', icon: Cable, permission: 'tech-tools' },
@@ -107,7 +109,10 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     label: 'Network',
     icon: Network,
     permission: 'network',
-    matchPaths: ['/network', '/map', '/terminal', '/ai-scripting', '/files', '/zerotier', '/super-router', '/routers', '/tech-tools', '/rogue-macs'],
+    matchPaths: [
+      '/network', '/map', '/noc', '/terminal', '/ai-scripting', '/files',
+      '/twingate', '/zerotier', '/super-router', '/routers', '/tech-tools', '/rogue-macs',
+    ],
   },
   {
     to: '/sales',
@@ -145,6 +150,8 @@ export function permissionForPath(pathname: string): string {
     '/pppoe': 'pppoe',
     '/ipoe': 'ipoe',
     '/map': 'map',
+    '/noc': 'noc',
+    '/twingate': 'twingate',
     '/zerotier': 'zerotier',
     '/super-router': 'super-router',
     '/tech-tools': 'tech-tools',

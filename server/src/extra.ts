@@ -34,7 +34,7 @@ export const ALL_PERMISSIONS = [
   'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
   'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
-  'tech-tools', 'job-orders', 'invoices', 'finance', 'rogue',
+  'tech-tools', 'job-orders', 'invoices', 'finance', 'rogue', 'twingate', 'noc',
 ] as const;
 
 // Shared license / password-reset signing secrets live in panelId.ts.
@@ -121,7 +121,7 @@ export function initExtra() {
       'Manage clients, routers and network',
       JSON.stringify([
         'dashboard', 'terminal', 'pppoe', 'ipoe', 'routers', 'network', 'map', 'files', 'logs',
-        'license', 'tech-tools', 'job-orders', 'rogue',
+        'license', 'tech-tools', 'job-orders', 'rogue', 'twingate', 'noc',
       ])
     );
     ins.run(
@@ -137,7 +137,33 @@ export function initExtra() {
   }
 
   ensureReadOnlyRoleViewsAll();
+  ensureTechnicianNocTwingate();
   seedDefaultPanelUsers();
+}
+
+/** Keep Technician role able to open Twingate + NOC on upgrades. */
+function ensureTechnicianNocTwingate() {
+  const row = db.prepare("SELECT id, permissions FROM roles WHERE name = 'Technician'").get() as
+    | { id: number; permissions: string }
+    | undefined;
+  if (!row) return;
+  let perms: string[] = [];
+  try {
+    perms = JSON.parse(row.permissions || '[]');
+  } catch {
+    return;
+  }
+  if (perms.includes('*')) return;
+  let changed = false;
+  for (const p of ['twingate', 'noc']) {
+    if (!perms.includes(p)) {
+      perms.push(p);
+      changed = true;
+    }
+  }
+  if (changed) {
+    db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify(perms), row.id);
+  }
 }
 
 /** Keep the built-in Read-only role able to open every menu (writes blocked separately). */
