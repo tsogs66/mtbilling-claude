@@ -13,6 +13,8 @@ server/data/*.db
 server/data/*.db-*
 server/data/pay-proofs/
 server/data/.jwt-secret
+server/data/twingate-service-key.json
+server/data/twingate-ui.log
 *.sqlite
 *.sqlite3
 *.db

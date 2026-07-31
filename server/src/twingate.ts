@@ -132,6 +132,18 @@ let tgJob: { running: boolean; action: string; code: number | null; startedAt: n
   startedAt: 0,
 };
 
+/** Write Service Key for the install script — avoids --from-db / sqlite3 CLI (apt 404s, flash images). */
+function writeTwingateKeyFile(key: string): string {
+  const keyPath = path.join(dataDir, 'twingate-service-key.json');
+  fs.writeFileSync(keyPath, key, { mode: 0o600 });
+  try {
+    fs.chmodSync(keyPath, 0o600);
+  } catch {
+    /* ignore */
+  }
+  return keyPath;
+}
+
 function startTwingateJob(
   args: string[],
   actionLabel: string,
@@ -352,7 +364,15 @@ twingateRouter.post('/twingate/apply', (_req, res) => {
   if (!s.twingate_service_key) {
     return res.status(400).json({ error: 'Save your Twingate Service Key first.' });
   }
-  const started = startTwingateJob(['--from-db', 'apply'], 'apply', (code) => {
+  // Node already has the key via better-sqlite3 — pass --key-file so the shell
+  // helper never needs the sqlite3 CLI (apt mirrors often 404 on stale indexes).
+  let keyPath: string;
+  try {
+    keyPath = writeTwingateKeyFile(s.twingate_service_key);
+  } catch (e) {
+    return res.status(500).json({ error: `Could not write Service Key file: ${(e as Error).message}` });
+  }
+  const started = startTwingateJob(['--key-file', keyPath, 'apply'], 'apply', (code) => {
     if (code === 0) {
       const net = networkFromKey(s.twingate_service_key);
       db.prepare(
@@ -383,7 +403,14 @@ twingateRouter.post('/twingate/toggle', (_req, res) => {
     if (!s.twingate_service_key) {
       return res.status(400).json({ error: 'Save your Twingate Service Key first.' });
     }
-    const started = startTwingateJob(['--from-db', 'start'], 'start', (code) => {
+    // Prefer full apply (installs client if missing); fall back to plain start.
+    let keyPath: string;
+    try {
+      keyPath = writeTwingateKeyFile(s.twingate_service_key);
+    } catch (e) {
+      return res.status(500).json({ error: `Could not write Service Key file: ${(e as Error).message}` });
+    }
+    const onStarted = (code: number) => {
       db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(
         code === 0 ? 'online' : code === 1 ? 'error' : 'offline',
         code === 0 ? 1 : 0
@@ -395,6 +422,14 @@ twingateRouter.post('/twingate/toggle', (_req, res) => {
           ? 'Twingate started'
           : `Twingate start failed or rolled back to protect panel connectivity (exit ${code})`
       );
+    };
+    const started = startTwingateJob(['--key-file', keyPath, 'apply'], 'start', (code) => {
+      if (code === 0) {
+        onStarted(0);
+        return;
+      }
+      const retried = startTwingateJob(['start'], 'start', onStarted);
+      if (!retried.ok) onStarted(code);
     });
     if (!started.ok) return res.status(409).json({ error: started.error });
     return res.json({ ok: true, started: true, action: 'start' });

@@ -23,8 +23,10 @@
 #   4. Grant the Service Account access to those Resources
 #
 # Usage (inside the MT-Billing guest as root):
-#   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh --from-db apply
+#   # Panel Install & connect writes a key file and calls --key-file (no sqlite3 CLI):
 #   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh --key-file /path/key.json apply
+#   # Manual / SSH (optional; needs sqlite3 CLI or python3):
+#   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh --from-db apply
 #   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh start
 #   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh stop
 #   sudo bash /opt/mt-billing/install/mt-billing-twingate.sh status
@@ -110,29 +112,63 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+# The Node panel talks to SQLite via better-sqlite3 and passes --key-file for
+# apply/start — it never needs the sqlite3 CLI. CLI is only for manual
+# --from-db / best-effort set_db_status when operators run the script by hand.
 ensure_sqlite3() {
   if command -v sqlite3 >/dev/null 2>&1; then
     return 0
   fi
-  log_info "Installing sqlite3 CLI (needed to read/write app_settings)"
+  log_info "Installing sqlite3 CLI (needed for --from-db / optional status writes)"
   if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sqlite3 >/dev/null || true
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq sqlite3 >/dev/null 2>&1 || log_warn "apt could not install sqlite3 (stale index/404?) — will try python3 fallback"
   fi
   command -v sqlite3 >/dev/null 2>&1
+}
+
+# Run a SQL statement against DB_PATH. Prefers sqlite3 CLI; falls back to python3.
+# Prints first column of first row when the statement returns rows.
+sqlite3_q() {
+  local sql="$1"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_PATH" "$sql"
+    return $?
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    SQLITE_DB="$DB_PATH" SQLITE_SQL="$sql" python3 - <<'PY'
+import os, sqlite3, sys
+db, sql = os.environ["SQLITE_DB"], os.environ["SQLITE_SQL"]
+con = sqlite3.connect(db)
+try:
+    cur = con.execute(sql)
+    con.commit()
+    row = cur.fetchone()
+    if row is not None and len(row) > 0:
+        print("" if row[0] is None else row[0])
+except Exception:
+    sys.exit(1)
+finally:
+    con.close()
+PY
+    return $?
+  fi
+  return 1
 }
 
 set_db_status() {
   local status="$1"
   local network="${2:-}"
-  ensure_sqlite3 || return 0
   [[ -f "$DB_PATH" ]] || return 0
-  sqlite3 "$DB_PATH" "ALTER TABLE app_settings ADD COLUMN twingate_status TEXT;" 2>/dev/null || true
-  sqlite3 "$DB_PATH" "ALTER TABLE app_settings ADD COLUMN twingate_network TEXT;" 2>/dev/null || true
-  sqlite3 "$DB_PATH" "ALTER TABLE app_settings ADD COLUMN twingate_enabled INTEGER DEFAULT 0;" 2>/dev/null || true
+  ensure_sqlite3 || true
+  sqlite3_q "ALTER TABLE app_settings ADD COLUMN twingate_status TEXT;" 2>/dev/null || true
+  sqlite3_q "ALTER TABLE app_settings ADD COLUMN twingate_network TEXT;" 2>/dev/null || true
+  sqlite3_q "ALTER TABLE app_settings ADD COLUMN twingate_enabled INTEGER DEFAULT 0;" 2>/dev/null || true
   if [[ -n "$network" ]]; then
-    sqlite3 "$DB_PATH" "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_network = '${network//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
+    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_network = '${network//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
   else
-    sqlite3 "$DB_PATH" "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
+    sqlite3_q "UPDATE app_settings SET twingate_status = '${status//\'/\'\'}', twingate_enabled = $([[ "$status" == online ]] && echo 1 || echo 0) WHERE id = 1;" 2>/dev/null || true
   fi
 }
 
@@ -277,18 +313,19 @@ health_check_or_rollback() {
 }
 
 read_key_from_db() {
-  ensure_sqlite3 || {
-    log_err "sqlite3 CLI required for --from-db"
-    exit 1
-  }
   [[ -f "$DB_PATH" ]] || {
     log_err "Database not found: $DB_PATH"
     exit 1
   }
-  local key
-  key="$(sqlite3 "$DB_PATH" "SELECT IFNULL(twingate_service_key,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
+  ensure_sqlite3 || true
+  local key=""
+  key="$(sqlite3_q "SELECT IFNULL(twingate_service_key,'') FROM app_settings WHERE id = 1;" 2>/dev/null || true)"
   if [[ -z "$key" ]]; then
-    log_err "No Twingate Service Key in app_settings — paste it in Network → Twingate first."
+    if ! command -v sqlite3 >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+      log_err "Cannot read Service Key from DB (need sqlite3 CLI or python3). Prefer: --key-file PATH"
+    else
+      log_err "No Twingate Service Key in app_settings — paste it in Network → Twingate first."
+    fi
     exit 1
   fi
   mkdir -p "$CONF_DIR"
