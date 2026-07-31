@@ -285,14 +285,22 @@ twingateRouter.get('/twingate', async (_req, res) => {
   const s = getTg();
   const configured = !!s.twingate_service_key;
   const result = await runTwingateScript(['status']);
-  let live = {
+  let live: {
+    status: string;
+    installed: string;
+    network: string;
+    resources: number;
+    dns: string;
+    tun: string;
+    arch: string;
+  } = {
     status: s.twingate_status || 'stopped',
     installed: 'no',
     network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
     resources: 0,
     dns: 'unknown',
     tun: fs.existsSync('/dev/net/tun') ? 'yes' : 'no',
-    arch: process.arch || '',
+    arch: String(process.arch || ''),
   };
   if (result.code === 0) {
     live = { ...live, ...parseStatusOutput(result.stdout) };
