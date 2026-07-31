@@ -150,7 +150,11 @@ write_coexist_resolv() {
     { print }
   ' "$tmp" >/etc/resolv.conf
   rm -f "$tmp"
-  _coexist_log_ok "Wrote coexist DNS (public/local first${tw_online:+, Twingate last})"
+  if [[ "$tw_online" -eq 1 ]]; then
+    _coexist_log_ok "Wrote coexist DNS (public/local first, Twingate last)"
+  else
+    _coexist_log_ok "Wrote coexist DNS (public/local first)"
+  fi
 }
 
 cloudflare_still_ok() {
