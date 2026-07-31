@@ -44,6 +44,11 @@ else
   fi
 fi
 
+WD="${INSTALL_DIR}/install/mt-billing-net-watchdog.sh"
+if [[ -f "$WD" ]]; then
+  bash "$WD" install || true
+fi
+
 echo
 echo "--- status ---"
 ip -br a 2>/dev/null || ip a | head -40

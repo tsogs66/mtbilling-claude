@@ -244,6 +244,19 @@ apply_coexist_after_twingate() {
     augment_resolv_fallbacks
     log_warn "mt-billing-net-coexist.sh missing — applied DNS fallbacks only"
   fi
+  install_net_watchdog || true
+}
+
+install_net_watchdog() {
+  local wd
+  wd="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mt-billing-net-watchdog.sh"
+  if [[ ! -f "$wd" ]]; then
+    wd="${INSTALL_DIR}/install/mt-billing-net-watchdog.sh"
+  fi
+  if [[ -f "$wd" ]]; then
+    bash "$wd" install >/dev/null 2>&1 || bash "$wd" install || true
+    log_ok "Network watchdog timer enabled (protects SSH/panel if Twingate rewrites DNS)"
+  fi
 }
 
 cleanup_sdwan() {
@@ -736,6 +749,7 @@ do_emergency_restore() {
   restore_resolv
   restore_default_route
   set_db_status stopped
+  install_net_watchdog || true
   # Quick verify
   if dns_works || gateway_reachable; then
     log_ok "Emergency restore complete — network should be usable again"

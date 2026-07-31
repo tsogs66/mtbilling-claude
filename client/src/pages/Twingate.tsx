@@ -296,6 +296,11 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
               ). Then reconnect by <b>LAN IP</b>, not hostname.
             </p>
             <p>
+              A <b>network watchdog</b> (installed on update / Twingate apply) rewrites DNS every minute if Twingate
+              puts <code className="font-mono text-xs">100.95.*</code> first again — that is what causes login to fail
+              &quot;after some time&quot; on Proxmox, RPi, and Wyse.
+            </p>
+            <p>
               In Twingate Admin: keep the Connector online, and define Resources as <b>specific device IPs</b> — not broad{' '}
               <code className="font-mono text-xs">192.168.0.0/16</code> ranges that include this panel.
             </p>

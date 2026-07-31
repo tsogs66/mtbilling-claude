@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Guest update script — run inside the MT-Billing LXC/VM (or via Proxmox pct exec).
 # Pulls the configured branch from GitHub, rebuilds, and restarts services.
@@ -13,7 +13,7 @@
 #
 # Environment:
 #   var_install_dir / INSTALL_DIR   default /opt/mt-billing
-#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/mtbilling-claude.git
+#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/MT-Billing.git
 #   var_repo_branch / REPO_BRANCH   default main
 #   MT_BILLING_AUTO_ONLY=1          only apply when origin is ahead of HEAD
 #   MT_BILLING_SKIP_BUILD=1         pull only (not recommended)
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
 AUTO_ONLY="${MT_BILLING_AUTO_ONLY:-0}"
 SKIP_BUILD="${MT_BILLING_SKIP_BUILD:-0}"
@@ -113,6 +113,12 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-coexist.sh
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-coexist.sh *
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-coexist.sh *
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-rescue.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-rescue.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
@@ -366,6 +372,9 @@ write_state "updated" "$BEFORE" "$AFTER" "Update complete."
 # Ensure UI-triggered updates work after this pull (sudoers + oneshot unit)
 if [[ "$(id -u)" -eq 0 ]]; then
   install_panel_update_privs || true
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
+    bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
+  fi
 fi
 
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"
