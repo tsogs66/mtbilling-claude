@@ -222,6 +222,14 @@ export default function CloudflareAccess() {
     <Layout title="Cloudflare Access">
       <Flash message={banner} onDismiss={() => setBanner('')} />
 
+      <Card className="mb-5 border-sky-200 bg-sky-50/50">
+        <p className="text-sm text-sky-900">
+          <b>Works with Twingate.</b> cloudflared is outbound-only and does not take over your LAN. After starting
+          Twingate, use Network → Twingate → <b>Fix LAN coexistence</b> so local routes and DNS stay on this host while
+          both tunnels run.
+        </p>
+      </Card>
+
       <Card className="mb-5">
         <div className="flex items-start gap-3 mb-3">
           <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">

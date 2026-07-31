@@ -47,6 +47,23 @@ KEY_FILE="${CONF_DIR}/service_key.json"
 RESOLV_BAK="${MT_CONF}/resolv.conf.twingate-bak"
 UNIT_NAME="twingate.service"
 
+# Shared Cloudflare + Twingate LAN/DNS coexistence helpers
+COEXIST_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mt-billing-net-coexist.sh"
+if [[ -f "$COEXIST_SCRIPT" ]]; then
+  # shellcheck disable=SC1090
+  source "$COEXIST_SCRIPT"
+else
+  for p in \
+    "${INSTALL_DIR}/install/mt-billing-net-coexist.sh" \
+    /opt/mt-billing/install/mt-billing-net-coexist.sh; do
+    if [[ -f "$p" ]]; then
+      # shellcheck disable=SC1090
+      source "$p"
+      break
+    fi
+  done
+fi
+
 FROM_DB=0
 KEY_PATH=""
 NO_START=0
@@ -150,11 +167,15 @@ restore_resolv() {
   fi
 }
 
-# Twingate replaces resolv.conf with ONLY 100.95.* nameservers. When the
-# Connector / Twingate DNS path is down, the host cannot resolve anything
-# (looks like a total disconnect). Keep Twingate DNS first, then append
-# the pre-Twingate resolvers + public fallbacks.
+# Twingate replaces resolv.conf with ONLY 100.95.* nameservers. Prefer the
+# shared coexist DNS writer (local/public first, Twingate last) so Cloudflare
+# Tunnel and LAN keep working. Fall back to appending public DNS if the helper
+# is unavailable.
 augment_resolv_fallbacks() {
+  if declare -F write_coexist_resolv >/dev/null 2>&1; then
+    write_coexist_resolv
+    return 0
+  fi
   local tmp
   tmp="$(mktemp)"
   if [[ -f /etc/resolv.conf ]]; then
@@ -169,7 +190,6 @@ augment_resolv_fallbacks() {
     echo "nameserver 8.8.8.8"
     echo "nameserver 1.1.1.1"
   } >>"$tmp"
-  # Dedupe nameserver lines while preserving order
   awk '
     /^[[:space:]]*nameserver[[:space:]]+/ {
       if (!seen[$0]++) print
@@ -179,6 +199,15 @@ augment_resolv_fallbacks() {
   ' "$tmp" >/etc/resolv.conf
   rm -f "$tmp"
   log_ok "Added DNS fallbacks to /etc/resolv.conf"
+}
+
+apply_coexist_after_twingate() {
+  if declare -F apply_net_coexist >/dev/null 2>&1; then
+    apply_net_coexist || log_warn "Coexistence helper reported a warning — check LAN/DNS"
+  else
+    augment_resolv_fallbacks
+    log_warn "mt-billing-net-coexist.sh missing — applied DNS fallbacks only"
+  fi
 }
 
 cleanup_sdwan() {
@@ -326,17 +355,20 @@ prefer_resolved() {
 
 do_start() {
   backup_resolv
+  if declare -F snapshot_default_route >/dev/null 2>&1; then
+    snapshot_default_route
+  fi
   prefer_resolved
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
     systemctl restart "$UNIT_NAME" || twingate start || true
     sleep 3
-    augment_resolv_fallbacks
+    apply_coexist_after_twingate
     if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null || [[ "$(twingate status 2>/dev/null || true)" == "online" ]]; then
       if health_check_or_rollback; then
         set_db_status online "$(network_from_key)"
-        log_ok "Twingate is online"
+        log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
         return 0
       fi
       return 1
@@ -356,11 +388,11 @@ do_start() {
   sleep 1
   (cd /var/lib/twingate && /usr/sbin/twingated >/var/log/twingated.log 2>&1 &) || true
   sleep 3
-  augment_resolv_fallbacks
+  apply_coexist_after_twingate
   if [[ "$(twingate status 2>/dev/null || true)" == "online" ]]; then
     if health_check_or_rollback; then
       set_db_status online "$(network_from_key)"
-      log_ok "Twingate is online (direct daemon)"
+      log_ok "Twingate is online (direct daemon, coexistence applied)"
       return 0
     fi
     return 1
@@ -424,9 +456,17 @@ do_status() {
   echo "network=${net}"
   echo "resources=${resources}"
   if grep -qE '100\.95\.0\.25' /etc/resolv.conf 2>/dev/null; then
-    echo "dns=twingate"
+    first_ns="$(grep -E '^\s*nameserver\s+' /etc/resolv.conf | head -1 | awk '{print $2}')"
+    if [[ "$first_ns" == 100.95.* ]]; then
+      echo "dns=twingate-first"
+    else
+      echo "dns=coexist"
+    fi
   else
     echo "dns=system"
+  fi
+  if declare -F status_net_coexist >/dev/null 2>&1; then
+    status_net_coexist | sed 's/^/coexist_/'
   fi
 }
 
