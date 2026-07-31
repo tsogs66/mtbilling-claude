@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Globe2, Loader2, RefreshCw, Settings, Shield } from 'lucide-react';
+import { AlertTriangle, Globe2, Loader2, RefreshCw, Settings, Shield, Unplug } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Flash, FormField, LoadingPage, PageHeader, StatusBadge } from '../components/ui';
 import { api } from '../api';
@@ -37,7 +37,17 @@ export default function Twingate() {
   }, [job?.log]);
 
   const load = () => {
-    api.get('/twingate').then((r) => setData(r.data)).catch(() => setData({ configured: false, online: false, status: 'stopped', message: 'Could not load Twingate status.' }));
+    api
+      .get('/twingate')
+      .then((r) => setData(r.data))
+      .catch(() =>
+        setData({
+          configured: false,
+          online: false,
+          status: 'stopped',
+          message: 'Could not load Twingate status.',
+        })
+      );
     api.get('/twingate/settings').then((r) => {
       setSettings(r.data);
       setForm((f) => ({ ...f, nodeName: r.data.nodeName || '' }));
@@ -85,10 +95,10 @@ export default function Twingate() {
             type: code === 0 ? 'success' : 'error',
             msg:
               code === 0
-                ? action === 'stop'
-                  ? 'Twingate stopped.'
+                ? action === 'stop' || action === 'emergency-restore'
+                  ? 'Twingate stopped and host DNS restored.'
                   : 'Twingate is connected.'
-                : `${action} failed (exit ${code}). See log below.`,
+                : `${action} failed (exit ${code}). If the panel lost internet, run Emergency restore (or SSH: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore).`,
           });
           load();
           setBusy(false);
@@ -124,6 +134,18 @@ export default function Twingate() {
     }
   };
 
+  const emergencyRestore = async () => {
+    if (!confirm('Stop Twingate and restore host DNS? Use this if the panel lost internet after connecting.')) return;
+    setBusy(true);
+    try {
+      await api.post('/twingate/emergency-restore');
+      pollJob('emergency-restore');
+    } catch (e: any) {
+      setBusy(false);
+      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Emergency restore failed' });
+    }
+  };
+
   if (!data) {
     return (
       <Layout title="Twingate">
@@ -142,9 +164,17 @@ export default function Twingate() {
           description="Connect this panel to OLTs and devices on other subnets via Twingate ZTNA."
           icon={Globe2}
         />
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button type="button" className="btn-secondary shrink-0" onClick={load}>
             <RefreshCw size={16} /> Refresh
+          </button>
+          <button
+            type="button"
+            className="btn-secondary shrink-0 text-rose-700 border-rose-200"
+            onClick={emergencyRestore}
+            disabled={busy}
+          >
+            <Unplug size={16} /> Emergency restore
           </button>
           <button type="button" className="btn-secondary shrink-0" onClick={() => setSetupOpen((v) => !v)}>
             <Settings size={16} /> Setup
@@ -152,16 +182,41 @@ export default function Twingate() {
         </div>
       </div>
 
+      <Card className="max-w-4xl mb-5 border-amber-200 bg-amber-50/60" interactive>
+        <div className="flex gap-3 text-sm text-amber-900">
+          <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
+          <div className="space-y-1">
+            <p className="font-semibold">If the panel “disconnects” after Install &amp; connect</p>
+            <p>
+              Twingate rewrites DNS to <code className="font-mono text-xs">100.95.*</code>. When the Connector is offline
+              (or a Resource CIDR overlaps this host’s LAN), outbound DNS fails and the panel looks offline. Click{' '}
+              <b>Emergency restore</b>, or SSH:
+            </p>
+            <pre className="text-xs font-mono bg-white/80 border border-amber-200 rounded-lg px-3 py-2 overflow-x-auto">
+              sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore
+            </pre>
+            <p>
+              In Twingate Admin: keep the Connector online, and define Resources as <b>specific device IPs</b> — not broad{' '}
+              <code className="font-mono text-xs">192.168.0.0/16</code> ranges that include this panel.
+            </p>
+          </div>
+        </div>
+      </Card>
+
       {setupOpen && (
         <Card title="Twingate setup" className="max-w-4xl mb-5" interactive>
           <div className="space-y-3">
             <p className="text-sm text-slate-500">
-              In Twingate Admin: create a <b>Connector</b> on the remote LAN, add <b>Resources</b> (OLT/router CIDRs),
-              create a <b>Service</b> + Service Key, and grant this Service access to those Resources. Paste the JSON key below.
+              In Twingate Admin: create a <b>Connector</b> on the remote LAN, add <b>Resources</b> (OLT/router IPs), create
+              a <b>Service</b> + Service Key, and grant this Service access to those Resources. Paste the JSON key below.
             </p>
             <FormField
               label="Service Key (JSON)"
-              hint={settings?.serviceKeySet ? 'Key is saved. Leave blank to keep current.' : 'From Admin Console → Services → Service Key'}
+              hint={
+                settings?.serviceKeySet
+                  ? 'Key is saved. Leave blank to keep current.'
+                  : 'From Admin Console → Services → Service Key'
+              }
             >
               <textarea
                 className="input font-mono text-xs min-h-[120px]"
@@ -210,10 +265,13 @@ export default function Twingate() {
               {data.network ? `Network: ${data.network}` : 'Network not configured'}
               {data.installed ? ' · Client installed' : ' · Client not installed'}
               {typeof data.resourceCount === 'number' ? ` · ${data.resourceCount} resource(s)` : ''}
+              {data.dns ? ` · DNS: ${data.dns}` : ''}
             </div>
           </div>
           <div className="ml-auto">
-            <StatusBadge status={data.online ? 'online' : data.status === 'error' ? 'offline' : data.status || 'offline'} />
+            <StatusBadge
+              status={data.online ? 'online' : data.status === 'error' ? 'offline' : data.status || 'offline'}
+            />
           </div>
         </div>
         {data.message && <p className="text-sm text-amber-700 mt-3">{data.message}</p>}
@@ -222,7 +280,10 @@ export default function Twingate() {
 
       {job && (
         <Card title={`Job: ${job.action}${job.running ? ' (running)' : ''}`} className="max-w-4xl mb-5" interactive>
-          <pre ref={logRef} className="text-xs font-mono bg-slate-950 text-slate-200 rounded-lg p-3 max-h-64 overflow-auto whitespace-pre-wrap">
+          <pre
+            ref={logRef}
+            className="text-xs font-mono bg-slate-950 text-slate-200 rounded-lg p-3 max-h-64 overflow-auto whitespace-pre-wrap"
+          >
             {job.log || 'Waiting for output…'}
           </pre>
         </Card>
