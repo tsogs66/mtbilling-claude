@@ -221,13 +221,15 @@ function parseStatusOutput(stdout: string): {
   network: string;
   resources: number;
   dns: string;
+  tun: string;
 } {
   const status = (stdout.match(/^status=(.+)$/m) || [])[1]?.trim() || 'stopped';
   const installed = (stdout.match(/^installed=(.+)$/m) || [])[1]?.trim() || 'no';
   const network = (stdout.match(/^network=(.*)$/m) || [])[1]?.trim() || '';
   const resources = Number((stdout.match(/^resources=(.+)$/m) || [])[1]?.trim() || 0) || 0;
   const dns = (stdout.match(/^dns=(.+)$/m) || [])[1]?.trim() || 'unknown';
-  return { status, installed, network, resources, dns };
+  const tun = (stdout.match(/^tun=(.+)$/m) || [])[1]?.trim() || (fs.existsSync('/dev/net/tun') ? 'yes' : 'unknown');
+  return { status, installed, network, resources, dns, tun };
 }
 
 twingateRouter.get('/twingate/settings', (_req, res) => {
@@ -287,6 +289,7 @@ twingateRouter.get('/twingate', async (_req, res) => {
     network: s.twingate_network || networkFromKey(s.twingate_service_key) || '',
     resources: 0,
     dns: 'unknown',
+    tun: fs.existsSync('/dev/net/tun') ? 'yes' : 'no',
   };
   if (result.code === 0) {
     live = { ...live, ...parseStatusOutput(result.stdout) };
@@ -302,29 +305,33 @@ twingateRouter.get('/twingate', async (_req, res) => {
     }
   }
   const connecting = live.status === 'authenticating';
+  const tunMissing = live.tun === 'no';
   res.json({
     configured,
     online: live.status === 'online',
     connecting,
+    tunOk: !tunMissing,
     status: live.status,
     installed: live.installed === 'yes',
     network: live.network || s.twingate_network || '',
     nodeName: s.twingate_node_name || 'panel-host',
     resourceCount: live.resources,
     dns: live.dns,
-    message: !configured
-      ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
-      : live.status === 'error'
-        ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
-        : connecting
-          ? 'Client is authenticating (Service Key auth is automatic — there is no Accept button). In Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs). Status refreshes automatically.'
-          : live.status === 'not-running'
-            ? 'Twingate client daemon is not running on this host (not an Admin Accept step). Update the panel and retry Install & connect, or SSH: sudo systemctl restart twingate && sudo journalctl -u twingate -n 50'
-            : live.status !== 'online'
-            ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
-            : live.resources === 0
-              ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
-              : null,
+    message: tunMissing
+      ? 'Missing /dev/net/tun (common on Proxmox LXC). Twingate cannot start until TUN is enabled on the Proxmox host. Run: sudo bash scripts/proxmox-enable-twingate-tun.sh <CTID>  then reboot the CT and retry Install & connect.'
+      : !configured
+        ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
+        : live.status === 'error'
+          ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
+          : connecting
+            ? 'Client is authenticating (Service Key auth is automatic — there is no Accept button). In Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs). Status refreshes automatically.'
+            : live.status === 'not-running'
+              ? 'Twingate client daemon is not running. If journalctl shows TUN errors, enable /dev/net/tun on the Proxmox host (scripts/proxmox-enable-twingate-tun.sh). Otherwise: sudo systemctl restart twingate && sudo journalctl -u twingate -n 50'
+              : live.status !== 'online'
+                ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
+                : live.resources === 0
+                  ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
+                  : null,
     warning: result.code !== 0 ? result.stderr || undefined : undefined,
   });
 });

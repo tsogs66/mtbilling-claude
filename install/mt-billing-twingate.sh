@@ -390,6 +390,39 @@ prefer_resolved() {
   fi
 }
 
+# Twingate needs /dev/net/tun (creates sdwan0). Proxmox unprivileged LXCs often
+# omit it → twingated exits with "Failed to initialize Network Manager(TUN device)".
+print_tun_fix() {
+  log_err "Missing /dev/net/tun — Twingate client cannot start in this container/LXC."
+  log_err "Fix on the Proxmox HOST (not inside the guest), then retry Install & connect:"
+  log_err "  # from a clone on the host:"
+  log_err "  sudo bash scripts/proxmox-enable-twingate-tun.sh <CTID>"
+  log_err "  # or one-liner (replace CTID):"
+  log_err "  CONF=/etc/pve/lxc/<CTID>.conf"
+  log_err "  echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >>\$CONF"
+  log_err "  echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >>\$CONF"
+  log_err "  pct reboot <CTID>"
+  log_err "Docs: https://www.twingate.com/docs/linux-headless/ (needs /dev/net/tun + NET_ADMIN)"
+}
+
+ensure_tun_device() {
+  if [[ -c /dev/net/tun ]]; then
+    return 0
+  fi
+  log_warn "/dev/net/tun missing — attempting to create (works on VMs / privileged CTs only)"
+  mkdir -p /dev/net 2>/dev/null || true
+  if [[ ! -e /dev/net/tun ]]; then
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+  fi
+  chmod 666 /dev/net/tun 2>/dev/null || true
+  if [[ -c /dev/net/tun ]]; then
+    log_ok "Created /dev/net/tun"
+    return 0
+  fi
+  print_tun_fix
+  return 1
+}
+
 tg_client_status() {
   if ! command -v twingate >/dev/null 2>&1; then
     echo "not-installed"
@@ -475,6 +508,10 @@ wait_for_client_online() {
 }
 
 do_start() {
+  if ! ensure_tun_device; then
+    set_db_status error
+    return 1
+  fi
   backup_resolv
   if declare -F snapshot_default_route >/dev/null 2>&1; then
     snapshot_default_route
@@ -495,10 +532,14 @@ do_start() {
 
     if [[ "$st" == "not-running" ]]; then
       log_err "Twingate client is not-running after start attempts"
-      log_err "There is nothing to 'Accept' in Twingate Admin for a Service Key."
-      log_err "On this host, check: sudo systemctl status twingate && sudo journalctl -u twingate -n 50"
-      log_err "In Admin: Connector Online + Service Account granted Resources (specific remote IPs)."
-      dump_twingate_logs
+      if [[ ! -c /dev/net/tun ]]; then
+        print_tun_fix
+      else
+        log_err "There is nothing to 'Accept' in Twingate Admin for a Service Key."
+        log_err "On this host, check: sudo systemctl status twingate && sudo journalctl -u twingate -n 50"
+        log_err "In Admin: Connector Online + Service Account granted Resources (specific remote IPs)."
+        dump_twingate_logs
+      fi
       kill_daemon_hard
       restore_resolv
       set_db_status offline
@@ -636,6 +677,11 @@ do_status() {
   echo "installed=${installed}"
   echo "network=${net}"
   echo "resources=${resources}"
+  if [[ -c /dev/net/tun ]]; then
+    echo "tun=yes"
+  else
+    echo "tun=no"
+  fi
   if grep -qE '100\.95\.0\.25' /etc/resolv.conf 2>/dev/null; then
     first_ns="$(grep -E '^\s*nameserver\s+' /etc/resolv.conf | head -1 | awk '{print $2}')"
     if [[ "$first_ns" == 100.95.* ]]; then

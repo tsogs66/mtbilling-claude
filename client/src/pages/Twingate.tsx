@@ -226,6 +226,31 @@ export default function Twingate() {
         </div>
       </Card>
 
+      {data.tunOk === false && (
+        <Card className="max-w-4xl mb-5 border-rose-200 bg-rose-50/70" interactive>
+          <div className="flex gap-3 text-sm text-rose-950">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-rose-600" />
+            <div className="space-y-1">
+              <p className="font-semibold">Proxmox LXC: /dev/net/tun missing</p>
+              <p>
+                Twingate needs a TUN device. Unprivileged LXCs usually block it — that is why the client stays{' '}
+                <b>not-running</b>. Run this on the <b>Proxmox host</b> (not inside the guest), then retry Install &amp;
+                connect:
+              </p>
+              <pre className="text-xs font-mono bg-white/90 border border-rose-200 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap">
+                {`# replace CTID with your container id (pct list)
+sudo bash /path/to/MT-Billing/scripts/proxmox-enable-twingate-tun.sh CTID
+
+# or manually:
+echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >> /etc/pve/lxc/CTID.conf
+echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >> /etc/pve/lxc/CTID.conf
+pct reboot CTID`}
+              </pre>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card className="max-w-4xl mb-5 border-amber-200 bg-amber-50/60" interactive>
         <div className="flex gap-3 text-sm text-amber-900">
           <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
@@ -256,10 +281,9 @@ export default function Twingate() {
         <Card title="Twingate setup" className="max-w-4xl mb-5" interactive>
           <div className="space-y-3">
             <p className="text-sm text-slate-500">
-              <b>Do not</b> create/deploy a new Connector for the panel unless you want this VM to publish a LAN.
-              Use your existing <b>Connected</b> Connector(s), add <b>Resources</b> (specific OLT/router IPs on that
-              network), create a <b>Service</b> + Service Key, and grant that Service the Resources. Paste the Service
-              Key JSON below (Admin → Services), then Install &amp; connect. Auth is automatic — no Accept click.
+              Use a <b>Service Key</b> (Admin → Services) — headless auth is automatic; there is no Accept / approve
+              click. You need: an online <b>Connector</b> (your Proxmox one is fine), <b>Resources</b> (OLT/router IPs),
+              and this Service granted those Resources. Paste the JSON key below, then Install &amp; connect.
             </p>
             <FormField
               label="Service Key (JSON)"
