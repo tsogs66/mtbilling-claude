@@ -304,6 +304,19 @@ fi
 if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
   bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
 fi
+# Heal DNS + restart panel/tunnel on every boot (avoids hard power-off recovery on RPi)
+if [[ -f "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" ]]; then
+  bash "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" install || true
+fi
+# Symlink console rescue command
+if [[ -f "${INSTALL_DIR}/install/mt-billing-net-rescue.sh" ]]; then
+  ln -sf "${INSTALL_DIR}/install/mt-billing-net-rescue.sh" /usr/local/sbin/mt-billing-rescue 2>/dev/null || true
+fi
+# Console tip for operators who lose Cloudflare/SSH
+cat >/etc/issue.d/mt-billing-lan.issue 2>/dev/null <<'EOF' || true
+MT-Billing: if Cloudflare shows 502 or SSH dies, login here and run:  sudo mt-billing-rescue
+Then open http://<this-LAN-IP>/login  — prefer "sudo reboot" over power-off.
+EOF
 
 echo "[8/9] Enabling auto-update timer (checks GitHub every 10 minutes)…"
 if [[ "$AUTO_UPDATE" == "1" ]]; then

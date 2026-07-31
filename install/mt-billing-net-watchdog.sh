@@ -200,6 +200,57 @@ run_once() {
       emergency_stop_twingate
     fi
   fi
+
+  # Keep local panel + Cloudflare tunnel up (502 Bad gateway = host side dead)
+  ensure_local_panel
+}
+
+FAIL_FILE="${MT_CONF}/watchdog-panel-fail.count"
+REBOOT_STAMP="${MT_CONF}/watchdog-last-reboot"
+
+panel_local_ok() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --connect-timeout 2 --max-time 4 -o /dev/null http://127.0.0.1/login 2>/dev/null && return 0
+  fi
+  timeout 2 bash -c 'echo >/dev/tcp/127.0.0.1/80' 2>/dev/null && return 0
+  return 1
+}
+
+ensure_local_panel() {
+  if panel_local_ok; then
+    rm -f "$FAIL_FILE"
+    return 0
+  fi
+
+  local fails=0
+  fails="$(cat "$FAIL_FILE" 2>/dev/null || echo 0)"
+  fails=$((fails + 1))
+  echo "$fails" >"$FAIL_FILE"
+  log "WATCHDOG: local panel :80 not OK (fail #${fails}) — restarting nginx/api/cloudflared"
+
+  systemctl reset-failed nginx mt-billing-api cloudflared-mt-billing 2>/dev/null || true
+  systemctl try-restart nginx 2>/dev/null || systemctl start nginx 2>/dev/null || true
+  systemctl try-restart mt-billing-api 2>/dev/null || systemctl start mt-billing-api 2>/dev/null || true
+  if systemctl list-unit-files cloudflared-mt-billing.service >/dev/null 2>&1; then
+    systemctl try-restart cloudflared-mt-billing 2>/dev/null || systemctl start cloudflared-mt-billing 2>/dev/null || true
+  fi
+
+  # After ~5 minutes of continuous failure (10 x 30s), soft-reboot once/hour
+  # so RPi recovers without a hard power-off.
+  if [[ "$fails" -ge 10 ]]; then
+    local last now
+    last="$(cat "$REBOOT_STAMP" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    if [[ $((now - last)) -gt 3600 ]]; then
+      log "WATCHDOG: panel still down after ${fails} checks — soft reboot (avoid power-cycle)"
+      date +%s >"$REBOOT_STAMP"
+      rm -f "$FAIL_FILE"
+      # Prefer orderly reboot; flash appliances often only recover this way
+      systemctl reboot || /sbin/reboot || true
+    else
+      log "WATCHDOG: soft-reboot skipped (already rebooted within 1h)"
+    fi
+  fi
 }
 
 install_timer() {

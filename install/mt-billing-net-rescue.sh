@@ -48,6 +48,14 @@ WD="${INSTALL_DIR}/install/mt-billing-net-watchdog.sh"
 if [[ -f "$WD" ]]; then
   bash "$WD" install || true
 fi
+HEAL="${INSTALL_DIR}/install/mt-billing-boot-heal.sh"
+if [[ -f "$HEAL" ]]; then
+  bash "$HEAL" install || true
+  bash "$HEAL" once || true
+fi
+
+systemctl try-restart nginx mt-billing-api 2>/dev/null || true
+systemctl try-restart cloudflared-mt-billing 2>/dev/null || true
 
 echo
 echo "--- status ---"
@@ -59,4 +67,5 @@ echo "resolv.conf:"
 cat /etc/resolv.conf 2>/dev/null || true
 echo
 echo "If SSH still fails, connect by LAN IP (not hostname), e.g. ssh user@192.168.x.x"
+echo "Prefer: sudo reboot   (soft reboot) instead of pulling power."
 echo "DHCP renew: dhclient -v   OR   networkctl reconfigure eth0 enp1s0"

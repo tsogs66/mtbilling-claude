@@ -830,10 +830,17 @@ do_emergency_restore() {
   restore_default_route
   set_db_status stopped
   install_net_watchdog || true
+  # Boot heal so RPi/PC recover on reboot without hard power-off
+  if [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mt-billing-boot-heal.sh" ]]; then
+    bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mt-billing-boot-heal.sh" install >/dev/null 2>&1 || true
+  elif [[ -f "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" ]]; then
+    bash "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" install >/dev/null 2>&1 || true
+  fi
   # Quick verify
   if dns_works || gateway_reachable; then
     log_ok "Emergency restore complete — network should be usable again"
     log_ok "SSH tip: connect by LAN IP (not hostname) if DNS is still settling"
+    log_ok "If the box was wedged: sudo reboot  (prefer soft reboot over power-off)"
     return 0
   fi
   # Last resort public DNS
