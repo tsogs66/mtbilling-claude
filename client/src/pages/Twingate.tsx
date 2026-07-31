@@ -36,7 +36,8 @@ export default function Twingate() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [job?.log]);
 
-  const load = () => {
+  const load = (opts?: { live?: boolean }) => {
+    const wantLive = !!opts?.live;
     // Fast path: DB-only /twingate (never shells out — Proxmox UI must not hang).
     api
       .get('/twingate', { timeout: 5000 })
@@ -62,13 +63,16 @@ export default function Twingate() {
         }))
       );
 
-    // Background live probe (may be slow) — never blocks first paint
-    api
-      .get('/twingate/live', { timeout: 6000 })
-      .then((r) => setData(r.data))
-      .catch(() => {
-        /* keep fast snapshot */
-      });
+    // Live probe only on Refresh / after jobs — auto-load must never shell out
+    // (hung twingate status on Proxmox LXC freezes Node workers / feels like UI hang).
+    if (wantLive) {
+      api
+        .get('/twingate/live', { timeout: 6000 })
+        .then((r) => setData(r.data))
+        .catch(() => {
+          /* keep fast snapshot */
+        });
+    }
 
     api
       .get('/twingate/settings', { timeout: 5000 })
@@ -83,14 +87,25 @@ export default function Twingate() {
   };
 
   useEffect(() => {
-    load();
+    // Paint from DB immediately — no live probe on first mount (Proxmox hang fix).
+    setData((prev: any) =>
+      prev || {
+        configured: false,
+        online: false,
+        status: 'stopped',
+        network: '',
+        nodeName: 'panel-host',
+        message: null,
+      }
+    );
+    load({ live: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-refresh while the client is still authenticating with Twingate.
+  // Auto-refresh while authenticating — DB-only (never shell out on interval).
   useEffect(() => {
     if (!data?.connecting && data?.status !== 'authenticating') return;
-    const id = window.setInterval(() => load(), 5000);
+    const id = window.setInterval(() => load({ live: false }), 5000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.connecting, data?.status]);
@@ -104,7 +119,7 @@ export default function Twingate() {
       });
       setFlash({ type: 'success', msg: 'Twingate settings saved.' });
       setForm((f) => ({ ...f, serviceKey: '' }));
-      load();
+      load({ live: false });
     } catch (e: any) {
       setFlash({ type: 'error', msg: e?.response?.data?.error || 'Save failed' });
     } finally {
@@ -135,7 +150,7 @@ export default function Twingate() {
                   : 'Twingate apply finished. If status is authenticating, wait for the Connector / Resources in Twingate Admin.'
                 : `${action} failed (exit ${code}). If the panel lost internet, run Emergency restore (or SSH: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore).`,
           });
-          load();
+          load({ live: true });
           setBusy(false);
         }
       } catch {
@@ -200,7 +215,7 @@ export default function Twingate() {
           icon={Globe2}
         />
         <div className="flex gap-2 flex-wrap">
-          <button type="button" className="btn-secondary shrink-0" onClick={load}>
+          <button type="button" className="btn-secondary shrink-0" onClick={() => load({ live: true })}>
             <RefreshCw size={16} /> Refresh
           </button>
           <button

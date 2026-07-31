@@ -98,6 +98,26 @@ function runTwingateScript(
       resolve(result);
     };
 
+    const killTree = (child: ReturnType<typeof spawn>) => {
+      const pid = child.pid;
+      if (!pid) return;
+      try {
+        // Kill the whole process group (bash + twingate status grandchildren)
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        spawn('pkill', ['-9', '-f', 'twingate status'], { stdio: 'ignore' });
+      } catch {
+        /* ignore */
+      }
+    };
+
     const runNext = (i: number) => {
       if (settled) return;
       if (i >= tryCmds.length) {
@@ -110,15 +130,15 @@ function runTwingateScript(
         return;
       }
       const [cmd, cmdArgs] = tryCmds[i];
-      const child = spawn(cmd, cmdArgs, { env: process.env });
+      const child = spawn(cmd, cmdArgs, {
+        env: process.env,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       let stdout = '';
       let stderr = '';
       const timer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
+        killTree(child);
         // Don't fall through to next cmd on timeout for status — return fast
         finish({
           code: 124,

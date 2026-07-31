@@ -17,7 +17,6 @@ import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panel
 import {
   tryLiveResource,
   withRouter,
-  probeRouter,
   fetchWanRoutes,
   listRouterFiles,
   fetchRouterDashboardStats,
@@ -466,26 +465,15 @@ app.use('/api', requireLicenseOrAllowlist);
 app.use('/api', requireRoleWritable);
 
 // ---- Routers ----
-app.get('/api/routers', async (_req, res) => {
-  const rows = db.prepare('SELECT id, name, host, port, ssh_port, board, type, status, api_user, api_pass FROM routers').all() as any[];
-  const out = await Promise.all(
-    rows.map(async (r) => {
-      const probe = await probeRouter({
-        host: r.host,
-        port: r.port,
-        api_user: r.api_user,
-        api_pass: r.api_pass,
-      });
-      const status = probe.online ? 'online' : 'offline';
-      const board = probe.board || r.board;
-      if (status !== r.status || (probe.board && probe.board !== r.board)) {
-        db.prepare('UPDATE routers SET status = ?, board = ? WHERE id = ?').run(status, board, r.id);
-      }
-      const { api_user: _u, api_pass: _p, ...pub } = r;
-      return { ...pub, status, board };
-    })
-  );
-  res.json(out);
+// Fast path: DB only. Never probe MikroTik here — Layout's router dropdown
+// loads this on every authenticated page, and hung DNS/routes (e.g. after a
+// bad Twingate attempt on Proxmox) would freeze the entire panel for 15s+
+// per router. Live reachability: POST /api/routers/test or Dashboard widgets.
+app.get('/api/routers', (_req, res) => {
+  const rows = db
+    .prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers')
+    .all() as any[];
+  res.json(rows);
 });
 
 function getRouter(id: number) {

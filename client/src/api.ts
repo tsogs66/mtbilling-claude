@@ -1,10 +1,10 @@
 import axios from 'axios';
 import { getApiBase } from './config';
 
-export const api = axios.create({ baseURL: getApiBase() });
+export const api = axios.create({ baseURL: getApiBase(), timeout: 20000 });
 
 /** Unauthenticated axios client (login helpers, branding). */
-export const publicApi = axios.create({ baseURL: getApiBase() });
+export const publicApi = axios.create({ baseURL: getApiBase(), timeout: 20000 });
 
 const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 

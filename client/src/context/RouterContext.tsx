@@ -28,7 +28,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const refresh = () => {
     const token = localStorage.getItem('mt_token');
     if (!token) return;
-    api.get('/routers').then((r) => {
+    api.get('/routers', { timeout: 8000 }).then((r) => {
       const list: RouterDevice[] = r.data || [];
       setRouters(list);
       setCurrent((prev) => {
@@ -36,6 +36,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         const still = prev ? list.find((x) => x.id === prev.id) : undefined;
         return still || list[0];
       });
+    }).catch(() => {
+      /* keep last-known routers — never hang the shell */
     });
   };
 
