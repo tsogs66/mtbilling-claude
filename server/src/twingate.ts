@@ -78,7 +78,11 @@ function twingateScript(): string {
   return TG_SCRIPT;
 }
 
-function runTwingateScript(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function runTwingateScript(
+  args: string[],
+  opts?: { timeoutMs?: number }
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const timeoutMs = opts?.timeoutMs ?? (args[0] === 'status' ? 8000 : 120000);
   return new Promise((resolve) => {
     const script = twingateScript();
     const tryCmds = [
@@ -87,9 +91,17 @@ function runTwingateScript(args: string[]): Promise<{ code: number; stdout: stri
       ['bash', [script, ...args]],
     ] as [string, string[]][];
 
+    let settled = false;
+    const finish = (result: { code: number; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const runNext = (i: number) => {
+      if (settled) return;
       if (i >= tryCmds.length) {
-        resolve({
+        finish({
           code: 127,
           stdout: '',
           stderr:
@@ -101,14 +113,32 @@ function runTwingateScript(args: string[]): Promise<{ code: number; stdout: stri
       const child = spawn(cmd, cmdArgs, { env: process.env });
       let stdout = '';
       let stderr = '';
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+        // Don't fall through to next cmd on timeout for status — return fast
+        finish({
+          code: 124,
+          stdout: stripAnsi(stdout),
+          stderr: stripAnsi(stderr) || `Twingate helper timed out after ${timeoutMs}ms (${args.join(' ')})`,
+        });
+      }, timeoutMs);
       child.stdout?.on('data', (d) => {
         stdout += String(d);
       });
       child.stderr?.on('data', (d) => {
         stderr += String(d);
       });
-      child.on('error', () => runNext(i + 1));
+      child.on('error', () => {
+        clearTimeout(timer);
+        runNext(i + 1);
+      });
       child.on('close', (code) => {
+        clearTimeout(timer);
+        if (settled) return;
         if (
           i === 0 &&
           code !== 0 &&
@@ -117,7 +147,7 @@ function runTwingateScript(args: string[]): Promise<{ code: number; stdout: stri
           runNext(i + 1);
           return;
         }
-        resolve({ code: code ?? 1, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr) });
+        finish({ code: code ?? 1, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr) });
       });
     };
     runNext(0);
@@ -284,7 +314,8 @@ twingateRouter.put('/twingate/settings', (req, res) => {
 twingateRouter.get('/twingate', async (_req, res) => {
   const s = getTg();
   const configured = !!s.twingate_service_key;
-  const result = await runTwingateScript(['status']);
+  // Hard cap — hung `twingate status` used to freeze this page (and feel like the whole panel stalled).
+  const result = await runTwingateScript(['status'], { timeoutMs: 8000 });
   let live: {
     status: string;
     installed: string;
@@ -314,10 +345,14 @@ twingateRouter.get('/twingate', async (_req, res) => {
     } else {
       db.prepare('UPDATE app_settings SET twingate_status = ?, twingate_enabled = ? WHERE id = 1').run(live.status, enabled);
     }
+  } else if (result.stdout && /status=/.test(result.stdout)) {
+    // Partial output before timeout — still useful
+    live = { ...live, ...parseStatusOutput(result.stdout) };
   }
   const connecting = live.status === 'authenticating';
   const tunMissing = live.tun === 'no';
   const unsupportedArch = /^(armv7l|armhf|armv6l|armel)$/i.test(live.arch || '');
+  const timedOut = result.code === 124;
   res.json({
     configured,
     online: live.status === 'online',
@@ -331,23 +366,25 @@ twingateRouter.get('/twingate', async (_req, res) => {
     nodeName: s.twingate_node_name || 'panel-host',
     resourceCount: live.resources,
     dns: live.dns,
-    message: unsupportedArch
-      ? `Twingate Client does not support 32-bit ARM (${live.arch}). Use the 64-bit flash image mt-billing-rpi-arm64.img.xz on Raspberry Pi 3 (not armhf).`
-      : tunMissing
-        ? 'Missing /dev/net/tun. On RPi/Wyse/PC flash: sudo modprobe tun && echo tun | sudo tee /etc/modules-load.d/tun.conf — then retry. On Proxmox LXC: run scripts/proxmox-enable-twingate-tun.sh <CTID> on the host.'
-        : !configured
-          ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
-          : live.status === 'error'
-            ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
-            : connecting
-              ? 'Client is authenticating (Service Key auth is automatic — there is no Accept button). In Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs). Status refreshes automatically.'
-              : live.status === 'not-running'
-                ? 'Twingate client daemon is not running. On flash images try: sudo modprobe tun; sudo systemctl restart twingate; sudo journalctl -u twingate -n 50. Proxmox LXC needs host TUN passthrough.'
-                : live.status !== 'online'
-                  ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
-                  : live.resources === 0
-                    ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
-                    : null,
+    message: timedOut
+      ? 'Live Twingate status timed out (daemon may be hung). Showing last known state — run Emergency restore if the panel feels slow, then: sudo systemctl mask twingate && sudo pkill -9 twingated'
+      : unsupportedArch
+        ? `Twingate Client does not support 32-bit ARM (${live.arch}). Use the 64-bit flash image mt-billing-rpi-arm64.img.xz on Raspberry Pi 3 (not armhf).`
+        : tunMissing
+          ? 'Missing /dev/net/tun. On RPi/Wyse/PC flash: sudo modprobe tun && echo tun | sudo tee /etc/modules-load.d/tun.conf — then retry. On Proxmox LXC: run scripts/proxmox-enable-twingate-tun.sh <CTID> on the host.'
+          : !configured
+            ? 'Paste a Twingate Service Key (Admin Console → Services), then Install & connect. A Connector must be online on the remote LAN, and Resources must be granted to this Service Account.'
+            : live.status === 'error'
+              ? 'Twingate was rolled back because it broke host DNS/connectivity. Use Emergency restore if needed, fix Connector/Resources (avoid LAN CIDR overlap), then retry.'
+              : connecting
+                ? 'Client is authenticating (Service Key auth is automatic — there is no Accept button). In Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs). Status refreshes automatically.'
+                : live.status === 'not-running'
+                  ? 'Twingate client daemon is not running. On flash images try: sudo modprobe tun; sudo systemctl restart twingate; sudo journalctl -u twingate -n 50. Proxmox LXC needs host TUN passthrough.'
+                  : live.status !== 'online'
+                    ? 'Client is configured but not online. Use Install & connect, and confirm a Connector is online in Twingate Admin.'
+                    : live.resources === 0
+                      ? 'Connected, but no Resources are assigned yet. Add specific OLT/router IPs in Twingate Admin (avoid broad CIDRs that overlap this panel LAN) and grant this Service Account access.'
+                      : null,
     warning: result.code !== 0 ? result.stderr || undefined : undefined,
   });
 });

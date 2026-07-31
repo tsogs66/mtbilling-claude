@@ -539,7 +539,12 @@ tg_client_status() {
     echo "not-installed"
     return 0
   fi
-  twingate status 2>/dev/null || echo offline
+  # twingate status can hang like "Waiting for status…" — never block the panel
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=KILL 5s twingate status 2>/dev/null || echo offline
+  else
+    twingate status 2>/dev/null || echo offline
+  fi
 }
 
 dump_twingate_logs() {
@@ -808,10 +813,14 @@ do_status() {
   local resources=0
   if command -v twingate >/dev/null 2>&1; then
     installed=yes
-    st="$(twingate status 2>/dev/null || echo offline)"
+    st="$(tg_client_status)"
     net="$(network_from_key)"
     if [[ "$st" == "online" ]]; then
-      resources="$(twingate resources 2>/dev/null | grep -cve '^\s*$' || true)"
+      if command -v timeout >/dev/null 2>&1; then
+        resources="$(timeout --signal=KILL 5s twingate resources 2>/dev/null | grep -cve '^\s*$' || true)"
+      else
+        resources="$(twingate resources 2>/dev/null | grep -cve '^\s*$' || true)"
+      fi
       if [[ "$resources" -gt 0 ]]; then
         resources=$((resources > 1 ? resources - 1 : resources))
       fi
