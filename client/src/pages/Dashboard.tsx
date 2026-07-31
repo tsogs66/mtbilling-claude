@@ -270,11 +270,13 @@ function DashboardLicensed() {
   const [sales, setSales] = useState<Sales | null>(null);
   const [queues, setQueues] = useState<{ name: string; avgRate: number }[]>([]);
   const [statusCounts, setStatusCounts] = useState<any>(null);
+  const [finance, setFinance] = useState<any>(null);
   const [range, setRange] = useState('7d');
   const [queueSearch, setQueueSearch] = useState('');
 
   useEffect(() => {
     api.get('/dashboard/host').then((r) => setHost(r.data));
+    api.get('/finance/summary').then((r) => setFinance(r.data)).catch(() => setFinance(null));
   }, []);
 
   useEffect(() => {
@@ -318,7 +320,7 @@ function DashboardLicensed() {
   return (
     <Layout title="Dashboard">
       <SectionTitle icon={Activity}>Account Status{current ? ` — ${current.name}` : ''}</SectionTitle>
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
         <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-600" icon={CircleDot} accent="from-emerald-500/15 to-transparent" delay={0} />
         <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-600" icon={WifiOff} accent="from-amber-500/15 to-transparent" delay={50} />
         <StatTile label="Active" value={statusCounts?.active ?? '—'} dot="bg-sky-500" tone="text-sky-600" icon={Users} accent="from-sky-500/15 to-transparent" delay={100} />
@@ -326,6 +328,15 @@ function DashboardLicensed() {
         <StatTile label="Non-payment" value={statusCounts?.nonPayment ?? '—'} dot="bg-orange-500" tone="text-orange-600" icon={Wallet} accent="from-orange-500/15 to-transparent" delay={200} />
         <StatTile label="Inactive" value={statusCounts?.inactive ?? '—'} dot="bg-slate-400" tone="text-slate-500" icon={CircleDot} accent="from-slate-500/10 to-transparent" delay={250} />
       </div>
+
+      {finance && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <StatTile label="Projected MRR" value={peso(finance.mrr)} icon={TrendingUp} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
+          <StatTile label="Income MTD" value={peso(finance.incomeThisMonth)} icon={Wallet} tone="text-emerald-600" delay={40} />
+          <StatTile label="Expenses MTD" value={peso(finance.expensesThisMonth)} icon={Wallet} tone="text-rose-600" delay={80} />
+          <StatTile label="Open AR" value={peso(finance.accountsReceivable)} icon={AlertTriangle} tone="text-amber-600" delay={120} />
+        </div>
+      )}
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
 

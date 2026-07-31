@@ -1,23 +1,35 @@
 import { useEffect, useState } from 'react';
-import { Ticket, Trash2, Plus, Users, Wifi } from 'lucide-react';
+import { Ticket, Trash2, Plus, Users, Wifi, Ban } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, DataTable, IconAction, StatTile, StatusBadge } from '../components/ui';
 import { api, peso } from '../api';
+import { useRouterDevice } from '../context/RouterContext';
 
 const PLAN_NAMES = ['1 Hour', '1 Day', '1 Week', '30 Days'];
 
 export default function Hotspot() {
-  const [data, setData] = useState<{ plans: any[]; active: any[] }>({ plans: [], active: [] });
+  const { current } = useRouterDevice();
+  const [data, setData] = useState<{ plans: any[]; active: any[]; live?: boolean; routerName?: string | null }>({
+    plans: [],
+    active: [],
+  });
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [plan, setPlan] = useState('1 Day');
   const [count, setCount] = useState(10);
   const [busy, setBusy] = useState(false);
 
   const loadVouchers = () => api.get('/hotspot/vouchers').then((r) => setVouchers(r.data));
+  const loadHotspot = () => {
+    const q = current?.id ? `?routerId=${current.id}` : '';
+    api.get(`/hotspot${q}`).then((r) => setData(r.data));
+  };
+
   useEffect(() => {
-    api.get('/hotspot').then((r) => setData(r.data));
+    loadHotspot();
     loadVouchers();
-  }, []);
+    const t = setInterval(loadHotspot, 15000);
+    return () => clearInterval(t);
+  }, [current?.id]);
 
   const generate = async () => {
     setBusy(true);
@@ -32,17 +44,28 @@ export default function Hotspot() {
     await api.delete(`/hotspot/vouchers/${id}`);
     loadVouchers();
   };
+  const kick = async (id: string) => {
+    if (!current?.id || !id) return;
+    await api.post(`/hotspot/active/${encodeURIComponent(id)}/kick`, { routerId: current.id });
+    loadHotspot();
+  };
 
   const unused = vouchers.filter((v) => v.status === 'unused').length;
   const used = vouchers.length - unused;
 
   const activeRows = data.active.map((a) => ({
-    key: a.voucher,
+    key: a.id || a.voucher,
     cells: [
       <span key="voucher" className="font-medium text-slate-800">{a.voucher}</span>,
       a.plan,
       a.address,
+      a.mac || '—',
       a.uptime,
+      data.live && a.id ? (
+        <IconAction key="kick" icon={Ban} title="Kick session" tone="rose" onClick={() => kick(a.id)} />
+      ) : (
+        '—'
+      ),
     ],
   }));
 
@@ -73,16 +96,26 @@ export default function Hotspot() {
           </div>
         </Card>
 
-        <Card title="Active Hotspot Users" icon={Wifi}>
+        <Card
+          title="Active Hotspot Users"
+          icon={Wifi}
+          right={
+            <span className={`badge ${data.live ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+              {data.live ? `● live${data.routerName ? ` · ${data.routerName}` : ''}` : 'offline / no router'}
+            </span>
+          }
+        >
           <DataTable
             columns={[
-              { key: 'voucher', label: 'Voucher' },
-              { key: 'plan', label: 'Plan' },
+              { key: 'voucher', label: 'User' },
+              { key: 'plan', label: 'Server / login' },
               { key: 'address', label: 'Address' },
+              { key: 'mac', label: 'MAC' },
               { key: 'uptime', label: 'Uptime' },
+              { key: 'actions', label: '', align: 'right' },
             ]}
             rows={activeRows}
-            emptyMessage="No active hotspot users."
+            emptyMessage={data.live ? 'No active hotspot sessions on this router.' : 'Select a live router to load Hotspot sessions from MikroTik.'}
           />
         </Card>
       </div>
@@ -102,31 +135,9 @@ export default function Hotspot() {
           }
         >
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
-            <StatTile
-              label="Total vouchers"
-              value={vouchers.length}
-              icon={Ticket}
-              tone="text-slate-800"
-              accent="from-brand-500/10 to-transparent"
-              delay={0}
-            />
-            <StatTile
-              label="Unused"
-              value={unused}
-              icon={Ticket}
-              tone="text-emerald-600"
-              dot="bg-emerald-500"
-              accent="from-emerald-500/15 to-transparent"
-              delay={50}
-            />
-            <StatTile
-              label="Used"
-              value={used}
-              icon={Users}
-              tone="text-slate-500"
-              accent="from-slate-500/10 to-transparent"
-              delay={100}
-            />
+            <StatTile label="Total vouchers" value={vouchers.length} icon={Ticket} tone="text-slate-800" accent="from-brand-500/10 to-transparent" delay={0} />
+            <StatTile label="Unused" value={unused} icon={Ticket} tone="text-emerald-600" dot="bg-emerald-500" accent="from-emerald-500/15 to-transparent" delay={50} />
+            <StatTile label="Used" value={used} icon={Users} tone="text-slate-500" accent="from-slate-500/10 to-transparent" delay={100} />
           </div>
           <div className="max-h-96 overflow-y-auto">
             <DataTable

@@ -49,6 +49,8 @@ import {
   setDhcpLeaseBlocked,
   fetchPppActiveTraffic,
   fetchLeaseTrafficByIp,
+  fetchHotspotActive,
+  fetchHotspotUsers,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, setActiveRouterId, type UptimeScope } from './uptime.js';
@@ -115,6 +117,12 @@ import { aiRouter } from './ai.js';
 import { terminalRouter, initTerminalWs } from './terminal.js';
 import { extraRouter, initExtra } from './extra.js';
 import {
+  initIspOps,
+  ispOpsRouter,
+  publicPortalRouter,
+  assertNapHasCapacity,
+} from './ispOps.js';
+import {
   getPublicSettings as getNotifySettings,
   updateSettings as updateNotifySettings,
   sendManual,
@@ -135,6 +143,7 @@ initSchema();
 migrate();
 seed();
 initExtra();
+initIspOps();
 
 /**
  * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
@@ -397,6 +406,9 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 
 /** Public liveness probe — Updater UI polls this without an Authorization header. */
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+/** Public subscriber self-service portal (no JWT). */
+app.use('/api', publicPortalRouter);
 
 app.use('/api', requireAuth);
 
@@ -1203,6 +1215,10 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
   if (!profile || isSystemPppProfileName(profile)) {
     return { ok: false, status: 400, error: 'Select a billing plan (not default / non-payments)' };
   }
+  if (nap_id) {
+    const capErr = assertNapHasCapacity(Number(nap_id));
+    if (capErr) return { ok: false, status: 400, error: capErr };
+  }
 
   const routerId = Number(b.router_id || b.routerId || 0);
   if (!routerId) {
@@ -1345,6 +1361,12 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     if (prof) price = prof.price;
   }
 
+  const nextNapId = b.nap_id != null ? (b.nap_id || null) : existing.nap_id;
+  if (nextNapId != null && Number(nextNapId) !== Number(existing.nap_id)) {
+    const capErr = assertNapHasCapacity(Number(nextNapId), id);
+    if (capErr) return res.status(400).json({ error: capErr });
+  }
+
   db.prepare(
     `UPDATE pppoe_users SET
        customer_name = @customer_name, password = @password, profile = @profile, status = @status,
@@ -1363,7 +1385,7 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     expiration_profile: b.expiration_profile ?? existing.expiration_profile,
     contact: b.contact ?? existing.contact,
     email: b.email ?? existing.email,
-    nap_id: b.nap_id != null ? (b.nap_id || null) : existing.nap_id,
+    nap_id: nextNapId,
     plc_port: b.plc_port ?? existing.plc_port,
     address: b.address ?? existing.address,
     lat: b.lat != null && b.lat !== '' ? Number(b.lat) : b.lat === '' ? null : existing.lat,
@@ -3857,21 +3879,51 @@ app.put('/api/company', (req, res) => {
   res.json(db.prepare('SELECT * FROM company WHERE id = 1').get());
 });
 
-// ---- Hotspot (sample vouchers) ----
-app.get('/api/hotspot', (_req, res) => {
+// ---- Hotspot (plans + live RouterOS sessions when reachable) ----
+app.get('/api/hotspot', async (req, res) => {
   const plans = [
     { name: '1 Hour', price: 5, validity: '1h', speed: '5M/5M' },
     { name: '1 Day', price: 20, validity: '1d', speed: '10M/10M' },
     { name: '1 Week', price: 100, validity: '7d', speed: '10M/10M' },
     { name: '30 Days', price: 350, validity: '30d', speed: '15M/15M' },
   ];
-  const active = Array.from({ length: 8 }, (_, i) => ({
-    voucher: `HS-${(1000 + i * 137).toString().padStart(4, '0')}`,
-    plan: plans[i % plans.length].name,
-    address: `10.5.50.${i + 2}`,
-    uptime: `${(i % 3) + 1}h${(i * 11) % 60}m`,
-  }));
-  res.json({ plans, active });
+  const routerId = parseRouterId(req.query.routerId);
+  const router = routerId ? getRouter(routerId) : null;
+  let active: any[] = [];
+  let users: any[] = [];
+  let live = false;
+  if (router?.host && router?.api_user) {
+    try {
+      const [act, usr] = await Promise.all([
+        withTimeout(fetchHotspotActive(router), LIVE_READ_BUDGET_MS, null),
+        withTimeout(fetchHotspotUsers(router), LIVE_READ_BUDGET_MS, null),
+      ]);
+      if (act) {
+        live = true;
+        active = act.map((a) => ({
+          id: a.id,
+          voucher: a.user,
+          plan: a.server || a.loginBy || '—',
+          address: a.address,
+          mac: a.macAddress,
+          uptime: a.uptime,
+          bytesIn: a.bytesIn,
+          bytesOut: a.bytesOut,
+        }));
+      }
+      if (usr) users = usr;
+    } catch {
+      /* fall through — empty live lists */
+    }
+  }
+  res.json({
+    plans,
+    active,
+    users,
+    live,
+    routerId: router?.id ?? null,
+    routerName: router?.name ?? null,
+  });
 });
 
 // ---- Uptime monitoring (global / Asia regional / PH local) ----
@@ -4198,6 +4250,7 @@ app.use('/api', settingsRouter);
 app.use('/api', aiRouter);
 app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
+app.use('/api', ispOpsRouter);
 
 const server = http.createServer(app);
 initTerminalWs(server);

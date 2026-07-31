@@ -2079,3 +2079,69 @@ export async function scheduleExpiryOnRouter(
     ]);
   }, { timeoutSec: 8 });
 }
+
+/** Live Hotspot active sessions from RouterOS. */
+export interface HotspotActiveRow {
+  id: string;
+  user: string;
+  address: string;
+  macAddress: string;
+  uptime: string;
+  bytesIn: number;
+  bytesOut: number;
+  loginBy: string;
+  server: string;
+}
+
+export interface HotspotUserRow {
+  id: string;
+  name: string;
+  password: string;
+  profile: string;
+  limitUptime: string;
+  disabled: boolean;
+  comment: string;
+}
+
+function parseRosBytes(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number(String(raw).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+export async function fetchHotspotActive(conn: RouterConn): Promise<HotspotActiveRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ip/hotspot/active/print')) as Record<string, string>[];
+    return (rows || []).map((r) => ({
+      id: r['.id'] || '',
+      user: r.user || r.name || '',
+      address: r.address || '',
+      macAddress: (r['mac-address'] || '').toUpperCase(),
+      uptime: r.uptime || '',
+      bytesIn: parseRosBytes(r['bytes-in']),
+      bytesOut: parseRosBytes(r['bytes-out']),
+      loginBy: r['login-by'] || '',
+      server: r.server || '',
+    }));
+  });
+}
+
+export async function fetchHotspotUsers(conn: RouterConn): Promise<HotspotUserRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ip/hotspot/user/print')) as Record<string, string>[];
+    return (rows || []).map((r) => ({
+      id: r['.id'] || '',
+      name: r.name || '',
+      password: r.password || '',
+      profile: r.profile || '',
+      limitUptime: r['limit-uptime'] || '',
+      disabled: rosBool(r.disabled),
+      comment: r.comment || '',
+    }));
+  });
+}
+
+/** Remove a Hotspot active session (kick). */
+export async function removeHotspotActive(conn: RouterConn, id: string): Promise<void> {
+  await withRouter(conn, (api) => api.write('/ip/hotspot/active/remove', [`=.id=${id}`]));
+}
