@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Wallet, FileText, LifeBuoy, LogOut, CreditCard, ExternalLink, Copy, Check,
-  Phone, Building2, ChevronRight, Sparkles,
+  Phone, Building2, ChevronRight, Sparkles, Download, Share, X,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
 import Logo from '../components/Logo';
 import { PRODUCT_TITLE } from '../branding';
+import { usePortalInstall } from '../lib/portalInstall';
 
 const TOKEN_KEY = 'mt_portal_token';
 
@@ -79,6 +80,7 @@ export default function ClientPortal() {
   const [payBusy, setPayBusy] = useState(false);
   const [payMsg, setPayMsg] = useState('');
   const [copied, setCopied] = useState('');
+  const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
 
   const loadMe = async () => {
     if (!localStorage.getItem(TOKEN_KEY)) return;
@@ -293,7 +295,20 @@ export default function ClientPortal() {
           >
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
+          {showInstallButton && (
+            <button
+              type="button"
+              onClick={() => void install()}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-semibold py-3 transition"
+            >
+              <Download size={18} /> Install app
+            </button>
+          )}
+          {installed && (
+            <p className="text-xs text-emerald-300/90 text-center">Installed on this device</p>
+          )}
           <p className="text-xs text-slate-500 text-center leading-relaxed">{helpText}</p>
+          {iosHint && <IosInstallHint onClose={dismissIosHint} />}
         </form>
       </div>
     );
@@ -356,13 +371,44 @@ export default function ClientPortal() {
                 </div>
               </div>
             </div>
-            <button
-              onClick={logout}
-              className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 hover:bg-white/5 transition"
-            >
-              <LogOut size={16} /> Sign out
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {showInstallButton && (
+                <button
+                  type="button"
+                  onClick={() => void install()}
+                  className="inline-flex items-center gap-1.5 text-sm text-orange-200 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 bg-orange-500/15 hover:bg-orange-500/25 ring-1 ring-orange-400/30 transition"
+                  title="Install Subscriber Portal on this device"
+                >
+                  <Download size={16} /> Install
+                </button>
+              )}
+              <button
+                onClick={logout}
+                className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 hover:bg-white/5 transition"
+              >
+                <LogOut size={16} /> Sign out
+              </button>
+            </div>
           </div>
+
+          {showInstallButton && (
+            <button
+              type="button"
+              onClick={() => void install()}
+              className="relative mt-4 w-full flex items-center gap-3 rounded-2xl border border-orange-400/30 bg-orange-500/10 hover:bg-orange-500/15 px-4 py-3 text-left transition"
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500 text-slate-950 shrink-0">
+                <Download size={18} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold text-white text-sm">Install Subscriber Portal</span>
+                <span className="block text-xs text-slate-300 mt-0.5">
+                  Add to your home screen for faster access — works offline for the login page.
+                </span>
+              </span>
+              <ChevronRight size={18} className="text-orange-200 shrink-0" />
+            </button>
+          )}
 
           {s.welcomeText && (
             <p className="relative mt-5 text-sm text-slate-300/95 leading-relaxed border-l-2 border-orange-400/50 pl-3">
@@ -649,6 +695,58 @@ export default function ClientPortal() {
 
         <p className="text-center text-[11px] text-slate-400 pt-2">{PRODUCT_TITLE}</p>
       </main>
+      {iosHint && <IosInstallHint onClose={dismissIosHint} />}
+    </div>
+  );
+}
+
+function IosInstallHint({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <button type="button" className="absolute inset-0 bg-slate-950/60" onClick={onClose} aria-label="Close" />
+      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white p-5 sm:p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h3
+              className="text-lg font-bold text-slate-900"
+              style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+            >
+              Install on iPhone
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">Add Subscriber Portal to your Home Screen.</p>
+          </div>
+          <button type="button" className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <ol className="space-y-3 text-sm text-slate-700">
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 font-semibold text-xs shrink-0">1</span>
+            <span>
+              Tap the <Share size={14} className="inline -mt-0.5 text-sky-600" /> <b>Share</b> button in Safari.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 font-semibold text-xs shrink-0">2</span>
+            <span>
+              Scroll and tap <b>Add to Home Screen</b>.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 font-semibold text-xs shrink-0">3</span>
+            <span>
+              Tap <b>Add</b> — open the Portal icon anytime without the browser chrome.
+            </span>
+          </li>
+        </ol>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-5 w-full rounded-xl bg-slate-900 text-white font-semibold py-2.5 text-sm"
+        >
+          Got it
+        </button>
+      </div>
     </div>
   );
 }
