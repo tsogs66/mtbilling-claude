@@ -7,35 +7,69 @@ import ReceiptPrintModal from '../components/ReceiptPrintModal';
 import { api, peso } from '../api';
 import { openReceiptForPrint, type PaymentReceipt } from '../lib/receiptPrint';
 import { openSalesReportPrint } from '../lib/invoicePrint';
+import { useCompany } from '../context/CompanyContext';
 
 const GROUPS = [
   { key: 'month', label: 'Monthly' },
   { key: 'year', label: 'Yearly' },
 ];
 
+function defaultFrom() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 2);
+  return d.toISOString().slice(0, 10);
+}
+function defaultTo() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function SalesReport() {
+  const { company } = useCompany();
   const [range, setRange] = useState('month');
+  const [from, setFrom] = useState(defaultFrom);
+  const [to, setTo] = useState(defaultTo);
+  const [useCustom, setUseCustom] = useState(false);
   const [sales, setSales] = useState<any>(null);
   const [tx, setTx] = useState<any[]>([]);
+  const [periodTx, setPeriodTx] = useState<any[] | null>(null);
+  const [periodLabel, setPeriodLabel] = useState('');
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [clearMonth, setClearMonth] = useState('');
   const [busy, setBusy] = useState(false);
   const [reprintId, setReprintId] = useState<number | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<PaymentReceipt | null>(null);
 
-  const loadSales = () => api.get(`/sales?group=${range}`).then((r) => setSales(r.data));
-  const loadTx = () => api.get('/sales/transactions').then((r) => setTx(r.data));
+  const loadSales = () => {
+    const params = useCustom
+      ? { from, to, group: range }
+      : { group: range };
+    return api.get('/sales', { params }).then((r) => setSales(r.data));
+  };
+  const loadTx = () => {
+    const params = useCustom ? { from, to } : {};
+    return api.get('/sales/transactions', { params }).then((r) => setTx(r.data));
+  };
 
   useEffect(() => {
     loadSales();
-  }, [range]);
-  useEffect(() => {
     loadTx();
-  }, []);
+    setPeriodTx(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range, useCustom, from, to]);
 
   const refresh = () => {
     loadSales();
     loadTx();
+  };
+
+  const openPeriod = async (label: string) => {
+    setPeriodLabel(label);
+    try {
+      const r = await api.get('/sales/transactions', { params: { period: label } });
+      setPeriodTx(r.data || []);
+    } catch (e: any) {
+      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Could not load period transactions' });
+    }
   };
 
   const clearAll = async () => {
@@ -89,6 +123,16 @@ export default function SalesReport() {
     }
   };
 
+  const companyPrint = company
+    ? { name: company.name, address: company.address, phone: company.phone, email: company.email, logo: company.logo }
+    : null;
+
+  const rangeLabel = useCustom
+    ? `${from} → ${to}`
+    : range === 'year'
+      ? 'Yearly'
+      : 'Monthly';
+
   return (
     <Layout title="Sales Report">
       {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
@@ -96,18 +140,56 @@ export default function SalesReport() {
         <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <TabPills tabs={GROUPS} active={range} onChange={setRange} />
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
+        <div className="flex flex-wrap items-end gap-3">
+          <TabPills tabs={GROUPS} active={range} onChange={(k) => { setRange(k); setUseCustom(false); }} />
+          <label className="text-sm">
+            <span className="text-xs text-slate-500">From</span>
+            <input
+              type="date"
+              className="input mt-1"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                setUseCustom(true);
+              }}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="text-xs text-slate-500">To</span>
+            <input
+              type="date"
+              className="input mt-1"
+              value={to}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setUseCustom(true);
+              }}
+            />
+          </label>
+          {useCustom && (
+            <button type="button" className="btn-secondary text-sm" onClick={() => setUseCustom(false)}>
+              Clear range
+            </button>
+          )}
+        </div>
         <button
           type="button"
           className="btn-secondary"
           onClick={() =>
             openSalesReportPrint({
               title: 'Sales Report',
-              rangeLabel: range === 'year' ? 'Yearly' : 'Monthly',
+              company: companyPrint,
+              rangeLabel,
               total: Number(sales?.total || 0),
               rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),
               meta: `${sales?.transactions ?? 0} transactions · avg/day ${peso(sales?.avgPerDay ?? 0)} · best ${peso(sales?.best ?? 0)}`,
+              transactions: (periodTx || tx).slice(0, 200).map((t: any) => ({
+                date: t.date,
+                customer: t.customer,
+                amount: t.amount,
+                type: t.type,
+              })),
             })
           }
           disabled={!sales}
@@ -120,10 +202,10 @@ export default function SalesReport() {
         <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
         <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
         <StatTile label="Average / day" value={peso(sales?.avgPerDay ?? 0)} icon={TrendingUp} accent="from-sky-500/15 to-transparent" delay={100} />
-        <StatTile label="Best day" value={peso(sales?.best ?? 0)} icon={CalendarDays} accent="from-emerald-500/15 to-transparent" tone="text-emerald-600" delay={150} />
+        <StatTile label="Best period" value={peso(sales?.best ?? 0)} icon={CalendarDays} accent="from-emerald-500/15 to-transparent" tone="text-emerald-600" delay={150} />
       </div>
 
-      <Card title="Revenue" interactive>
+      <Card title="Revenue" interactive right={<span className="text-xs text-slate-400">Click a bar to list transactions</span>}>
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={sales?.series ?? []} margin={{ top: 28, right: 12, left: 8, bottom: 4 }}>
@@ -141,7 +223,17 @@ export default function SalesReport() {
                 width={56}
               />
               <Tooltip formatter={(v: number) => peso(v)} labelStyle={{ color: '#334155' }} contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-              <Bar dataKey="value" fill="url(#salesBar)" radius={[6, 6, 0, 0]} name="Amount">
+              <Bar
+                dataKey="value"
+                fill="url(#salesBar)"
+                radius={[6, 6, 0, 0]}
+                name="Amount"
+                cursor="pointer"
+                onClick={(data: any) => {
+                  const label = data?.payload?.label || data?.label;
+                  if (label) void openPeriod(String(label));
+                }}
+              >
                 <LabelList
                   dataKey="value"
                   position="top"
@@ -154,66 +246,119 @@ export default function SalesReport() {
         </div>
       </Card>
 
-      <div className="mt-5 space-y-5">
-        <Card title="Clear reports" className="max-w-2xl">
-          <p className="text-sm text-slate-500 mb-4">Remove payment transactions from the sales database. Charts and totals update immediately.</p>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="text-xs text-slate-500 block mb-1">Month (YYYY-MM)</label>
-              <input
-                className="input w-40 font-mono"
-                placeholder="2026-07"
-                value={clearMonth}
-                onChange={(e) => setClearMonth(e.target.value)}
-              />
+      {periodTx && (
+        <Card
+          className="mt-5"
+          title={`Transactions · ${periodLabel}`}
+          right={
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                onClick={() =>
+                  openSalesReportPrint({
+                    title: `Sales · ${periodLabel}`,
+                    company: companyPrint,
+                    rangeLabel: periodLabel,
+                    total: periodTx.reduce((s, t) => s + Number(t.amount || 0), 0),
+                    rows: [{ label: periodLabel, value: periodTx.reduce((s, t) => s + Number(t.amount || 0), 0) }],
+                    transactions: periodTx.map((t) => ({
+                      date: t.date,
+                      customer: t.customer,
+                      amount: t.amount,
+                      type: t.type,
+                    })),
+                  })
+                }
+              >
+                <Printer size={14} /> Print period
+              </button>
+              <button type="button" className="btn-secondary text-sm" onClick={() => setPeriodTx(null)}>
+                Close
+              </button>
             </div>
-            <button type="button" className="btn-secondary" onClick={clearMonthReports} disabled={busy}>
-              Clear selected month
-            </button>
-            <button type="button" className="inline-flex items-center gap-2 text-sm text-rose-600 border border-rose-200 rounded-lg px-4 py-2 hover:bg-rose-50" onClick={clearAll} disabled={busy}>
-              <Trash2 size={15} /> Clear all reports
-            </button>
-          </div>
-        </Card>
-
-        <Card title="Recent Transactions">
+          }
+        >
           <DataTable
             columns={[
               { key: 'date', label: 'Date' },
               { key: 'customer', label: 'Customer' },
               { key: 'type', label: 'Type' },
               { key: 'amount', label: 'Amount', align: 'right' },
-              { key: 'actions', label: '', align: 'right', sortable: false },
+              { key: 'actions', label: '', align: 'right' },
             ]}
-            rows={tx.slice(0, 50).map((t) => ({
+            rows={periodTx.map((t) => ({
               key: t.id,
-              sortValues: {
-                date: t.date,
-                customer: t.customer,
-                type: t.type,
-                amount: t.amount,
-              },
               cells: [
-                <span className="text-slate-500">{new Date(t.date).toLocaleString()}</span>,
-                <span className="text-slate-700">{t.customer}</span>,
-                <span className="text-slate-500 capitalize">{t.type}</span>,
-                <span className="font-medium text-emerald-600">{peso(t.amount)}</span>,
+                <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
+                <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
+                <span className="text-slate-600">{t.type || '—'}</span>,
+                <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 border border-brand-200 rounded-lg px-2.5 py-1.5 hover:bg-brand-50 disabled:opacity-50"
-                  onClick={() => reprintReceipt(t.id)}
+                  className="text-brand-600 text-xs inline-flex items-center gap-1"
                   disabled={reprintId === t.id}
-                  title="Reprint receipt"
+                  onClick={() => reprintReceipt(t.id)}
                 >
-                  {reprintId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                  Reprint
+                  {reprintId === t.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+                  Receipt
                 </button>,
               ],
             }))}
-            emptyMessage="No transactions yet."
+            emptyMessage="No transactions in this period."
           />
         </Card>
-      </div>
+      )}
+
+      <Card
+        className="mt-5"
+        title="Recent transactions"
+        right={
+          <div className="flex flex-wrap gap-2 items-center">
+            <input
+              className="input w-36 text-sm"
+              placeholder="YYYY-MM"
+              value={clearMonth}
+              onChange={(e) => setClearMonth(e.target.value)}
+            />
+            <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={clearMonthReports}>
+              Clear month
+            </button>
+            <button type="button" className="btn-secondary text-sm text-rose-600" disabled={busy} onClick={clearAll}>
+              <Trash2 size={14} /> Clear all
+            </button>
+          </div>
+        }
+      >
+        <DataTable
+          columns={[
+            { key: 'date', label: 'Date' },
+            { key: 'customer', label: 'Customer' },
+            { key: 'type', label: 'Type' },
+            { key: 'amount', label: 'Amount', align: 'right' },
+            { key: 'actions', label: '', align: 'right' },
+          ]}
+          rows={tx.map((t) => ({
+            key: t.id,
+            cells: [
+              <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
+              <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
+              <span className="text-slate-600">{t.type || '—'}</span>,
+              <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
+              <button
+                type="button"
+                className="text-brand-600 text-xs inline-flex items-center gap-1"
+                disabled={reprintId === t.id}
+                onClick={() => reprintReceipt(t.id)}
+              >
+                {reprintId === t.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+                Receipt
+              </button>,
+            ],
+          }))}
+          emptyMessage="No transactions yet."
+        />
+      </Card>
     </Layout>
   );
 }

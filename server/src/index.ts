@@ -77,6 +77,7 @@ import {
   recordPppoePayment,
   getTransactionReceipt,
   createPaymentLink,
+  resendPaymentLink,
   submitPaymentProof,
   rejectPaymentProof,
   getPaymentLinkPublic,
@@ -896,27 +897,64 @@ function isoWeek(d: Date): string {
 
 app.get('/api/sales', (req, res) => {
   const now = new Date();
-  // Support both legacy ranges (7d/30d/6m/1y) and group buckets (week/month/year).
+  // Support from/to date range, legacy ranges (7d/30d/6m/1y), and group buckets (week/month/year).
   const group = req.query.group ? String(req.query.group) : null;
+  const fromQ = req.query.from ? String(req.query.from).slice(0, 10) : '';
+  const toQ = req.query.to ? String(req.query.to).slice(0, 10) : '';
+  const hasCustomRange = /^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ);
 
-  if (group === 'week' || group === 'month' || group === 'year') {
-    const rows = db.prepare('SELECT amount, created_at FROM transactions ORDER BY created_at').all() as { amount: number; created_at: string }[];
+  if (hasCustomRange || group === 'week' || group === 'month' || group === 'year') {
+    let rows: { amount: number; created_at: string }[];
+    if (hasCustomRange) {
+      const fromIso = `${fromQ}T00:00:00.000Z`;
+      const toIso = `${toQ}T23:59:59.999Z`;
+      rows = db
+        .prepare(
+          'SELECT amount, created_at FROM transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at'
+        )
+        .all(fromIso, toIso) as { amount: number; created_at: string }[];
+    } else {
+      rows = db.prepare('SELECT amount, created_at FROM transactions ORDER BY created_at').all() as {
+        amount: number;
+        created_at: string;
+      }[];
+    }
+    const g = group === 'week' || group === 'year' ? group : 'month';
     const buckets = new Map<string, number>();
     const keyOf = (iso: string) => {
       const d = new Date(iso);
-      if (group === 'week') return isoWeek(d);
-      if (group === 'month') return yearMonthFromIso(iso);
+      if (g === 'week') return isoWeek(d);
+      if (g === 'month') return yearMonthFromIso(iso);
       return iso.slice(0, 4);
     };
     for (const r of rows) buckets.set(keyOf(r.created_at), (buckets.get(keyOf(r.created_at)) || 0) + r.amount);
-    const series: { label: string; value: number }[] = [];
-    if (group === 'week') {
+
+    let series: { label: string; value: number }[] = [];
+    if (hasCustomRange) {
+      series = [...buckets.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([label, value]) => ({ label, value }));
+      // Fill day buckets when range is short
+      const daySpan = Math.max(0, Math.round((Date.parse(toQ) - Date.parse(fromQ)) / 86400000));
+      if (daySpan <= 45 && g === 'month') {
+        const dayBuckets = new Map<string, number>();
+        for (const r of rows) {
+          const k = r.created_at.slice(0, 10);
+          dayBuckets.set(k, (dayBuckets.get(k) || 0) + r.amount);
+        }
+        series = [];
+        for (let t = Date.parse(fromQ); t <= Date.parse(toQ); t += 86400000) {
+          const key = new Date(t).toISOString().slice(0, 10);
+          series.push({ label: key, value: dayBuckets.get(key) || 0 });
+        }
+      }
+    } else if (g === 'week') {
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getTime() - i * 7 * 86400000);
         const key = isoWeek(d);
         series.push({ label: key, value: buckets.get(key) || 0 });
       }
-    } else if (group === 'month') {
+    } else if (g === 'month') {
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const key = yearMonthKey(d);
@@ -937,7 +975,9 @@ app.get('/api/sales', (req, res) => {
       avgPerDay: nonZero ? windowTotal / nonZero : 0,
       best: Math.max(0, ...series.map((s) => s.value)),
       today: 0,
-      group,
+      group: g,
+      from: hasCustomRange ? fromQ : null,
+      to: hasCustomRange ? toQ : null,
     });
     return;
   }
@@ -984,10 +1024,37 @@ app.get('/api/sales', (req, res) => {
   res.json({ series, total, transactions, avgPerDay, best, today });
 });
 
-app.get('/api/sales/transactions', (_req, res) => {
-  res.json(
-    db.prepare('SELECT id, customer_name AS customer, amount, type, created_at AS date FROM transactions ORDER BY created_at DESC LIMIT 200').all()
-  );
+app.get('/api/sales/transactions', (req, res) => {
+  const period = req.query.period ? String(req.query.period) : '';
+  const fromQ = req.query.from ? String(req.query.from).slice(0, 10) : '';
+  const toQ = req.query.to ? String(req.query.to).slice(0, 10) : '';
+  let sql =
+    'SELECT id, customer_name AS customer, amount, type, created_at AS date FROM transactions WHERE 1=1';
+  const params: string[] = [];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromQ) && /^\d{4}-\d{2}-\d{2}$/.test(toQ)) {
+    sql += ' AND created_at >= ? AND created_at <= ?';
+    params.push(`${fromQ}T00:00:00.000Z`, `${toQ}T23:59:59.999Z`);
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(period)) {
+    sql += ' AND substr(created_at,1,10) = ?';
+    params.push(period);
+  } else if (/^\d{4}-\d{2}$/.test(period)) {
+    sql += ' AND substr(created_at,1,7) = ?';
+    params.push(period);
+  } else if (/^\d{4}-W\d{2}$/.test(period)) {
+    // Filter in JS for ISO week labels
+    const all = db
+      .prepare(
+        'SELECT id, customer_name AS customer, amount, type, created_at AS date FROM transactions ORDER BY created_at DESC LIMIT 5000'
+      )
+      .all() as any[];
+    const filtered = all.filter((t) => isoWeek(new Date(t.date)) === period);
+    return res.json(filtered.slice(0, 500));
+  } else if (/^\d{4}$/.test(period)) {
+    sql += ' AND substr(created_at,1,4) = ?';
+    params.push(period);
+  }
+  sql += ' ORDER BY created_at DESC LIMIT 500';
+  res.json(db.prepare(sql).all(...params));
 });
 
 app.get('/api/sales/transactions/:id/receipt', (req, res) => {
@@ -1805,12 +1872,12 @@ app.post('/api/payment-links', (req, res) => {
     const b = req.body || {};
     const userId = Number(b.userId || b.pppoe_user_id);
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    // Optional client hint (panel origin) — ignored when a public URL is configured
+    // Default 15 days unless caller overrides ttlHours
     const link = createPaymentLink({
       pppoeUserId: userId,
       months: b.months,
       amount: b.amount,
-      ttlHours: b.ttlHours,
+      ttlHours: b.ttlHours != null ? Number(b.ttlHours) : 15 * 24,
       baseUrl: b.baseUrl || b.fallbackOrigin || undefined,
     });
     res.status(201).json(link);
@@ -1828,6 +1895,25 @@ app.post('/api/payment-links/for-user/:id', (req, res) => {
     res.json(link);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not create link' });
+  }
+});
+
+/** Resend (create fresh 15-day) pay links for one or many subscribers. */
+app.post('/api/payment-links/resend', (req, res) => {
+  try {
+    const b = req.body || {};
+    const ids = (Array.isArray(b.userIds) ? b.userIds : b.userId != null ? [b.userId] : [])
+      .map((id: unknown) => Number(id))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+    if (!ids.length) return res.status(400).json({ error: 'Select at least one subscriber.' });
+    const months = Math.max(1, Math.floor(Number(b.months) || 1));
+    const baseUrl = b.baseUrl || b.fallbackOrigin || undefined;
+    const links = ids.map((userId: number) =>
+      resendPaymentLink({ pppoeUserId: userId, months, baseUrl })
+    );
+    res.status(201).json({ count: links.length, links, ttlDays: 15 });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not resend links' });
   }
 });
 

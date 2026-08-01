@@ -69,6 +69,19 @@ export default function TechTools() {
 
   return (
     <Layout title="Tech Tools">
+      {/* Order: Topology lookup → Optical budget → Available NAPs → Splitter loss reference */}
+      <div className="mb-5">
+        <TopologyDbmLookup naps={naps} rows={rows} splitters={splitters} />
+      </div>
+
+      <div className="mb-5">
+        <BudgetCalculator rows={rows} />
+      </div>
+
+      <div className="mb-5">
+        <AvailableNaps naps={naps} />
+      </div>
+
       <Card
         title="Splitter Loss Reference"
         icon={Cable}
@@ -95,7 +108,7 @@ export default function TechTools() {
           />
         </div>
         <p className="text-xs text-slate-400 mb-3">
-          Typical/reference insertion-loss values — verify against your actual hardware's datasheet for
+          Typical/reference insertion-loss values — verify against your actual hardware&apos;s datasheet for
           precision-critical budgets. Every row is editable.
         </p>
         <DataTable
@@ -131,18 +144,6 @@ export default function TechTools() {
           emptyMessage="No reference rows for this type yet."
         />
       </Card>
-
-      <div className="mt-5">
-        <BudgetCalculator rows={rows} />
-      </div>
-
-      <div className="mt-5">
-        <AvailableNaps naps={naps} />
-      </div>
-
-      <div className="mt-5">
-        <TopologyDbmLookup naps={naps} rows={rows} splitters={splitters} />
-      </div>
 
       {edit && <SplitterModal row={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
     </Layout>
@@ -242,10 +243,10 @@ function TopologyDbmLookup({ naps, rows, splitters }: { naps: TopologyNap[]; row
     !!result && !inRange && Number.isFinite(min) && Number.isFinite(max) && result.receivedDbm >= min - 2 && result.receivedDbm <= max + 2;
 
   return (
-    <Card title="Topology dBm Lookup" icon={Route}>
+    <Card title="Topology Lookup" icon={Route}>
       <p className="text-xs text-slate-400 mb-4">
-        Walks a NAP's upstream chain (OLT → intermediate NAPs → this NAP) using each hop's splitter type/ratio
-        set in the Topology map, and applies the matching loss from the reference table above.
+        Walks a NAP&apos;s upstream chain (OLT → intermediate NAPs → this NAP) using each hop&apos;s splitter type/ratio
+        set in the Topology map, and applies the matching loss from the Splitter Loss Reference.
       </p>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <FormField label="NAP">

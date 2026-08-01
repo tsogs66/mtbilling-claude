@@ -79,6 +79,7 @@ export default function Finance() {
     openSalesReportPrint({
       title: 'Sales & Finance Snapshot',
       companyName,
+      company: { name: companyName },
       rangeLabel: `Month starting ${data.monthStart || 'this month'}`,
       total: Number(sales?.total ?? data.incomeThisMonth ?? 0),
       rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),

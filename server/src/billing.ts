@@ -1030,7 +1030,8 @@ export function createPaymentLink(opts: {
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(user.profile) as { price: number } | undefined;
   const amount = opts.amount != null ? Number(opts.amount) : (Number(user.price) || prof?.price || 0) * months;
   const token = randomToken();
-  const ttl = Math.max(1, Math.floor(Number(opts.ttlHours) || 72));
+  // Default validity: 15 days (360 hours)
+  const ttl = Math.max(1, Math.floor(Number(opts.ttlHours) || 15 * 24));
   const expiresAt = new Date(Date.now() + ttl * 3600000).toISOString();
 
   const info = db.prepare(
@@ -1255,5 +1256,19 @@ export function ensureFreshPayLink(userId: number, baseUrl?: string) {
       months: existing.months,
     };
   }
-  return createPaymentLink({ pppoeUserId: userId, months: 1, baseUrl });
+  return createPaymentLink({ pppoeUserId: userId, months: 1, baseUrl, ttlHours: 15 * 24 });
+}
+
+/** Create or refresh a pay link for resend (always 15-day validity). */
+export function resendPaymentLink(opts: {
+  pppoeUserId: number;
+  months?: number;
+  baseUrl?: string;
+}) {
+  return createPaymentLink({
+    pppoeUserId: opts.pppoeUserId,
+    months: opts.months ?? 1,
+    baseUrl: opts.baseUrl,
+    ttlHours: 15 * 24,
+  });
 }

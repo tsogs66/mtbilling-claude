@@ -440,6 +440,9 @@ function DatabaseManagement({ flash }: any) {
   const [backups, setBackups] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [categories, setCategories] = useState<{ id: string; label: string; tables: string[] }[]>([]);
+  const [selCats, setSelCats] = useState<Set<string>>(new Set(['settings', 'clients', 'network', 'reports']));
+  const [selectiveFile, setSelectiveFile] = useState<any>(null);
   const [selectedFile, setSelectedFile] = useState<{
     file: File;
     name: string;
@@ -464,6 +467,10 @@ function DatabaseManagement({ flash }: any) {
   const load = () => api.get('/db/backups').then((r) => setBackups(r.data));
   useEffect(() => {
     load();
+    api
+      .get('/db/backup-categories')
+      .then((r) => setCategories(r.data.categories || []))
+      .catch(() => undefined);
   }, []);
 
   const createBackup = async () => {
@@ -472,6 +479,54 @@ function DatabaseManagement({ flash }: any) {
       await api.post('/db/backup');
       flash('Backup created.');
       load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createSelectiveBackup = async () => {
+    const cats = [...selCats];
+    if (!cats.length) {
+      flash('Select at least one category.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.post('/db/backup/selective', { categories: cats });
+      flash(`Selective backup created: ${r.data.name} (${(r.data.tables || []).length} tables)`);
+      load();
+      // Download JSON
+      const dl = await api.get(`/db/backups/${r.data.name}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(dl.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = r.data.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Selective backup failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreSelective = async () => {
+    if (!selectiveFile) {
+      flash('Choose a selective .json backup first.');
+      return;
+    }
+    if (!confirm('Restore selected categories from this JSON backup? Matching tables will be replaced.')) return;
+    setBusy(true);
+    try {
+      const text = await selectiveFile.text();
+      const parsed = JSON.parse(text);
+      const r = await api.post('/db/restore/selective', {
+        categories: [...selCats],
+        data: parsed.data || parsed,
+      });
+      flash(`Selective restore OK — ${r.data.tablesRestored} tables, ${r.data.rows} rows.`);
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Selective restore failed');
     } finally {
       setBusy(false);
     }
@@ -791,6 +846,52 @@ function DatabaseManagement({ flash }: any) {
         <button className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-medium py-2.5 rounded-lg" onClick={createBackup} disabled={busy}>
           <DbIcon size={16} /> Create New Backup
         </button>
+
+        <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+          <div className="text-sm font-semibold text-slate-800">Selective backup &amp; restore</div>
+          <p className="text-xs text-slate-500">
+            Choose categories (settings, clients, network, reports, operations). Selective backups are JSON files — restore only replaces those tables.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {categories.map((c) => (
+              <label key={c.id} className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="rounded border-slate-300"
+                  checked={selCats.has(c.id)}
+                  onChange={() => {
+                    setSelCats((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(c.id)) next.delete(c.id);
+                      else next.add(c.id);
+                      return next;
+                    });
+                  }}
+                />
+                {c.label}
+                <span className="text-[10px] text-slate-400">({c.tables.length})</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary text-sm" disabled={busy || !selCats.size} onClick={createSelectiveBackup}>
+              Backup selected
+            </button>
+            <label className="btn-secondary text-sm cursor-pointer">
+              Choose JSON…
+              <input
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => setSelectiveFile(e.target.files?.[0] || null)}
+              />
+            </label>
+            <button type="button" className="btn-secondary text-sm" disabled={busy || !selectiveFile} onClick={restoreSelective}>
+              Restore selected from JSON
+            </button>
+            {selectiveFile && <span className="text-xs text-slate-500 self-center">{selectiveFile.name}</span>}
+          </div>
+        </div>
 
         <div className="rounded-lg bg-amber-50/60 border border-amber-100 p-4">
           <div className="text-sm font-semibold text-slate-700 mb-2">Restore from downloaded backup</div>
