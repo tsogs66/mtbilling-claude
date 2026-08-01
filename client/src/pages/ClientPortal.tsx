@@ -222,7 +222,7 @@ export default function ClientPortal() {
   if (!token || !me) {
     return (
       <div
-        className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+        className="subscriber-portal subscriber-portal--login min-h-full flex items-center justify-center p-4 relative overflow-x-hidden"
         style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif" }}
       >
         <div className="absolute inset-0 bg-slate-950" />
@@ -336,10 +336,10 @@ export default function ClientPortal() {
 
   return (
     <div
-      className="min-h-screen text-slate-900"
-      style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif" }}
+      className="subscriber-portal min-h-full bg-slate-100 text-slate-900"
+      style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif", color: '#0f172a' }}
     >
-      <div className="relative overflow-hidden bg-slate-950 text-white">
+      <div className="subscriber-portal-hero relative overflow-hidden bg-slate-950 text-white">
         <div
           className="absolute inset-0"
           style={{
@@ -441,7 +441,7 @@ export default function ClientPortal() {
         </header>
       </div>
 
-      <main className="relative max-w-3xl mx-auto px-4 -mt-4 pb-10 space-y-4">
+      <main className="portal-light relative max-w-3xl mx-auto px-4 -mt-4 pb-10 space-y-4">
         {/* Payment — deep-link to dedicated /pay page (proof upload lives there) */}
         <section className="rounded-2xl border border-orange-200/80 bg-gradient-to-br from-orange-50 via-white to-sky-50 shadow-lg shadow-orange-500/5 overflow-hidden">
           <div className="p-5 sm:p-6">
@@ -581,7 +581,7 @@ export default function ClientPortal() {
                     <tr key={inv.id} className="border-b border-slate-50 last:border-0">
                       <td className="py-2.5 px-1 font-mono text-xs text-slate-700">{inv.number}</td>
                       <td className="py-2.5 px-1 text-slate-600">{inv.due_date || '—'}</td>
-                      <td className="py-2.5 px-1 text-right tabular-nums font-medium">
+                      <td className="py-2.5 px-1 text-right tabular-nums font-medium text-slate-800">
                         {peso(inv.amount - inv.amount_paid)}
                       </td>
                       <td className="py-2.5 px-1">
@@ -630,7 +630,7 @@ export default function ClientPortal() {
                   )}
                 </div>
                 <input
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
+                  className="portal-field w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
                   placeholder="Filter services (GCash, Facebook…)"
                   value={serviceFilter}
                   onChange={(e) => setServiceFilter(e.target.value)}
@@ -667,7 +667,7 @@ export default function ClientPortal() {
               </div>
             )}
             <textarea
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm min-h-[90px] mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
+              className="portal-field w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 min-h-[90px] mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
               placeholder="Describe the issue (no signal, slow, relocation…)"
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
@@ -704,7 +704,7 @@ function IosInstallHint({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
       <button type="button" className="absolute inset-0 bg-slate-950/60" onClick={onClose} aria-label="Close" />
-      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white p-5 sm:p-6 shadow-2xl">
+      <div className="portal-light relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white p-5 sm:p-6 shadow-2xl text-slate-900">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>
             <h3
