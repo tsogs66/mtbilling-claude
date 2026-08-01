@@ -13,6 +13,7 @@ import {
 } from '../components/ui';
 import { api, peso } from '../api';
 import { openSalesReportPrint } from '../lib/invoicePrint';
+import { useCompany } from '../context/CompanyContext';
 
 const PIE_COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#64748b', '#14b8a6'];
 
@@ -21,17 +22,15 @@ const PIE_COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#647
  * with charts + print-ready sales snapshot.
  */
 export default function Finance() {
+  const { company } = useCompany();
   const [data, setData] = useState<any>(null);
   const [sales, setSales] = useState<any>(null);
   const [edit, setEdit] = useState<any>(null);
   const [tab, setTab] = useState('overview');
-  const [companyName, setCompanyName] = useState('');
 
   const load = () => {
     api.get('/finance/summary').then((r) => setData(r.data));
     api.get('/sales?group=month').then((r) => setSales(r.data)).catch(() => setSales(null));
-    api.get('/settings/app').then((r) => setCompanyName(r.data?.company_name || '')).catch(() => {});
-    api.get('/company').then((r) => setCompanyName((n) => n || r.data?.name || '')).catch(() => {});
   };
   useEffect(() => {
     load();
@@ -75,11 +74,20 @@ export default function Finance() {
   }
 
   const net = Number(data.netThisMonth || 0);
+  const companyPrint = company
+    ? {
+        name: company.name,
+        address: company.address,
+        phone: company.phone,
+        email: company.email,
+        logo: company.logo,
+      }
+    : null;
   const printSales = () => {
     openSalesReportPrint({
       title: 'Sales & Finance Snapshot',
-      companyName,
-      company: { name: companyName },
+      companyName: company?.name || '',
+      company: companyPrint,
       rangeLabel: `Month starting ${data.monthStart || 'this month'}`,
       total: Number(sales?.total ?? data.incomeThisMonth ?? 0),
       rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),
