@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, X } from 'lucide-react';
 import Logo from './Logo';
@@ -6,6 +6,7 @@ import { useLayout } from './Layout';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { buildNavSections } from '../navConfig';
+import { publicApi } from '../api';
 
 /** Survives Layout remounts (each page wraps its own <Layout>). */
 let savedSidebarScroll = 0;
@@ -33,8 +34,25 @@ export default function Sidebar() {
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [hostLabel, setHostLabel] = useState('');
   const logoVariant = theme === 'light' ? 'light' : 'dark';
   const viewerMode = !!user && !canWrite && !!user.licenseActivated;
+
+  useEffect(() => {
+    publicApi
+      .get('/health', { timeout: 6000 })
+      .then((r) => {
+        const h = r.data?.instance?.hostname;
+        const noc = r.data?.instance?.nocDevices;
+        const users = r.data?.instance?.pppoeUsers;
+        if (h) {
+          setHostLabel(
+            `${h}${typeof noc === 'number' ? ` · ${noc} NOC` : ''}${typeof users === 'number' ? ` · ${users} PPPoE` : ''}`
+          );
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   // Restore scroll before paint — Layout remounts on every route change.
   useLayoutEffect(() => {
@@ -173,7 +191,9 @@ export default function Sidebar() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="theme-sidebar-user-name text-xs font-medium truncate">{user?.username || 'Panel'}</div>
-            <div className="theme-sidebar-user-meta text-[10px] truncate">{user?.role || '—'} · ts0gs v1.0.0</div>
+            <div className="theme-sidebar-user-meta text-[10px] truncate" title={hostLabel || undefined}>
+              {user?.role || '—'} · {hostLabel || 'ts0gs v1.0.0'}
+            </div>
           </div>
         </div>
       </div>

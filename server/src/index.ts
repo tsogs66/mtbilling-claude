@@ -7,7 +7,8 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
-import { db, dbPath, initSchema, seed, migrate } from './db.js';
+import { db, initSchema, seed, migrate } from './db.js';
+import { getInstanceFingerprint, fingerprintsMatch } from './instance.js';
 import {
   signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable,
   signPendingTotpToken, verifyPendingTotpToken, tokenNeedsRefresh, type AuthedRequest,
@@ -457,21 +458,7 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 /** Public liveness probe — Updater UI polls this without an Authorization header. */
 app.get('/api/health', (_req, res) => {
   const a = getApplianceProfile();
-  // Fingerprint so operators can confirm LAN IP and Cloudflare hostname hit the same DB.
-  let dbMtimeMs: number | null = null;
-  let pppoeUsers = 0;
-  let routers = 0;
-  try {
-    dbMtimeMs = fs.statSync(dbPath).mtimeMs;
-  } catch {
-    /* ignore */
-  }
-  try {
-    pppoeUsers = Number((db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as { c: number })?.c || 0);
-    routers = Number((db.prepare('SELECT COUNT(*) AS c FROM routers').get() as { c: number })?.c || 0);
-  } catch {
-    /* ignore */
-  }
+  const instance = getInstanceFingerprint();
   res.json({
     ok: true,
     ts: Date.now(),
@@ -485,13 +472,7 @@ app.get('/api/health', (_req, res) => {
     pollHintMs: a.appliance
       ? { map: 45_000, hotspot: 30_000, pppoeUsers: 20_000, pppoeActive: 4_000 }
       : { map: 15_000, hotspot: 15_000, pppoeUsers: 12_000, pppoeActive: 2_000 },
-    instance: {
-      hostname: os.hostname(),
-      pid: process.pid,
-      dbMtimeMs,
-      pppoeUsers,
-      routers,
-    },
+    instance,
   });
 });
 
@@ -499,6 +480,101 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', publicPortalRouter);
 
 app.use('/api', requireAuth);
+
+/**
+ * Compare THIS panel's DB fingerprint to the Cloudflare public hostname.
+ * If they differ, the tunnel is pointed at another machine (classic cause of
+ * "LAN shows 7 NOC devices, Cloudflare shows 3").
+ */
+app.get('/api/access/compare', async (req, res) => {
+  const local = getInstanceFingerprint();
+  const row = db
+    .prepare(
+      `SELECT IFNULL(cf_tunnel_hostname,'' ) AS host, IFNULL(cf_tunnel_url,'' ) AS url,
+              IFNULL(public_base_url,'' ) AS publicBase
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as { host?: string; url?: string; publicBase?: string } | undefined;
+
+  const manual = String(req.query.remote || '')
+    .trim()
+    .replace(/\/$/, '');
+  const candidates = [
+    manual,
+    row?.url,
+    row?.host ? `https://${String(row.host).replace(/^https?:\/\//i, '').replace(/\/.*$/, '')}` : '',
+    row?.publicBase,
+  ]
+    .map((u) => String(u || '').trim().replace(/\/$/, ''))
+    .filter((u) => /^https:\/\//i.test(u));
+
+  const unique = [...new Set(candidates)];
+  if (!unique.length) {
+    return res.json({
+      ok: true,
+      match: true,
+      local,
+      remote: null,
+      remoteUrl: null,
+      message: 'No Cloudflare / public hostname configured — only this machine is in use.',
+    });
+  }
+
+  let remote: ReturnType<typeof getInstanceFingerprint> | null = null;
+  let remoteUrl: string | null = null;
+  let fetchError: string | null = null;
+
+  for (const base of unique) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(`${base}/api/health`, {
+        signal: ctrl.signal,
+        headers: { Accept: 'application/json' },
+      });
+      clearTimeout(t);
+      if (!r.ok) {
+        fetchError = `HTTP ${r.status} from ${base}`;
+        continue;
+      }
+      const body = (await r.json()) as { instance?: ReturnType<typeof getInstanceFingerprint> };
+      if (body?.instance?.hostname) {
+        remote = body.instance as ReturnType<typeof getInstanceFingerprint>;
+        remoteUrl = base;
+        fetchError = null;
+        break;
+      }
+      fetchError = `No instance fingerprint in ${base}/api/health (panel too old?)`;
+    } catch (e: any) {
+      fetchError = e?.name === 'AbortError' ? `Timeout reaching ${base}` : e?.message || String(e);
+    }
+  }
+
+  if (!remote) {
+    return res.json({
+      ok: false,
+      match: null,
+      local,
+      remote: null,
+      remoteUrl: unique[0],
+      message:
+        fetchError ||
+        'Could not reach the Cloudflare hostname from this machine. Check tunnel status / DNS.',
+    });
+  }
+
+  const match = fingerprintsMatch(local, remote);
+  res.json({
+    ok: true,
+    match,
+    local,
+    remote,
+    remoteUrl,
+    message: match
+      ? 'LAN and Cloudflare hostname serve the same panel database.'
+      : `Split backend: this host is “${local.hostname}” (${local.nocDevices} NOC / ${local.pppoeUsers} PPPoE) but ${remoteUrl} serves “${remote.hostname}” (${remote.nocDevices} NOC / ${remote.pppoeUsers} PPPoE). Install the Cloudflare tunnel on THIS machine (the one with your full data), or open staff login only on the LAN IP of the machine that owns the tunnel.`,
+  });
+});
 
 const AUDIT_REDACT_KEYS = /pass|secret|token|key|pin|otp|code/i;
 function redactBodyForAudit(body: unknown): string | null {
