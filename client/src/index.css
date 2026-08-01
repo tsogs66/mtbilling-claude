@@ -819,7 +819,7 @@ body {
   background: linear-gradient(180deg, rgba(34, 211, 238, 0.06), transparent);
 }
 [data-theme='isptech'] .theme-sidebar-section {
-  color: #64748b !important;
+  color: #94a3b8 !important;
   letter-spacing: 0.14em;
 }
 [data-theme='isptech'] .theme-sidebar-link {
@@ -1138,8 +1138,9 @@ body {
 }
 [data-theme='blueglass'] .text-slate-600,
 [data-theme='blueglass'] .text-slate-500,
-[data-theme='blueglass'] .text-slate-400 {
-  color: #bfdbfe !important;
+[data-theme='blueglass'] .text-slate-400,
+[data-theme='blueglass'] .text-slate-300 {
+  color: #dbeafe !important;
 }
 [data-theme='blueglass'] .border-slate-200,
 [data-theme='blueglass'] .border-slate-100 {
@@ -1148,7 +1149,8 @@ body {
 [data-theme='blueglass'] .bg-white,
 [data-theme='blueglass'] .bg-white\/90,
 [data-theme='blueglass'] .bg-white\/95,
-[data-theme='blueglass'] .bg-slate-50 {
+[data-theme='blueglass'] .bg-slate-50,
+[data-theme='blueglass'] .bg-slate-100:not(.theme-main):not(.bg-mesh-light) {
   background-color: rgba(15, 40, 72, 0.75) !important;
 }
 [data-theme='blueglass'] .text-brand-600,
@@ -1182,12 +1184,50 @@ body {
 :is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-section,
 :is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-subtitle,
 :is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-menu-muted,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-user-meta {
-  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 72%, var(--sidebar-muted, #94a3b8)) !important;
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-user-meta,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-pill-label,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-link:not(.is-active):not(.active) {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 78%, var(--sidebar-muted, #94a3b8)) !important;
   opacity: 1 !important;
 }
 :is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .section-title {
-  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 78%, transparent) !important;
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 86%, transparent) !important;
+}
+
+/* Catch-all slate / gray / zinc muted text + placeholders (light-theme utilities). */
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(
+    .text-slate-300, .text-slate-400, .text-slate-500, .text-slate-600,
+    .text-gray-300, .text-gray-400, .text-gray-500, .text-gray-600,
+    .text-zinc-300, .text-zinc-400, .text-zinc-500, .text-zinc-600,
+    .text-neutral-300, .text-neutral-400, .text-neutral-500, .text-neutral-600
+  ) {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 88%, #94a3b8) !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-slate-700, .text-slate-800, .text-slate-900, .text-gray-700, .text-gray-800, .text-gray-900, .text-zinc-700, .text-zinc-800, .text-zinc-900) {
+  color: var(--page-fg, #f1f5f9) !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(
+    .placeholder\:text-slate-400::placeholder,
+    .placeholder\:text-slate-500::placeholder,
+    .placeholder\:text-gray-400::placeholder,
+    input::placeholder,
+    textarea::placeholder
+  ) {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 55%, transparent) !important;
+  opacity: 1 !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .btn-ghost {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 82%, transparent) !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .btn-ghost:hover {
+  color: var(--page-fg, #f1f5f9) !important;
+  background: color-mix(in srgb, var(--brand, #f97316) 12%, transparent) !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .badge {
+  color: inherit;
 }
 
 /* Extra bg-white/bg-slate-50 opacity variants used around the app that the
@@ -1195,8 +1235,12 @@ body {
    with the force-lightened .text-slate-* rules below to make text vanish. */
 :is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50, .bg-white\/40, .bg-white\/30,
-      .bg-slate-50\/90, .bg-slate-50\/70, .bg-slate-50\/50, .bg-slate-50\/40) {
-  background-color: color-mix(in srgb, var(--card-bg, #0f172a) 85%, #fff 15%) !important;
+      .bg-slate-50\/90, .bg-slate-50\/80, .bg-slate-50\/70, .bg-slate-50\/50, .bg-slate-50\/40,
+      .bg-slate-100\/90, .bg-slate-100\/80):not(.theme-main):not(.bg-mesh-light),
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  .bg-slate-100:not(.theme-main):not(.bg-mesh-light) {
+  background-color: color-mix(in srgb, var(--card-bg, #0f172a) 88%, #fff 12%) !important;
+  background-image: none !important;
 }
 
 /* Semantic status-color badges/banners (amber/orange/emerald/rose/sky/violet/indigo
@@ -1205,56 +1249,66 @@ body {
    a still-light chip background with the *unrelated* forced-light slate text nearby,
    or leaves the status text itself (a mid/dark shade meant for a light chip) sitting
    on a background that never got re-tinted. Retint both halves consistently. */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  :is(.bg-amber-50, .bg-amber-100) { background-color: color-mix(in srgb, #f59e0b 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-amber-50, .bg-amber-100) { background-color: color-mix(in srgb, #f59e0b 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900) { color: #fbbf24 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  :is(.border-amber-100, .border-amber-200) { border-color: color-mix(in srgb, #f59e0b 35%, var(--card-border, #334155)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.border-amber-100, .border-amber-200) { border-color: color-mix(in srgb, #f59e0b 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .bg-orange-50 { background-color: color-mix(in srgb, #f97316 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .text-orange-600 { color: #fb923c !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-orange-50, .bg-orange-100) { background-color: color-mix(in srgb, #f97316 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-orange-600, .text-orange-700, .text-orange-800) { color: #fb923c !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  :is(.bg-emerald-50, .bg-emerald-100) { background-color: color-mix(in srgb, #10b981 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-emerald-50, .bg-emerald-100) { background-color: color-mix(in srgb, #10b981 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900) { color: #34d399 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .border-emerald-100 { border-color: color-mix(in srgb, #10b981 35%, var(--card-border, #334155)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.border-emerald-100, .border-emerald-200) { border-color: color-mix(in srgb, #10b981 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  :is(.bg-rose-50, .bg-rose-100) { background-color: color-mix(in srgb, #f43f5e 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-rose-50, .bg-rose-100) { background-color: color-mix(in srgb, #f43f5e 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.text-rose-600, .text-rose-700, .text-rose-800, .text-rose-900) { color: #fb7185 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .border-rose-100 { border-color: color-mix(in srgb, #f43f5e 35%, var(--card-border, #334155)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.border-rose-100, .border-rose-200) { border-color: color-mix(in srgb, #f43f5e 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  :is(.bg-sky-50, .bg-sky-100) { background-color: color-mix(in srgb, #0ea5e9 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-sky-50, .bg-sky-100) { background-color: color-mix(in srgb, #0ea5e9 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900) { color: #38bdf8 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .border-sky-100 { border-color: color-mix(in srgb, #0ea5e9 35%, var(--card-border, #334155)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.border-sky-100, .border-sky-200) { border-color: color-mix(in srgb, #0ea5e9 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .bg-violet-50 { background-color: color-mix(in srgb, #8b5cf6 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .text-violet-600 { color: #a78bfa !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-violet-50, .bg-violet-100) { background-color: color-mix(in srgb, #8b5cf6 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-violet-600, .text-violet-700, .text-violet-800) { color: #a78bfa !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .bg-indigo-50 { background-color: color-mix(in srgb, #6366f1 14%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
-  .text-indigo-700 { color: #818cf8 !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-indigo-50, .bg-indigo-100) { background-color: color-mix(in srgb, #6366f1 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-indigo-600, .text-indigo-700, .text-indigo-800) { color: #818cf8 !important; }
+
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-cyan-50, .bg-cyan-100) { background-color: color-mix(in srgb, #06b6d4 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-cyan-600, .text-cyan-700, .text-cyan-800) { color: #22d3ee !important; }
+
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.bg-teal-50, .bg-teal-100) { background-color: color-mix(in srgb, #14b8a6 18%, var(--card-bg, #0f172a)) !important; }
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+  :is(.text-teal-600, .text-teal-700, .text-teal-800) { color: #2dd4bf !important; }
 
 /* Dashboard "license not activated" banner: bg-gradient-to-r from-amber-50 to-orange-50 */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech']) .from-amber-50 {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .from-amber-50 {
   --tw-gradient-from: color-mix(in srgb, #f59e0b 16%, var(--card-bg, #0f172a)) var(--tw-gradient-from-position) !important;
   --tw-gradient-to: color-mix(in srgb, #f59e0b 4%, var(--card-bg, #0f172a)) var(--tw-gradient-to-position) !important;
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech']) .to-orange-50 {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .to-orange-50 {
   --tw-gradient-to: color-mix(in srgb, #f97316 16%, var(--card-bg, #0f172a)) var(--tw-gradient-to-position) !important;
 }
 
@@ -1285,29 +1339,34 @@ body {
 [data-theme='dark'] .usage-user-btn.is-selected .usage-user-name,
 [data-theme='onepiece'] .usage-user-btn.is-selected .usage-user-name,
 [data-theme='steampunk'] .usage-user-btn.is-selected .usage-user-name,
-[data-theme='isptech'] .usage-user-btn.is-selected .usage-user-name {
+[data-theme='isptech'] .usage-user-btn.is-selected .usage-user-name,
+[data-theme='blueglass'] .usage-user-btn.is-selected .usage-user-name {
   color: var(--sidebar-active-fg, #fdba74) !important;
 }
 [data-theme='dark'] .data-table tbody tr:hover,
 [data-theme='onepiece'] .data-table tbody tr:hover,
 [data-theme='steampunk'] .data-table tbody tr:hover,
-[data-theme='isptech'] .data-table tbody tr:hover {
+[data-theme='isptech'] .data-table tbody tr:hover,
+[data-theme='blueglass'] .data-table tbody tr:hover {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, transparent) !important;
 }
 [data-theme='dark'] .bg-brand-50,
 [data-theme='onepiece'] .bg-brand-50,
 [data-theme='steampunk'] .bg-brand-50,
 [data-theme='isptech'] .bg-brand-50,
+[data-theme='blueglass'] .bg-brand-50,
 [data-theme='dark'] .bg-brand-50\/30,
 [data-theme='onepiece'] .bg-brand-50\/30,
 [data-theme='steampunk'] .bg-brand-50\/30,
-[data-theme='isptech'] .bg-brand-50\/30 {
+[data-theme='isptech'] .bg-brand-50\/30,
+[data-theme='blueglass'] .bg-brand-50\/30 {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 16%, transparent) !important;
 }
 [data-theme='dark'] .ring-brand-200,
 [data-theme='onepiece'] .ring-brand-200,
 [data-theme='steampunk'] .ring-brand-200,
-[data-theme='isptech'] .ring-brand-200 {
+[data-theme='isptech'] .ring-brand-200,
+[data-theme='blueglass'] .ring-brand-200 {
   --tw-ring-color: color-mix(in srgb, var(--brand, #fb923c) 45%, transparent) !important;
 }
 
