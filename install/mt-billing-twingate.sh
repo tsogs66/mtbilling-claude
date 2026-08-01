@@ -277,7 +277,12 @@ kill_daemon_hard() {
     systemctl disable "$UNIT_NAME" 2>/dev/null || true
     systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
   fi
-  twingate stop 2>/dev/null || true
+  # Bare `twingate stop` can hang when the daemon is wedged — never block rescue/apply.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 5 twingate stop 2>/dev/null || true
+  else
+    twingate stop 2>/dev/null || true
+  fi
   pkill -9 twingated 2>/dev/null || true
   pkill -9 -f '/usr/sbin/twingated' 2>/dev/null || true
   sleep 1
@@ -334,13 +339,29 @@ gateway_reachable() {
 }
 
 dns_works() {
-  # Prefer getent; fall back to python
+  # Bound every probe — bare getent can hang forever when Twingate DNS is broken,
+  # which left Install & connect stuck on "Working…" after authenticating.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3 getent hosts github.com >/dev/null 2>&1 && return 0
+    timeout 3 getent hosts 1.1.1.1 >/dev/null 2>&1 && return 0
+    if command -v python3 >/dev/null 2>&1; then
+      timeout 3 python3 - <<'PY' >/dev/null 2>&1
+import socket
+socket.setdefaulttimeout(2)
+socket.getaddrinfo("github.com", 443, proto=socket.IPPROTO_TCP)
+PY
+      return $?
+    fi
+    timeout 3 bash -c 'echo >/dev/tcp/1.1.1.1/443' 2>/dev/null && return 0
+    return 1
+  fi
   if getent hosts github.com >/dev/null 2>&1; then
     return 0
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY' >/dev/null 2>&1
 import socket
+socket.setdefaulttimeout(2)
 socket.getaddrinfo("github.com", 443, proto=socket.IPPROTO_TCP)
 PY
     return $?
@@ -349,9 +370,23 @@ PY
 }
 
 health_check_or_rollback() {
-  local i
-  log_info "Health-checking network after Twingate start (up to 20s)…"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  local st i
+  st="$(tg_client_status 2>/dev/null || echo unknown)"
+  st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
+  # Daemon already authenticating/online: never kill it (Admin/config issue).
+  # A full 20s loop + kill made RPi/PC Install look permanently stuck.
+  if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+    log_info "Quick network check (client=${st})…"
+    if gateway_reachable && dns_works; then
+      log_ok "Network health OK (gateway + DNS)"
+      return 0
+    fi
+    log_warn "DNS/gateway soft-fail while ${st} — re-applying coexistence (not killing Twingate)"
+    apply_coexist_after_twingate || true
+    return 0
+  fi
+  log_info "Health-checking network after Twingate start (up to 12s)…"
+  for i in 1 2 3 4 5 6; do
     if gateway_reachable && dns_works; then
       log_ok "Network health OK (gateway + DNS)"
       return 0
@@ -453,13 +488,21 @@ preflight_twingate_cloud() {
 }
 
 network_from_key() {
+  local net=""
   if [[ -f "$KEY_FILE" ]]; then
     if command -v python3 >/dev/null 2>&1; then
-      python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("network",""))' "$KEY_FILE" 2>/dev/null || true
-      return 0
+      net="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("network",""))' "$KEY_FILE" 2>/dev/null || true)"
+    else
+      net="$(sed -n 's/.*"network"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$KEY_FILE" | head -1)"
     fi
-    sed -n 's/.*"network"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$KEY_FILE" | head -1
   fi
+  # Keys often store "tsogs.twingate.com" — strip so UI does not build
+  # https://tsogs.twingate.com.twingate.com/
+  net="${net#https://}"
+  net="${net#http://}"
+  net="${net%%/*}"
+  net="${net%.twingate.com}"
+  printf '%s\n' "$net"
 }
 
 # Prefer systemd-resolved when present — Twingate integrates cleanly with it
@@ -766,6 +809,7 @@ do_start() {
     systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null && unit_ok=1
     local st
     st="$(tg_client_status)"
+    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
 
     if [[ "$st" == "not-running" ]]; then
       log_err "Twingate client is not-running after start attempts"
@@ -789,6 +833,25 @@ do_start() {
       restore_resolv
       set_db_status offline
       return 1
+    fi
+
+    # Fast path: daemon already authenticating/online after coexist — end apply NOW.
+    # Do not park the panel on a 20s health loop + wait (RPi/PC "Working…" hang).
+    if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+      if ! gateway_reachable || ! dns_works; then
+        log_warn "Re-applying coexistence after start (DNS/gateway soft)"
+        apply_coexist_after_twingate || true
+      fi
+      if [[ "$st" == "online" ]]; then
+        set_db_status online "$(network_from_key)"
+        log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
+        return 0
+      fi
+      set_db_status authenticating "$(network_from_key)"
+      log_warn "Apply finished with status=authenticating (panel will not keep spinning)."
+      log_warn "  Fix in Twingate Admin, then Refresh. Host DNS/LAN coexistence is already applied."
+      log_warn "  No Admin 'Accept' click for Service Keys — need Connector Online + Resource grants."
+      return 0
     fi
 
     if ! health_check_or_rollback; then
@@ -850,16 +913,38 @@ do_start() {
   (cd /var/lib/twingate && /usr/sbin/twingated >/var/log/twingated.log 2>&1 &) || true
   sleep 3
   apply_coexist_after_twingate
+  local st
+  st="$(tg_client_status)"
+  st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
+  if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+    if ! gateway_reachable || ! dns_works; then
+      apply_coexist_after_twingate || true
+    fi
+    set_db_status "$st" "$(network_from_key)"
+    if [[ "$st" == "online" ]]; then
+      log_ok "Twingate is online (direct daemon, coexistence applied)"
+    else
+      log_warn "Apply finished with status=authenticating (panel will not keep spinning)."
+    fi
+    return 0
+  fi
   if ! health_check_or_rollback; then
     return 1
   fi
-  if wait_for_client_online 90; then
-    set_db_status online "$(network_from_key)"
-    log_ok "Twingate is online (direct daemon, coexistence applied)"
+  if wait_for_client_online 30; then
+    st="$(tg_client_status)"
+    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
+    if [[ "$st" == "online" ]]; then
+      set_db_status online "$(network_from_key)"
+      log_ok "Twingate is online (direct daemon, coexistence applied)"
+      return 0
+    fi
+    set_db_status authenticating "$(network_from_key)"
+    log_warn "Client still authenticating — check Connector Online + Resource grants (no Accept click)"
     return 0
   fi
-  local st
   st="$(tg_client_status)"
+  st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
   if [[ "$st" == "authenticating" ]]; then
     set_db_status authenticating "$(network_from_key)"
     log_warn "Client still authenticating — check Connector Online + Resource grants (no Accept click)"
