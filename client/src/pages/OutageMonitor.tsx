@@ -25,8 +25,21 @@ interface OutageService {
   detail: string;
   reports1h: number;
   reports24h: number;
+  localReports1h?: number;
+  localReports24h?: number;
   checkedAt: number;
   history: { t: number; level: OutageLevel; reports1h: number }[];
+}
+
+interface SubscriberReport {
+  id: number;
+  customerName?: string;
+  accountNumber?: string;
+  contact?: string;
+  description?: string;
+  jobOrderId?: number;
+  createdAt: string;
+  services: { slug: string; name: string; category: string }[];
 }
 
 const LEVEL_META: Record<
@@ -100,6 +113,7 @@ function ReportSpark({ history }: { history: OutageService['history'] }) {
 export default function OutageMonitor() {
   const [services, setServices] = useState<OutageService[]>([]);
   const [mostReported, setMostReported] = useState<OutageService[]>([]);
+  const [subscriberReports, setSubscriberReports] = useState<SubscriberReport[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [categories, setCategories] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
@@ -108,26 +122,28 @@ export default function OutageMonitor() {
   const [selected, setSelected] = useState<OutageService | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
-    const r = await api.get('/outage-monitor');
-    setServices(r.data.services || []);
-    setMostReported(r.data.mostReported || []);
-    setSummary(r.data.summary || null);
-    setCategories(r.data.categories || []);
+  const applyPayload = (data: any) => {
+    setServices(data.services || []);
+    setMostReported(data.mostReported || []);
+    setSummary(data.summary || null);
+    setCategories(data.categories || []);
+    setSubscriberReports(data.subscriberReports || []);
     if (selected) {
-      const fresh = (r.data.services || []).find((s: OutageService) => s.slug === selected.slug);
+      const fresh = (data.services || []).find((s: OutageService) => s.slug === selected.slug);
       if (fresh) setSelected(fresh);
     }
+  };
+
+  const load = async () => {
+    const r = await api.get('/outage-monitor');
+    applyPayload(r.data);
   };
 
   const refresh = async () => {
     setBusy(true);
     try {
       const r = await api.get('/outage-monitor/check');
-      setServices(r.data.services || []);
-      setMostReported(r.data.mostReported || []);
-      setSummary(r.data.summary || null);
-      setCategories(r.data.categories || []);
+      applyPayload(r.data);
     } finally {
       setBusy(false);
     }
@@ -181,7 +197,7 @@ export default function OutageMonitor() {
               </div>
               <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">Outage Monitor</h1>
               <p className="mt-2 text-slate-300 text-sm sm:text-base max-w-xl leading-relaxed">
-                Real-time service problems from public internet reports — Downdetector-style view for PH ISPs,
+                Crowdsourced public outages plus subscriber reports from the client portal — PH ISPs,
                 banks, apps, and global platforms. Separate from Status Hub router probes.
               </p>
             </div>
@@ -220,9 +236,59 @@ export default function OutageMonitor() {
         </div>
 
         <p className="text-xs text-slate-500">
-          Status uses crowdsourced report volume vs normal: <b>No problems</b> · <b>Possible problems</b> ·{' '}
-          <b>Problems</b>. Auto-refreshes about every 3 minutes · Last sweep {ago(summary?.lastSweepAt)}
+          Status uses crowdsourced report volume plus portal subscriber reports: <b>No problems</b> ·{' '}
+          <b>Possible problems</b> · <b>Problems</b>. Auto-refreshes about every 3 minutes · Last sweep{' '}
+          {ago(summary?.lastSweepAt)}
+          {summary?.localReports24h != null && (
+            <> · <b>{summary.localReports24h}</b> subscriber report{summary.localReports24h === 1 ? '' : 's'} /24h</>
+          )}
         </p>
+
+        {subscriberReports.length > 0 && (
+          <section className="card p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle size={16} className="text-amber-500" />
+              <h2 className="text-sm font-semibold text-slate-800">Subscriber portal reports</h2>
+              <span className="text-xs text-slate-400 ml-auto">Latest from /portal</span>
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {subscriberReports.slice(0, 12).map((r) => (
+                <li key={r.id} className="py-2.5 flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-slate-800 truncate">
+                      {r.customerName || 'Subscriber'}
+                      {r.accountNumber && (
+                        <span className="ml-2 font-mono text-xs text-slate-400">{r.accountNumber}</span>
+                      )}
+                    </div>
+                    {r.description && (
+                      <p className="text-sm text-slate-600 mt-0.5 line-clamp-2">{r.description}</p>
+                    )}
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {r.services.map((svc) => (
+                        <button
+                          key={`${r.id}-${svc.slug}`}
+                          type="button"
+                          className="text-[11px] px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-100"
+                          onClick={() => {
+                            const match = services.find((x) => x.slug === svc.slug);
+                            if (match) setSelected(match);
+                          }}
+                        >
+                          {svc.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-400 shrink-0 sm:text-right">
+                    {r.createdAt?.replace('T', ' ').slice(0, 16) || '—'}
+                    {r.jobOrderId != null && <div>JO linked</div>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {mostReported.length > 0 && (
           <section className="card p-4">
@@ -248,7 +314,10 @@ export default function OutageMonitor() {
                     </div>
                     <div className="font-semibold text-slate-900 truncate mt-0.5">{s.name}</div>
                     <div className="text-xs text-slate-500 mt-0.5">
-                      {s.reports1h} reports/1h · {s.reports24h}/24h
+                      {s.reports1h} public/1h
+                      {(s.localReports1h || 0) > 0 && (
+                        <span className="text-rose-600 font-medium"> · {s.localReports1h} portal</span>
+                      )}
                     </div>
                   </button>
                 );
@@ -313,7 +382,12 @@ export default function OutageMonitor() {
                       <ReportSpark history={s.history} />
                       <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
                         <span>
-                          {s.reports1h} /1h · {s.reports24h} /24h
+                          {s.reports1h}/{s.reports24h} public
+                          {(s.localReports1h || s.localReports24h) ? (
+                            <span className="text-rose-600 font-medium">
+                              {' '}· {s.localReports1h || 0}/{s.localReports24h || 0} portal
+                            </span>
+                          ) : null}
                         </span>
                         <span>{ago(s.checkedAt)}</span>
                       </div>
@@ -355,13 +429,40 @@ export default function OutageMonitor() {
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="rounded-xl border border-slate-100 p-3">
                       <div className="text-2xl font-bold text-slate-900 tabular-nums">{selected.reports1h}</div>
-                      <div className="text-xs text-slate-500">Reports last 1 hour</div>
+                      <div className="text-xs text-slate-500">Public reports /1h</div>
                     </div>
                     <div className="rounded-xl border border-slate-100 p-3">
                       <div className="text-2xl font-bold text-slate-900 tabular-nums">{selected.reports24h}</div>
-                      <div className="text-xs text-slate-500">Reports last 24 hours</div>
+                      <div className="text-xs text-slate-500">Public reports /24h</div>
+                    </div>
+                    <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+                      <div className="text-2xl font-bold text-rose-700 tabular-nums">{selected.localReports1h || 0}</div>
+                      <div className="text-xs text-slate-500">Portal subscriber /1h</div>
+                    </div>
+                    <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+                      <div className="text-2xl font-bold text-rose-700 tabular-nums">{selected.localReports24h || 0}</div>
+                      <div className="text-xs text-slate-500">Portal subscriber /24h</div>
                     </div>
                   </div>
+                  {subscriberReports.filter((r) => r.services.some((x) => x.slug === selected.slug)).length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                        Recent portal reports for {selected.name}
+                      </div>
+                      <ul className="space-y-2 max-h-40 overflow-y-auto">
+                        {subscriberReports
+                          .filter((r) => r.services.some((x) => x.slug === selected.slug))
+                          .slice(0, 8)
+                          .map((r) => (
+                            <li key={r.id} className="text-sm rounded-lg border border-slate-100 px-3 py-2">
+                              <div className="font-medium text-slate-800">{r.customerName || 'Subscriber'}</div>
+                              {r.description && <div className="text-slate-600 text-xs mt-0.5">{r.description}</div>}
+                              <div className="text-[11px] text-slate-400 mt-1">{r.createdAt?.replace('T', ' ').slice(0, 16)}</div>
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  )}
                   <div className="mb-4">
                     <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Report trend</div>
                     <div className="rounded-xl border border-slate-100 p-3">
