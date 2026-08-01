@@ -3,6 +3,7 @@ import { ClipboardList, Plus, Pencil, Trash2, Wrench } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, DataTable, IconAction, Modal, ModalFooter, FormField, StatTile, StatusBadge, TabPills } from '../components/ui';
 import { api } from '../api';
+import { subscribePortalLive } from '../lib/portalLive';
 
 const TYPES = [
   { key: 'new_install', label: 'New Install' },
@@ -35,6 +36,17 @@ export default function JobOrders() {
 
   useEffect(() => {
     load();
+  }, [status]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('mt_token') || '';
+    return subscribePortalLive({
+      path: '/client-portal/events',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      onEvent: (event, data) => {
+        if (event === 'ticket' || data?.type === 'ticket') load();
+      },
+    });
   }, [status]);
 
   useEffect(() => {
