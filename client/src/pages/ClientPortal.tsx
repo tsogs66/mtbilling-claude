@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Wallet, FileText, LifeBuoy, LogOut, CreditCard, ExternalLink, Copy, Check,
-  Phone, Building2, ChevronRight, Sparkles, Download, Share, X,
+  Phone, Building2, ChevronRight, Sparkles, Download, Share, X, Mail, MapPin,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -336,7 +336,7 @@ export default function ClientPortal() {
 
   return (
     <div
-      className="subscriber-portal min-h-full bg-slate-100 text-slate-900"
+      className="subscriber-portal min-h-full bg-slate-100 text-slate-900 flex flex-col"
       style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif", color: '#0f172a' }}
     >
       <div className="subscriber-portal-hero relative overflow-hidden bg-slate-950 text-white">
@@ -543,24 +543,6 @@ export default function ClientPortal() {
           </div>
         </section>
 
-        {showCompany && company.name && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-2">
-              <Building2 size={16} className="text-slate-500" /> {company.name}
-            </h2>
-            <div className="text-sm text-slate-600 space-y-1">
-              {company.phone && (
-                <div className="flex items-center gap-2">
-                  <Phone size={14} className="text-slate-400" />
-                  <a href={`tel:${company.phone}`} className="hover:text-orange-600">{company.phone}</a>
-                </div>
-              )}
-              {company.email && <div className="text-slate-500">{company.email}</div>}
-              {company.address && <div className="text-slate-500">{company.address}</div>}
-            </div>
-          </section>
-        )}
-
         {showInvoices && (
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3">
@@ -692,9 +674,58 @@ export default function ClientPortal() {
             )}
           </section>
         )}
-
-        <p className="text-center text-[11px] text-slate-400 pt-2">{PRODUCT_TITLE}</p>
       </main>
+
+      {showCompany && (
+        <footer className="portal-light mt-auto border-t border-slate-200 bg-white">
+          <div className="max-w-3xl mx-auto px-4 py-6">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600 shrink-0">
+                <Building2 size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-slate-900">
+                  {company.name || title}
+                </div>
+                <div className="mt-2 space-y-1.5 text-sm text-slate-600">
+                  {company.address && (
+                    <div className="flex items-start gap-2">
+                      <MapPin size={14} className="mt-0.5 text-slate-400 shrink-0" />
+                      <span>{company.address}</span>
+                    </div>
+                  )}
+                  {company.phone && (
+                    <div className="flex items-center gap-2">
+                      <Phone size={14} className="text-slate-400 shrink-0" />
+                      <a href={`tel:${company.phone}`} className="hover:text-orange-600">{company.phone}</a>
+                    </div>
+                  )}
+                  {company.email && (
+                    <div className="flex items-center gap-2">
+                      <Mail size={14} className="text-slate-400 shrink-0" />
+                      <a href={`mailto:${company.email}`} className="hover:text-orange-600 break-all">{company.email}</a>
+                    </div>
+                  )}
+                  {(company.gcash_number || company.maya_number) && (
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-xs text-slate-500">
+                      {company.gcash_number && <span>GCash: <span className="font-mono text-slate-700">{company.gcash_number}</span></span>}
+                      {company.maya_number && <span>Maya: <span className="font-mono text-slate-700">{company.maya_number}</span></span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <p className="text-center text-[11px] text-slate-400 mt-5 pt-4 border-t border-slate-100">
+              {PRODUCT_TITLE}
+            </p>
+          </div>
+        </footer>
+      )}
+
+      {!showCompany && (
+        <p className="portal-light text-center text-[11px] text-slate-400 py-4 mt-auto">{PRODUCT_TITLE}</p>
+      )}
+
       {iosHint && <IosInstallHint onClose={dismissIosHint} />}
     </div>
   );
