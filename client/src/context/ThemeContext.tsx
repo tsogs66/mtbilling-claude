@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech';
+export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech' | 'blueglass';
 
-export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'];
+export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass'];
 
 const STORAGE_KEY = 'mt_theme';
 /** Bump to re-apply Snapshot default when the panel look changes again. */

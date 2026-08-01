@@ -436,7 +436,11 @@ body {
 }
 [data-theme='dark'] .text-slate-600,
 [data-theme='dark'] .text-slate-500 {
-  color: #94a3b8 !important;
+  color: #cbd5e1 !important;
+}
+[data-theme='dark'] .text-slate-400,
+[data-theme='dark'] .text-slate-300 {
+  color: #e2e8f0 !important;
 }
 [data-theme='dark'] .border-slate-200,
 [data-theme='dark'] .border-slate-100,
@@ -581,7 +585,11 @@ body {
 }
 [data-theme='onepiece'] .text-slate-600,
 [data-theme='onepiece'] .text-slate-500 {
-  color: #94a3b8 !important;
+  color: #cbd5e1 !important;
+}
+[data-theme='onepiece'] .text-slate-400,
+[data-theme='onepiece'] .text-slate-300 {
+  color: #e2e8f0 !important;
 }
 [data-theme='onepiece'] .border-slate-200,
 [data-theme='onepiece'] .border-slate-100 {
@@ -712,7 +720,11 @@ body {
 }
 [data-theme='steampunk'] .text-slate-600,
 [data-theme='steampunk'] .text-slate-500 {
-  color: #a68a63 !important;
+  color: #d9c4a0 !important;
+}
+[data-theme='steampunk'] .text-slate-400,
+[data-theme='steampunk'] .text-slate-300 {
+  color: #ead9c0 !important;
 }
 [data-theme='steampunk'] .border-slate-200,
 [data-theme='steampunk'] .border-slate-100 {
@@ -745,20 +757,20 @@ body {
   --sidebar-bg: #030711;
   --sidebar-fg: #cbd5e1;
   --sidebar-border: rgba(34, 211, 238, 0.14);
-  --sidebar-muted: #64748b;
+  --sidebar-muted: #94a3b8;
   --sidebar-hover-bg: rgba(34, 211, 238, 0.07);
   --sidebar-active-bg: rgba(249, 115, 22, 0.16);
   --sidebar-active-fg: #fdba74;
   --sidebar-icon-bg: rgba(8, 16, 30, 0.7);
   --bottom-nav-bg: rgba(5, 10, 20, 0.94);
   --bottom-nav-border: rgba(34, 211, 238, 0.14);
-  --bottom-nav-fg: #64748b;
+  --bottom-nav-fg: #94a3b8;
   --bottom-nav-active-fg: #fb923c;
   --bottom-nav-sheet-bg: rgba(3, 7, 17, 0.98);
   --topbar-bg: rgba(5, 10, 20, 0.72);
   --topbar-border: rgba(148, 163, 184, 0.12);
   --topbar-fg: #e8eef7;
-  --topbar-muted: #64748b;
+  --topbar-muted: #cbd5e1;
   --topbar-pill-bg: rgba(12, 22, 40, 0.7);
   --topbar-pill-border: rgba(34, 211, 238, 0.2);
   --topbar-pill-hover-border: rgba(249, 115, 22, 0.5);
@@ -968,9 +980,12 @@ body {
   color: #e8eef7 !important;
 }
 [data-theme='isptech'] .text-slate-600,
-[data-theme='isptech'] .text-slate-500,
-[data-theme='isptech'] .text-slate-400 {
-  color: #94a3b8 !important;
+[data-theme='isptech'] .text-slate-500 {
+  color: #cbd5e1 !important;
+}
+[data-theme='isptech'] .text-slate-400,
+[data-theme='isptech'] .text-slate-300 {
+  color: #e2e8f0 !important;
 }
 [data-theme='isptech'] .border-slate-200,
 [data-theme='isptech'] .border-slate-100 {
@@ -1008,10 +1023,177 @@ body {
   box-shadow: 0 -8px 32px -16px rgba(0, 0, 0, 0.65);
 }
 
+/* ── Blue Glass theme (elegant sapphire · sky · soft white text) ── */
+[data-theme='blueglass'] {
+  color-scheme: dark;
+  --brand: #38bdf8;
+  --brand-glow: rgba(56, 189, 248, 0.45);
+  --page-bg: #071525;
+  --page-fg: #f1f5f9;
+  --card-bg: rgba(15, 40, 72, 0.55);
+  --card-border: rgba(125, 211, 252, 0.22);
+  --modal-bg: rgba(8, 24, 48, 0.96);
+  --modal-border: rgba(56, 189, 248, 0.28);
+  --sidebar-bg: #04101f;
+  --sidebar-fg: #e2e8f0;
+  --sidebar-border: rgba(56, 189, 248, 0.18);
+  --sidebar-muted: #93c5fd;
+  --sidebar-hover-bg: rgba(56, 189, 248, 0.1);
+  --sidebar-active-bg: rgba(56, 189, 248, 0.2);
+  --sidebar-active-fg: #bae6fd;
+  --sidebar-icon-bg: rgba(8, 24, 48, 0.7);
+  --bottom-nav-bg: rgba(7, 21, 37, 0.94);
+  --bottom-nav-border: rgba(56, 189, 248, 0.18);
+  --bottom-nav-fg: #93c5fd;
+  --bottom-nav-active-fg: #7dd3fc;
+  --bottom-nav-sheet-bg: rgba(4, 16, 31, 0.98);
+  --topbar-bg: rgba(7, 21, 37, 0.72);
+  --topbar-border: rgba(125, 211, 252, 0.16);
+  --topbar-fg: #f8fafc;
+  --topbar-muted: #bfdbfe;
+  --topbar-pill-bg: rgba(15, 40, 72, 0.7);
+  --topbar-pill-border: rgba(56, 189, 248, 0.28);
+  --topbar-pill-hover-border: rgba(125, 211, 252, 0.55);
+  --topbar-icon-hover-bg: rgba(56, 189, 248, 0.12);
+  --topbar-menu-bg: rgba(8, 24, 48, 0.97);
+  --topbar-menu-border: rgba(56, 189, 248, 0.25);
+  --topbar-divider: rgba(125, 211, 252, 0.18);
+  --topbar-avatar-bg: linear-gradient(145deg, #0ea5e9, #1e3a8a);
+  --topbar-avatar-fg: #f0f9ff;
+}
+[data-theme='blueglass'] body {
+  font-family: Manrope, 'Space Grotesk', system-ui, sans-serif;
+  background-color: #071525;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 12% -8%, rgba(56, 189, 248, 0.22), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 88% 10%, rgba(99, 102, 241, 0.14), transparent 50%),
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+  color: #f1f5f9;
+}
+[data-theme='blueglass'] .theme-main,
+[data-theme='blueglass'] .bg-slate-100,
+[data-theme='blueglass'] .bg-mesh-light {
+  background-color: #071525 !important;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 12% -8%, rgba(56, 189, 248, 0.16), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 88% 10%, rgba(99, 102, 241, 0.1), transparent 50%),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px) !important;
+  background-size: auto, auto, 48px 48px, 48px 48px !important;
+}
+[data-theme='blueglass'] .theme-sidebar,
+[data-theme='blueglass'] aside.theme-sidebar {
+  background: linear-gradient(180deg, rgba(4, 16, 31, 0.96), rgba(8, 28, 56, 0.94) 55%, rgba(7, 21, 37, 0.98)) !important;
+  backdrop-filter: blur(18px);
+  border-right-color: rgba(56, 189, 248, 0.2) !important;
+  color: #e2e8f0;
+}
+[data-theme='blueglass'] .theme-sidebar-link.is-active,
+[data-theme='blueglass'] a.theme-sidebar-link.active {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(99, 102, 241, 0.12)) !important;
+  color: #bae6fd !important;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+[data-theme='blueglass'] .theme-sidebar-section {
+  color: #93c5fd !important;
+}
+[data-theme='blueglass'] .theme-topbar {
+  backdrop-filter: blur(18px);
+}
+[data-theme='blueglass'] .card,
+[data-theme='blueglass'] .card-interactive,
+[data-theme='blueglass'] .snap-tile {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(15, 40, 72, 0.55) 45%, rgba(8, 24, 48, 0.75)) !important;
+  border-color: rgba(125, 211, 252, 0.22) !important;
+  color: #f1f5f9;
+  box-shadow: 0 20px 50px -28px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(16px);
+}
+[data-theme='blueglass'] .btn-primary,
+[data-theme='blueglass'] button.btn-primary {
+  background: linear-gradient(135deg, #0ea5e9, #38bdf8 50%, #6366f1) !important;
+  color: #04101f !important;
+  box-shadow: 0 10px 28px -10px rgba(56, 189, 248, 0.65);
+}
+[data-theme='blueglass'] .btn-secondary,
+[data-theme='blueglass'] button.btn-secondary {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(125, 211, 252, 0.28) !important;
+  color: #e0f2fe !important;
+}
+[data-theme='blueglass'] .input,
+[data-theme='blueglass'] input.input,
+[data-theme='blueglass'] select.input,
+[data-theme='blueglass'] textarea.input {
+  background: rgba(4, 16, 31, 0.75) !important;
+  border-color: rgba(125, 211, 252, 0.28) !important;
+  color: #f8fafc !important;
+}
+[data-theme='blueglass'] .text-slate-900,
+[data-theme='blueglass'] .text-slate-800,
+[data-theme='blueglass'] .text-slate-700 {
+  color: #f8fafc !important;
+}
+[data-theme='blueglass'] .text-slate-600,
+[data-theme='blueglass'] .text-slate-500,
+[data-theme='blueglass'] .text-slate-400 {
+  color: #bfdbfe !important;
+}
+[data-theme='blueglass'] .border-slate-200,
+[data-theme='blueglass'] .border-slate-100 {
+  border-color: rgba(125, 211, 252, 0.2) !important;
+}
+[data-theme='blueglass'] .bg-white,
+[data-theme='blueglass'] .bg-white\/90,
+[data-theme='blueglass'] .bg-white\/95,
+[data-theme='blueglass'] .bg-slate-50 {
+  background-color: rgba(15, 40, 72, 0.75) !important;
+}
+[data-theme='blueglass'] .text-brand-600,
+[data-theme='blueglass'] .text-brand-500,
+[data-theme='blueglass'] .text-brand-400 {
+  color: #7dd3fc !important;
+}
+[data-theme='blueglass'] .theme-modal {
+  background: linear-gradient(165deg, rgba(15, 40, 72, 0.97), rgba(4, 16, 31, 0.98)) !important;
+  border-color: rgba(56, 189, 248, 0.28) !important;
+  color: #f1f5f9;
+}
+[data-theme='blueglass'] .data-table thead tr {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.12), rgba(8, 24, 48, 0.7)) !important;
+  color: #bfdbfe !important;
+}
+[data-theme='blueglass'] .data-table td {
+  color: #e2e8f0 !important;
+  border-bottom-color: rgba(125, 211, 252, 0.1) !important;
+}
+[data-theme='blueglass'] .font-display,
+[data-theme='blueglass'] h1,
+[data-theme='blueglass'] h2,
+[data-theme='blueglass'] h3 {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+}
+
+
+/* ── Global readability: muted text must stay legible on dark themes ── */
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-muted,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-section,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-subtitle,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-menu-muted,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-user-meta {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 72%, var(--sidebar-muted, #94a3b8)) !important;
+  opacity: 1 !important;
+}
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .section-title {
+  color: color-mix(in srgb, var(--page-fg, #f1f5f9) 78%, transparent) !important;
+}
+
 /* Extra bg-white/bg-slate-50 opacity variants used around the app that the
    per-theme blocks above didn't catch — left as literal white they combine
    with the force-lightened .text-slate-* rules below to make text vanish. */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
   :is(.bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50, .bg-white\/40, .bg-white\/30,
       .bg-slate-50\/90, .bg-slate-50\/70, .bg-slate-50\/50, .bg-slate-50\/40) {
   background-color: color-mix(in srgb, var(--card-bg, #0f172a) 85%, #fff 15%) !important;

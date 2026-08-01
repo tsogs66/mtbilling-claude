@@ -48,12 +48,15 @@ function hotSetPublicBaseUrl(url: string) {
 function cloudflareLoginHints(url: string) {
   const lan = detectLanBaseUrl() || '';
   const lanIp = detectLanIpv4() || '';
+  const tunnelLogin = url ? `${String(url).replace(/\/$/, '')}/login` : '';
   return {
     payPortalBase: url || '',
-    adminLoginUrl: lan ? `${lan.replace(/\/$/, '')}/login` : lanIp ? `http://${lanIp}/login` : '',
+    /** Preferred staff URL when on-site; tunnel login also works if nginx is full-panel. */
+    adminLoginUrl: lan ? `${lan.replace(/\/$/, '')}/login` : lanIp ? `http://${lanIp}/login` : tunnelLogin,
+    tunnelLoginUrl: tunnelLogin,
     lanIp,
     loginWarning:
-      'Staff panel login stays on the LAN IP. Do not enable Cloudflare Access (Zero Trust Application) or Bot Fight Mode on the tunnel hostname — they block POST /api/login.',
+      'Staff can sign in on the Cloudflare hostname after nginx is healed for full panel. Disable Cloudflare Access (Zero Trust Application) and Bot Fight Mode on that hostname — they block POST /api/login at the edge. LAN IP login always works on-site.',
   };
 }
 
@@ -96,7 +99,9 @@ settingsRouter.put('/settings/app', (req, res) => {
     cur[f] = v;
   }
   // Normalize theme values
-  const theme = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'].includes(cur.theme) ? cur.theme : 'isptech';
+  const theme = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass'].includes(cur.theme)
+    ? cur.theme
+    : 'isptech';
   db.prepare(
     `UPDATE app_settings SET theme=@theme, language=@language, currency=@currency,
        ngrok_enabled=@ngrok_enabled, ngrok_authtoken=@ngrok_authtoken, ngrok_region=@ngrok_region,
@@ -341,6 +346,67 @@ settingsRouter.get('/cloudflare-tunnel/status', async (_req, res) => {
     ...cloudflareLoginHints(url),
     warning: result.stderr || undefined,
   });
+});
+
+/** Heal nginx so the Cloudflare hostname serves full panel (/login + /api/), not pay-only 404s. */
+settingsRouter.post('/cloudflare-tunnel/heal-nginx', async (_req, res) => {
+  const s = getApp();
+  const host = String(s.cf_tunnel_hostname || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .trim();
+  if (!host) return res.status(400).json({ error: 'Set the Cloudflare hostname first.' });
+  const installDir = process.env.INSTALL_DIR || process.env.var_install_dir || '/opt/mt-billing';
+  const script = path.join(installDir, 'install/mt-billing-nginx-staff-host.sh');
+  const candidates = [
+    script,
+    path.resolve(process.cwd(), '../install/mt-billing-nginx-staff-host.sh'),
+    path.resolve(process.cwd(), 'install/mt-billing-nginx-staff-host.sh'),
+  ];
+  const found = candidates.find((p) => fs.existsSync(p));
+  if (!found) return res.status(404).json({ error: 'nginx staff-host script not found on this appliance.' });
+  try {
+    const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+      const tryCmds: [string, string[]][] = [
+        ['sudo', ['-n', '/bin/bash', found, host]],
+        ['sudo', ['-n', '/usr/bin/bash', found, host]],
+        ['/bin/bash', [found, host]],
+      ];
+      const run = (i: number) => {
+        if (i >= tryCmds.length) {
+          resolve({ code: 1, stdout: '', stderr: 'Could not run nginx heal script (need root/sudo).' });
+          return;
+        }
+        const [cmd, args] = tryCmds[i];
+        const child = spawn(cmd, args, { env: process.env });
+        let stdout = '';
+        let stderr = '';
+        child.stdout?.on('data', (d) => {
+          stdout += String(d);
+        });
+        child.stderr?.on('data', (d) => {
+          stderr += String(d);
+        });
+        child.on('error', () => run(i + 1));
+        child.on('close', (code) => {
+          if (code === 0) resolve({ code: 0, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr) });
+          else if (i + 1 < tryCmds.length) run(i + 1);
+          else resolve({ code: code ?? 1, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr) });
+        });
+      };
+      run(0);
+    });
+    if (result.code !== 0) {
+      return res.status(500).json({
+        error: result.stderr || result.stdout || 'nginx heal failed',
+        hint: `Run on the appliance: sudo bash /opt/mt-billing/install/mt-billing-nginx-staff-host.sh ${host}`,
+      });
+    }
+    const url = `https://${host}`;
+    res.json({ ok: true, hostname: host, output: result.stdout, ...cloudflareLoginHints(url) });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'nginx heal failed' });
+  }
 });
 
 settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {

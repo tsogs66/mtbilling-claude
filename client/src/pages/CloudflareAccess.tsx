@@ -8,9 +8,9 @@ import { copyTextOrPrompt } from '../lib/clipboard';
 type TunnelJob = { action: string; log: string; running: boolean; code: number | null; startedAt: number };
 
 /**
- * Cloudflare Tunnel setup: connector token + public pay-portal base URL.
- * Staff panel login stays on the LAN IP — Cloudflare Access / Bot Fight on the
- * tunnel hostname commonly breaks POST /api/login.
+ * Cloudflare Tunnel setup: connector token + public pay-portal / staff URL.
+ * Apply heals nginx so the tunnel hostname serves full panel login (not pay-only).
+ * Cloudflare Access / Bot Fight on the hostname still blocks POST /api/login at the edge.
  */
 export default function CloudflareAccess() {
   const [app, setApp] = useState<any>(null);
@@ -22,6 +22,7 @@ export default function CloudflareAccess() {
   const [warning, setWarning] = useState<string | null>(null);
   const [cloudflareUrl, setCloudflareUrl] = useState<string | null>(null);
   const [adminLoginUrl, setAdminLoginUrl] = useState('');
+  const [tunnelLoginUrl, setTunnelLoginUrl] = useState('');
   const [loginWarning, setLoginWarning] = useState('');
   const [job, setJob] = useState<TunnelJob | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -67,6 +68,10 @@ export default function CloudflareAccess() {
         public_base_url: r.data.public_base_url ?? s?.public_base_url,
       }));
       if (r.data.adminLoginUrl) setAdminLoginUrl(r.data.adminLoginUrl);
+      if (r.data.tunnelLoginUrl) setTunnelLoginUrl(r.data.tunnelLoginUrl);
+      else if (r.data.url || r.data.cf_tunnel_url) {
+        setTunnelLoginUrl(`${String(r.data.url || r.data.cf_tunnel_url).replace(/\/$/, '')}/login`);
+      }
       if (r.data.loginWarning) setLoginWarning(r.data.loginWarning);
       // A stale "Apply failed" banner from an earlier client-side error (e.g. a
       // request that outran a proxy/browser timeout while the install script
@@ -239,11 +244,31 @@ export default function CloudflareAccess() {
       <Flash message={banner} onDismiss={() => setBanner('')} />
 
       <Card className="mb-5 border-amber-200 bg-amber-50/70">
-        <p className="text-sm text-amber-950">
-          <b>Staff login stays on LAN.</b>{' '}
+        <p className="text-sm text-amber-950 mb-3">
+          <b>Staff login on tunnel + LAN.</b>{' '}
           {loginWarning ||
-            'Do not enable Cloudflare Access (Zero Trust Application) or Bot Fight Mode on this tunnel hostname — they block panel login. Use the LAN admin URL below.'}
+            'After Apply, nginx is healed so https://your-tunnel-host/login works. Disable Cloudflare Access (Zero Trust Application) and Bot Fight Mode on this hostname — they block POST /api/login at the edge. Prefer LAN IP when on-site.'}
         </p>
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={busy || !app?.cf_tunnel_hostname}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await api.post('/cloudflare-tunnel/heal-nginx');
+              if (r.data.tunnelLoginUrl) setTunnelLoginUrl(r.data.tunnelLoginUrl);
+              flash('nginx healed — try staff login on the Cloudflare hostname');
+              await refreshStatus();
+            } catch (e: any) {
+              flash(e?.response?.data?.error || e?.response?.data?.hint || 'Could not heal nginx');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <RefreshCw size={16} /> Fix Cloudflare login (heal nginx)
+        </button>
       </Card>
 
       <Card className="mb-5 border-sky-200 bg-sky-50/50">
@@ -280,16 +305,42 @@ export default function CloudflareAccess() {
           )}
         </div>
         <div className="mt-4">
-          <div className="font-semibold text-slate-800 text-sm">Admin login (LAN)</div>
+          <div className="font-semibold text-slate-800 text-sm">Staff login (Cloudflare)</div>
           <p className="text-xs text-slate-500 mt-0.5 mb-2">
-            Use this after installing the tunnel — not the Cloudflare hostname.
+            Works after Apply heals nginx for full panel. Turn off Access / Bot Fight on this host.
+          </p>
+          <div className="flex flex-wrap gap-2 items-center mb-4">
+            <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
+              {tunnelLoginUrl || '(Apply tunnel with a hostname first)'}
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={!tunnelLoginUrl}
+              onClick={async () => {
+                if (!tunnelLoginUrl) return;
+                const ok = await copyTextOrPrompt(tunnelLoginUrl, 'Tunnel staff login — copy:');
+                flash(ok ? 'Tunnel login copied' : 'Copy from the dialog');
+              }}
+            >
+              <Copy size={16} /> Copy tunnel login
+            </button>
+            {tunnelLoginUrl && (
+              <a className="btn-secondary" href={tunnelLoginUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={16} /> Open
+              </a>
+            )}
+          </div>
+          <div className="font-semibold text-slate-800 text-sm">Staff login (LAN)</div>
+          <p className="text-xs text-slate-500 mt-0.5 mb-2">
+            Fastest on-site — always available even if Cloudflare edge blocks login.
           </p>
           <div className="flex flex-wrap gap-2 items-center">
             <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
               {adminLoginUrl || '(Click Refresh status to detect LAN IP)'}
             </div>
             <button type="button" className="btn-secondary" onClick={copyAdminLogin} disabled={!adminLoginUrl}>
-              <Copy size={16} /> Copy admin login
+              <Copy size={16} /> Copy LAN login
             </button>
           </div>
         </div>
