@@ -36,6 +36,7 @@ import JobOrders from './pages/JobOrders';
 import Invoices from './pages/Invoices';
 import Finance from './pages/Finance';
 import ClientPortal from './pages/ClientPortal';
+import PortalAdmin from './pages/PortalAdmin';
 import RogueMacs from './pages/RogueMacs';
 import Twingate from './pages/Twingate';
 import Noc from './pages/Noc';
@@ -114,6 +115,7 @@ export default function App() {
                 <Route path="/rogue-macs" element={<RogueMacs />} />
                 <Route path="/noc" element={<Noc />} />
                 <Route path="/pay-portal" element={<PayPortal />} />
+                <Route path="/subscriber-portal" element={<PortalAdmin />} />
                 <Route path="/usage" element={<UsageStats />} />
                 <Route path="/fair-use" element={<FairUseAlerts />} />
                 <Route path="/routers" element={<Navigate to="/network?tab=routers" replace />} />

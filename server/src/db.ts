@@ -537,6 +537,16 @@ export function migrate() {
     // One-time flag: has FBTC been corrected from the cascaded-coupler model
     // to the single-coupler + internal-1:N-PLC-fan-out model?
     ['fbtc_cassette_model_v2', 'INTEGER DEFAULT 0'],
+    // Subscriber portal (/portal) page copy + feature toggles
+    ['portal_title', "TEXT DEFAULT 'Subscriber Portal'"],
+    ['portal_subtitle', 'TEXT'],
+    ['portal_help_text', "TEXT DEFAULT 'Ask your ISP for portal access (account + PIN).'"],
+    ['portal_welcome_text', 'TEXT'],
+    ['portal_show_balance', 'INTEGER DEFAULT 1'],
+    ['portal_show_invoices', 'INTEGER DEFAULT 1'],
+    ['portal_show_tickets', 'INTEGER DEFAULT 1'],
+    ['portal_show_company', 'INTEGER DEFAULT 1'],
+    ['portal_session_days', 'INTEGER DEFAULT 7'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);

@@ -8,7 +8,7 @@ const PERMISSIONS = [
   'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
   'zerotier', 'twingate', 'noc', 'super-router', 'tech-tools', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
-  'job-orders', 'invoices', 'finance', 'rogue',
+  'job-orders', 'invoices', 'finance', 'portal', 'rogue',
 ];
 
 export default function PanelRoles() {
