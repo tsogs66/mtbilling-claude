@@ -54,11 +54,32 @@ if [[ -f "$HEAL" ]]; then
   bash "$HEAL" once || true
 fi
 
+# Harden + force Cloudflare tunnel back (502 Host Error while LAN works)
+CF_UNIT_PATH="/etc/systemd/system/cloudflared-mt-billing.service"
+if [[ -f "$CF_UNIT_PATH" ]]; then
+  sed -i 's/^\s*Restart=on-failure/Restart=always/' "$CF_UNIT_PATH" 2>/dev/null || true
+  if ! grep -qE '^\s*StartLimitIntervalSec=' "$CF_UNIT_PATH" 2>/dev/null; then
+    sed -i '/^\s*\[Service\]/a StartLimitIntervalSec=0' "$CF_UNIT_PATH" 2>/dev/null || true
+  fi
+  systemctl daemon-reload 2>/dev/null || true
+fi
+
+systemctl reset-failed nginx mt-billing-api cloudflared-mt-billing 2>/dev/null || true
 systemctl try-restart nginx mt-billing-api 2>/dev/null || true
-systemctl try-restart cloudflared-mt-billing 2>/dev/null || true
+systemctl try-restart cloudflared-mt-billing 2>/dev/null \
+  || systemctl start cloudflared-mt-billing 2>/dev/null \
+  || systemctl restart cloudflared-mt-billing 2>/dev/null \
+  || true
 
 echo
 echo "--- status ---"
+systemctl is-active nginx mt-billing-api cloudflared-mt-billing 2>/dev/null || true
+echo
+echo "If Cloudflare still shows 502 Bad gateway / Host Error:"
+echo "  sudo journalctl -u cloudflared-mt-billing -n 50 --no-pager"
+echo "  sudo bash ${INSTALL_DIR}/install/mt-billing-cloudflare-tunnel.sh status"
+echo "Staff login: use the LAN IP (http://<lan-ip>/login), not the Cloudflare hostname."
+echo
 ip -br a 2>/dev/null || ip a | head -40
 echo
 ip route | head -20

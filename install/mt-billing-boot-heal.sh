@@ -50,13 +50,39 @@ stop_twingate_hard() {
   ip route del default dev sdwan0 2>/dev/null || true
 }
 
+harden_cloudflared_unit() {
+  local unit_path="/etc/systemd/system/cloudflared-mt-billing.service"
+  [[ -f "$unit_path" ]] || return 0
+  local changed=0
+  if grep -qE '^\s*Restart=on-failure' "$unit_path" 2>/dev/null; then
+    sed -i 's/^\s*Restart=on-failure/Restart=always/' "$unit_path"
+    changed=1
+  fi
+  if ! grep -qE '^\s*StartLimitIntervalSec=' "$unit_path" 2>/dev/null; then
+    if grep -qE '^\s*\[Service\]' "$unit_path" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a StartLimitIntervalSec=0' "$unit_path"
+      changed=1
+    fi
+  fi
+  if [[ "$changed" == "1" ]]; then
+    log "Hardened cloudflared-mt-billing.service (Restart=always)"
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+}
+
 heal_local_stack() {
   # Keep Cloudflare + panel alive on LAN even if public tunnel was 502
+  harden_cloudflared_unit
   systemctl reset-failed nginx mt-billing-api cloudflared-mt-billing 2>/dev/null || true
   systemctl try-restart nginx 2>/dev/null || systemctl start nginx 2>/dev/null || true
   systemctl try-restart mt-billing-api 2>/dev/null || systemctl start mt-billing-api 2>/dev/null || true
-  if systemctl list-unit-files cloudflared-mt-billing.service >/dev/null 2>&1; then
-    systemctl try-restart cloudflared-mt-billing 2>/dev/null || systemctl start cloudflared-mt-billing 2>/dev/null || true
+  if systemctl cat cloudflared-mt-billing.service >/dev/null 2>&1 \
+    || [[ -s /etc/mt-billing/cloudflared.token ]]; then
+    systemctl reset-failed cloudflared-mt-billing 2>/dev/null || true
+    systemctl try-restart cloudflared-mt-billing 2>/dev/null \
+      || systemctl start cloudflared-mt-billing 2>/dev/null \
+      || systemctl restart cloudflared-mt-billing 2>/dev/null \
+      || true
   fi
 }
 
