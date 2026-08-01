@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
   Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
+  Eye, Printer, Loader2,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -9,6 +10,7 @@ import Logo from '../components/Logo';
 import { PRODUCT_TITLE } from '../branding';
 import { usePortalInstall } from '../lib/portalInstall';
 import { subscribePortalLive } from '../lib/portalLive';
+import { openInvoicePrint } from '../lib/invoicePrint';
 
 const TOKEN_KEY = 'mt_portal_token';
 
@@ -79,6 +81,8 @@ export default function ClientPortal() {
   const [plans, setPlans] = useState<{ id: number; name: string; rateLimit: string; price: number }[]>([]);
   const [planBusy, setPlanBusy] = useState(false);
   const [planMsg, setPlanMsg] = useState('');
+  const [invoiceBusy, setInvoiceBusy] = useState<number | null>(null);
+  const [viewInvoice, setViewInvoice] = useState<any | null>(null);
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
 
   const loadMe = async () => {
@@ -203,6 +207,38 @@ export default function ClientPortal() {
       setPayMsg(err.message || 'Could not open payment page');
     } finally {
       setPayBusy(false);
+    }
+  };
+
+  const fetchInvoiceDetail = async (id: number) => {
+    return portalFetch(`/public/portal/invoices/${id}`);
+  };
+
+  const printInvoice = async (id: number) => {
+    setInvoiceBusy(id);
+    try {
+      const data = await fetchInvoiceDetail(id);
+      openInvoicePrint({
+        company: data.company,
+        invoice: data.invoice,
+        history: data.history || [],
+      });
+    } catch (err: any) {
+      alert(err.message || 'Could not load invoice');
+    } finally {
+      setInvoiceBusy(null);
+    }
+  };
+
+  const viewInvoiceDetail = async (id: number) => {
+    setInvoiceBusy(id);
+    try {
+      const data = await fetchInvoiceDetail(id);
+      setViewInvoice(data);
+    } catch (err: any) {
+      alert(err.message || 'Could not load invoice');
+    } finally {
+      setInvoiceBusy(null);
     }
   };
 
@@ -606,12 +642,15 @@ export default function ClientPortal() {
                   <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
                     <th className="py-2 px-1 font-semibold">Invoice</th>
                     <th className="py-2 px-1 font-semibold">Due</th>
-                    <th className="py-2 px-1 font-semibold text-right">Amount</th>
+                    <th className="py-2 px-1 font-semibold text-right">Balance</th>
                     <th className="py-2 px-1 font-semibold">Status</th>
+                    <th className="py-2 px-1 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(me.invoices || []).map((inv: any) => (
+                  {(me.invoices || [])
+                    .filter((inv: any) => String(inv.status || '') !== 'void')
+                    .map((inv: any) => (
                     <tr key={inv.id} className="border-b border-slate-50 last:border-0">
                       <td className="py-2.5 px-1 font-mono text-xs text-slate-700">{inv.number}</td>
                       <td className="py-2.5 px-1 text-slate-600">{inv.due_date || '—'}</td>
@@ -621,11 +660,33 @@ export default function ClientPortal() {
                       <td className="py-2.5 px-1">
                         <span className="capitalize text-xs font-medium text-slate-600">{inv.status}</span>
                       </td>
+                      <td className="py-2.5 px-1 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-orange-600 px-2 py-1 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
+                          disabled={invoiceBusy === inv.id}
+                          onClick={() => void viewInvoiceDetail(inv.id)}
+                          title="View invoice"
+                        >
+                          {invoiceBusy === inv.id ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-orange-600 px-2 py-1 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
+                          disabled={invoiceBusy === inv.id}
+                          onClick={() => void printInvoice(inv.id)}
+                          title="Print invoice"
+                        >
+                          <Printer size={13} />
+                          Print
+                        </button>
+                      </td>
                     </tr>
                   ))}
-                  {!me.invoices?.length && (
+                  {!me.invoices?.filter((inv: any) => String(inv.status || '') !== 'void').length && (
                     <tr>
-                      <td colSpan={4} className="py-8 text-center text-slate-400">No invoices yet.</td>
+                      <td colSpan={5} className="py-8 text-center text-slate-400">No invoices yet.</td>
                     </tr>
                   )}
                 </tbody>
@@ -778,7 +839,144 @@ export default function ClientPortal() {
         <p className="portal-light text-center text-[11px] text-slate-400 py-4 mt-auto">{PRODUCT_TITLE}</p>
       )}
 
+      {viewInvoice && (
+        <PortalInvoiceModal
+          data={viewInvoice}
+          onClose={() => setViewInvoice(null)}
+          onPrint={() => {
+            openInvoicePrint({
+              company: viewInvoice.company,
+              invoice: viewInvoice.invoice,
+              history: viewInvoice.history || [],
+            });
+          }}
+        />
+      )}
+
       {iosHint && <IosInstallHint onClose={dismissIosHint} />}
+    </div>
+  );
+}
+
+function PortalInvoiceModal({
+  data,
+  onClose,
+  onPrint,
+}: {
+  data: any;
+  onClose: () => void;
+  onPrint: () => void;
+}) {
+  const inv = data.invoice || {};
+  const balance = Math.max(0, Number(inv.amount || 0) - Number(inv.amount_paid || 0));
+  const payments = data.payments || data.history || [];
+  const company = data.company || {};
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <button type="button" className="absolute inset-0 bg-slate-950/60" onClick={onClose} aria-label="Close" />
+      <div className="portal-light relative w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl bg-white shadow-2xl max-h-[90dvh] overflow-y-auto text-slate-900">
+        <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-100 px-5 py-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Invoice</div>
+            <h3
+              className="text-xl font-bold text-slate-900 font-mono"
+              style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+            >
+              {inv.number || '—'}
+            </h3>
+            <span className="inline-block mt-1 text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
+              {inv.status || 'unpaid'}
+            </span>
+          </div>
+          <button type="button" className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {company.name && (
+            <div className="text-sm text-slate-600">
+              <div className="font-semibold text-slate-900">{company.name}</div>
+              {company.address && <div className="text-xs text-slate-500 mt-0.5">{company.address}</div>}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Bill to</div>
+              <div className="font-semibold text-slate-900 mt-0.5">{inv.customer_name || '—'}</div>
+              <div className="text-xs text-slate-500 font-mono">#{inv.account_number || '—'}</div>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Period</div>
+              <div className="text-slate-800 mt-0.5">
+                {inv.period_start || '—'} → {inv.period_end || '—'}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">Due {inv.due_date || '—'}</div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-3">
+            <div className="flex justify-between text-sm py-1">
+              <span className="text-slate-600">Service charge</span>
+              <span className="font-medium tabular-nums">{peso(inv.amount)}</span>
+            </div>
+            <div className="flex justify-between text-sm py-1">
+              <span className="text-slate-600">Amount paid</span>
+              <span className="font-medium tabular-nums">{peso(inv.amount_paid)}</span>
+            </div>
+            <div className="flex justify-between text-base font-bold pt-2 mt-1 border-t border-slate-100">
+              <span>Balance due</span>
+              <span className={`tabular-nums ${balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                {peso(balance)}
+              </span>
+            </div>
+            {inv.notes && <p className="text-xs text-slate-500 mt-2">{inv.notes}</p>}
+          </div>
+
+          {payments.length > 0 && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">
+                Payment history
+              </div>
+              <ul className="space-y-1.5 text-sm">
+                {payments.map((p: any, i: number) => (
+                  <li
+                    key={p.id || i}
+                    className="flex justify-between gap-3 rounded-lg border border-slate-100 px-3 py-2"
+                  >
+                    <div>
+                      <div className="capitalize text-slate-800">{p.method || 'Payment'}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {String(p.paid_at || p.created_at || '').replace('T', ' ').slice(0, 16)}
+                      </div>
+                    </div>
+                    <div className="font-semibold tabular-nums text-slate-900">{peso(p.amount)}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 bg-white border-t border-slate-100 px-5 py-3 flex gap-2">
+          <button
+            type="button"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-700 font-semibold py-2.5 text-sm hover:bg-slate-50"
+            onClick={onClose}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 text-sm"
+            onClick={onPrint}
+          >
+            <Printer size={16} /> Print
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
