@@ -125,15 +125,19 @@ run_once() {
   st="$(tg_status)"
   ns="$(first_nameserver)"
 
+  local dns_or_route_fixed=0
+
   # Always reclaim DNS if Twingate shoved 100.95.* to the front
   if [[ "${ns:-}" == 100.95.* ]]; then
     log "WATCHDOG: first DNS is ${ns} (Twingate) — rewriting public/local first"
     rewrite_safe_dns
+    dns_or_route_fixed=1
   fi
 
   if default_via_sdwan; then
     log "WATCHDOG: default route via sdwan0 — restoring uplink"
     restore_uplink
+    dns_or_route_fixed=1
   fi
 
   # Client unhealthy for too long while DNS/gateway broken → full restore
@@ -201,6 +205,7 @@ run_once() {
       echo "nameserver 9.9.9.9"
     } >/etc/resolv.conf
     restore_uplink
+    dns_or_route_fixed=1
     if pgrep -x twingated >/dev/null 2>&1 || systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
       emergency_stop_twingate
     fi
@@ -208,10 +213,21 @@ run_once() {
 
   # Keep local panel + Cloudflare tunnel up (502 Bad gateway = host side dead)
   ensure_local_panel
+  # Critical: Cloudflare Host Error / 502 often happens while LAN :80 is fine
+  # (cloudflared died, StartLimitHit, or connector stuck). Probe tunnel separately.
+  ensure_cloudflare_tunnel
+  # After DNS/route surgery, force a reconnect — cloudflared often stays half-dead
+  if [[ "$dns_or_route_fixed" == "1" ]]; then
+    bounce_cloudflared "DNS/route repaired — reconnect tunnel to Cloudflare edge"
+  fi
 }
 
 FAIL_FILE="${MT_CONF}/watchdog-panel-fail.count"
 REBOOT_STAMP="${MT_CONF}/watchdog-last-reboot"
+CF_UNIT="cloudflared-mt-billing.service"
+CF_TOKEN_FILE="${MT_CONF}/cloudflared.token"
+CF_BOUNCE_STAMP="${MT_CONF}/watchdog-cloudflared-bounce"
+CF_UNIT_PATH="/etc/systemd/system/${CF_UNIT}"
 
 panel_local_ok() {
   if command -v curl >/dev/null 2>&1; then
@@ -219,6 +235,107 @@ panel_local_ok() {
   fi
   timeout 2 bash -c 'echo >/dev/tcp/127.0.0.1/80' 2>/dev/null && return 0
   return 1
+}
+
+cloudflared_wanted() {
+  # Unit present and (enabled or token on disk) → we should keep the tunnel up
+  [[ -f "$CF_UNIT_PATH" ]] || systemctl cat "$CF_UNIT" >/dev/null 2>&1 || return 1
+  if systemctl is-enabled --quiet "$CF_UNIT" 2>/dev/null; then
+    return 0
+  fi
+  [[ -s "$CF_TOKEN_FILE" ]] && return 0
+  return 1
+}
+
+cloudflared_bounce_allowed() {
+  local last now
+  last="$(cat "$CF_BOUNCE_STAMP" 2>/dev/null || echo 0)"
+  now="$(date +%s)"
+  # At most one intentional bounce every 90s (timer is ~30s)
+  [[ $((now - last)) -ge 90 ]]
+}
+
+bounce_cloudflared() {
+  local reason="${1:-restart}"
+  cloudflared_wanted || return 0
+  cloudflared_bounce_allowed || {
+    log "WATCHDOG: cloudflared bounce skipped (cooldown) — ${reason}"
+    return 0
+  }
+  date +%s >"$CF_BOUNCE_STAMP"
+  log "WATCHDOG: bouncing cloudflared (${reason}) — clears Cloudflare 502 Host Error"
+  systemctl reset-failed "$CF_UNIT" 2>/dev/null || true
+  # Prefer restart; start if inactive / StartLimitHit left it dead
+  if systemctl is-active --quiet "$CF_UNIT" 2>/dev/null; then
+    systemctl try-restart "$CF_UNIT" 2>/dev/null || systemctl restart "$CF_UNIT" 2>/dev/null || true
+  else
+    systemctl start "$CF_UNIT" 2>/dev/null || systemctl restart "$CF_UNIT" 2>/dev/null || true
+  fi
+}
+
+# Process running but not registered with Cloudflare edge → public hostname 502s
+cloudflared_connection_stale() {
+  systemctl is-active --quiet "$CF_UNIT" 2>/dev/null || return 1
+  # Give a fresh start time to connect
+  local active_enter now age
+  active_enter="$(systemctl show -p ActiveEnterTimestamp --value "$CF_UNIT" 2>/dev/null || true)"
+  now="$(date +%s)"
+  if [[ -n "$active_enter" && "$active_enter" != "n/a" ]]; then
+    local enter_epoch
+    enter_epoch="$(date -d "$active_enter" +%s 2>/dev/null || echo 0)"
+    age=$((now - enter_epoch))
+    # Still connecting
+    [[ "$age" -lt 90 ]] && return 1
+  fi
+  # Recent successful registration?
+  if journalctl -u "$CF_UNIT" --since "4 min ago" --no-pager -o cat 2>/dev/null \
+    | grep -Eiq 'Registered tunnel connection|Connected to the Cloudflare edge|connIndex='; then
+    return 1
+  fi
+  # Explicit disconnect / auth / network failures
+  if journalctl -u "$CF_UNIT" --since "4 min ago" --no-pager -o cat 2>/dev/null \
+    | grep -Eiq 'Unable to (reach|dial)|connection refused|no such host|context deadline exceeded|Unauthorized|failed to (serve|connect)|tunnel .+ error'; then
+    return 0
+  fi
+  # Up >2 min with no registration line at all → treat as stuck (classic CF 502)
+  if [[ "${age:-0}" -ge 120 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+harden_cloudflared_unit() {
+  [[ -f "$CF_UNIT_PATH" ]] || return 0
+  local changed=0
+  if grep -qE '^\s*Restart=on-failure' "$CF_UNIT_PATH" 2>/dev/null; then
+    sed -i 's/^\s*Restart=on-failure/Restart=always/' "$CF_UNIT_PATH"
+    changed=1
+  fi
+  if ! grep -qE '^\s*StartLimitIntervalSec=' "$CF_UNIT_PATH" 2>/dev/null; then
+    # Avoid permanent "failed" after a burst of crashes (common CF 502 cause)
+    if grep -qE '^\s*\[Service\]' "$CF_UNIT_PATH" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a StartLimitIntervalSec=0' "$CF_UNIT_PATH"
+      changed=1
+    fi
+  fi
+  if [[ "$changed" == "1" ]]; then
+    log "WATCHDOG: hardened ${CF_UNIT} (Restart=always, unlimited restart)"
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+}
+
+ensure_cloudflare_tunnel() {
+  harden_cloudflared_unit
+  cloudflared_wanted || return 0
+
+  if ! systemctl is-active --quiet "$CF_UNIT" 2>/dev/null; then
+    bounce_cloudflared "unit inactive/failed (LAN may still work — Cloudflare shows 502)"
+    return 0
+  fi
+
+  if cloudflared_connection_stale; then
+    bounce_cloudflared "connector up but no edge registration"
+  fi
 }
 
 ensure_local_panel() {
@@ -233,11 +350,11 @@ ensure_local_panel() {
   echo "$fails" >"$FAIL_FILE"
   log "WATCHDOG: local panel :80 not OK (fail #${fails}) — restarting nginx/api/cloudflared"
 
-  systemctl reset-failed nginx mt-billing-api cloudflared-mt-billing 2>/dev/null || true
+  systemctl reset-failed nginx mt-billing-api "$CF_UNIT" 2>/dev/null || true
   systemctl try-restart nginx 2>/dev/null || systemctl start nginx 2>/dev/null || true
   systemctl try-restart mt-billing-api 2>/dev/null || systemctl start mt-billing-api 2>/dev/null || true
-  if systemctl list-unit-files cloudflared-mt-billing.service >/dev/null 2>&1; then
-    systemctl try-restart cloudflared-mt-billing 2>/dev/null || systemctl start cloudflared-mt-billing 2>/dev/null || true
+  if cloudflared_wanted; then
+    bounce_cloudflared "local panel down"
   fi
 
   # After ~5 minutes of continuous failure (10 x 30s), soft-reboot once/hour
@@ -293,6 +410,7 @@ EOF
 
   systemctl daemon-reload
   systemctl enable --now "$WATCH_TIMER"
+  harden_cloudflared_unit
   log "Installed and started ${WATCH_TIMER}"
   echo "OK: ${WATCH_TIMER} enabled (every 60s). Log: ${LOG}"
 }

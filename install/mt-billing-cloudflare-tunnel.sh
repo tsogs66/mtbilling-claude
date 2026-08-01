@@ -433,8 +433,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-Restart=on-failure
+# always: recover from crashes / StartLimitHit that otherwise leave CF at 502 Host Error
+Restart=always
 RestartSec=5
+StartLimitIntervalSec=0
 # Prefer wrapper (reads token file); EnvironmentFile is a backup for TUNNEL_TOKEN
 EnvironmentFile=-${ENV_TOKEN_FILE}
 ExecStart=${WRAPPER}

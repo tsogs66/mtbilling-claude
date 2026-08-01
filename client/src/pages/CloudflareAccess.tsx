@@ -387,6 +387,14 @@ export default function CloudflareAccess() {
           </div>
         </div>
 
+        <p className="text-xs text-slate-500 mb-4 max-w-2xl">
+          Cloudflare <strong>502 Bad gateway / Host Error</strong> means this PC/RPi stopped answering the tunnel
+          (often after Twingate DNS changes). Staff login stays on the{' '}
+          <strong>LAN IP</strong>. On the appliance console:{' '}
+          <code className="text-[11px] bg-slate-100 px-1 rounded">sudo bash /opt/mt-billing/install/mt-billing-net-rescue.sh</code>
+          {' '}— then Update the panel so the network watchdog can auto-restart cloudflared.
+        </p>
+
         {job && (
           <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 mb-4">
             <div className="flex items-center justify-between mb-2 gap-2">
