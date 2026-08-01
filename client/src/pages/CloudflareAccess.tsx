@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { Cloud, Copy, ExternalLink, Globe2, Loader2, RefreshCw, Save } from 'lucide-react';
+import { Cloud, Copy, ExternalLink, Globe2, Loader2, RefreshCw, Save, ShieldAlert } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Flash, FormField, LoadingPage, Progress, StatusBadge } from '../components/ui';
 import { api } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
 
 type TunnelJob = { action: string; log: string; running: boolean; code: number | null; startedAt: number };
+
+type AccessCompare = {
+  match: boolean | null;
+  message?: string;
+  local?: { hostname?: string; nocDevices?: number; pppoeUsers?: number; routers?: number; id?: string };
+  remote?: { hostname?: string; nocDevices?: number; pppoeUsers?: number; routers?: number; id?: string } | null;
+  remoteUrl?: string | null;
+};
 
 /**
  * Cloudflare Tunnel setup: connector token + public pay-portal / staff URL.
@@ -26,6 +34,8 @@ export default function CloudflareAccess() {
   const [loginWarning, setLoginWarning] = useState('');
   const [job, setJob] = useState<TunnelJob | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [compare, setCompare] = useState<AccessCompare | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
   const jobPollRef = useRef<number | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
 
@@ -85,10 +95,20 @@ export default function CloudflareAccess() {
     }
   };
 
+  const runCompare = () => {
+    setCompareBusy(true);
+    api
+      .get('/access/compare', { timeout: 15000 })
+      .then((r) => setCompare(r.data))
+      .catch(() => setCompare(null))
+      .finally(() => setCompareBusy(false));
+  };
+
   const load = () => {
     loadApp().catch(() => setApp({}));
     loadPublic().catch(() => undefined);
     void refreshStatus();
+    runCompare();
   };
 
   useEffect(() => {
@@ -242,6 +262,76 @@ export default function CloudflareAccess() {
   return (
     <Layout title="Cloudflare Tunnel">
       <Flash message={banner} onDismiss={() => setBanner('')} />
+
+      <Card
+        className={`mb-5 ${
+          compare?.match === false
+            ? 'border-rose-300 bg-rose-50/80'
+            : compare?.match === true
+              ? 'border-emerald-200 bg-emerald-50/60'
+              : 'border-slate-200'
+        }`}
+      >
+        <div className="flex items-start gap-3 mb-3">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              compare?.match === false ? 'bg-rose-100 text-rose-600' : 'bg-sky-50 text-sky-600'
+            }`}
+          >
+            <ShieldAlert size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-slate-800">Same machine check (LAN vs Cloudflare)</div>
+            <p className="text-sm text-slate-600 mt-0.5">
+              If NOC / Dashboard look different on your LAN IP vs the tunnel hostname, the tunnel is usually
+              installed on <b>another</b> PC/USB image. Both URLs must show the same hostname and counts.
+            </p>
+          </div>
+          <button type="button" className="btn-secondary shrink-0" disabled={compareBusy} onClick={runCompare}>
+            <RefreshCw size={16} className={compareBusy ? 'animate-spin' : ''} /> Compare now
+          </button>
+        </div>
+        {compare && (
+          <div className="grid sm:grid-cols-2 gap-3 text-sm">
+            <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">This panel (where you are logged in)</div>
+              <div className="font-mono text-slate-800 mt-1">{compare.local?.hostname || '—'}</div>
+              <div className="text-xs text-slate-500 mt-1">
+                {compare.local?.nocDevices ?? '—'} NOC · {compare.local?.pppoeUsers ?? '—'} PPPoE ·{' '}
+                {compare.local?.routers ?? '—'} routers
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white/70 px-3 py-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cloudflare hostname</div>
+              <div className="font-mono text-slate-800 mt-1">{compare.remote?.hostname || 'unreachable'}</div>
+              <div className="text-xs text-slate-500 mt-1">
+                {compare.remote
+                  ? `${compare.remote.nocDevices ?? '—'} NOC · ${compare.remote.pppoeUsers ?? '—'} PPPoE · ${compare.remote.routers ?? '—'} routers`
+                  : compare.remoteUrl || 'No public hostname'}
+              </div>
+            </div>
+          </div>
+        )}
+        {compare?.message && (
+          <p
+            className={`mt-3 text-sm ${
+              compare.match === false ? 'text-rose-800' : compare.match === true ? 'text-emerald-800' : 'text-slate-600'
+            }`}
+          >
+            {compare.message}
+          </p>
+        )}
+        {compare?.match === false && (
+          <ol className="mt-3 text-sm text-rose-950 list-decimal pl-5 space-y-1">
+            <li>
+              On the machine with the <b>full</b> data (more NOC devices), open <b>Cloudflare Tunnel</b> and paste the
+              connector token → Install &amp; connect.
+            </li>
+            <li>In Cloudflare Zero Trust, point the public hostname at <code className="font-mono">http://127.0.0.1:80</code> on that same machine.</li>
+            <li>Stop / uninstall the tunnel on the other host (e.g. USB flash image) so it stops serving the old DB.</li>
+          </ol>
+        )}
+      </Card>
 
       <Card className="mb-5 border-amber-200 bg-amber-50/70">
         <p className="text-sm text-amber-950 mb-3">
