@@ -183,6 +183,14 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 86400;
+        add_header Cache-Control "private, no-store, no-cache, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /index.html =404;
     }
 
     # Pay SPA — avoid 403 when dist/pay/ exists as a static directory

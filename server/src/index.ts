@@ -7,10 +7,10 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
-import { db, initSchema, seed, migrate } from './db.js';
+import { db, dbPath, initSchema, seed, migrate } from './db.js';
 import {
   signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable,
-  signPendingTotpToken, verifyPendingTotpToken, type AuthedRequest,
+  signPendingTotpToken, verifyPendingTotpToken, tokenNeedsRefresh, type AuthedRequest,
 } from './auth.js';
 import { verifyTotpToken } from './totp.js';
 import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
@@ -236,6 +236,16 @@ if (corsOrigins.length) {
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
+// Never let Cloudflare / intermediate proxies cache authenticated API JSON —
+// LAN vs tunnel looking "different" is almost always a stale edge cache.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Vary', 'Authorization, Cookie');
+  next();
+});
+
 const PORT = Number(process.env.PORT) || 4000;
 
 // ---- Auth ----
@@ -307,7 +317,16 @@ app.get('/api/me', requireAuth, (req: AuthedRequest, res) => {
     | { id: number; username: string; role: string }
     | undefined;
   if (!row) return res.status(401).json({ error: 'user not found' });
-  res.json(sessionPayload(row));
+  const session = sessionPayload(row);
+  // Sliding refresh so long ops sessions don't die at a hard 12h cliff.
+  const auth = String(req.headers.authorization || '');
+  const presented = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (presented && tokenNeedsRefresh(presented)) {
+    const token = signToken({ id: row.id, username: row.username, role: row.role });
+    res.setHeader('X-Mt-Token', token);
+    return res.json({ ...session, token });
+  }
+  res.json(session);
 });
 
 // Public: panel hardware ID for license / password-reset activator tools
@@ -436,6 +455,21 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 /** Public liveness probe — Updater UI polls this without an Authorization header. */
 app.get('/api/health', (_req, res) => {
   const a = getApplianceProfile();
+  // Fingerprint so operators can confirm LAN IP and Cloudflare hostname hit the same DB.
+  let dbMtimeMs: number | null = null;
+  let pppoeUsers = 0;
+  let routers = 0;
+  try {
+    dbMtimeMs = fs.statSync(dbPath).mtimeMs;
+  } catch {
+    /* ignore */
+  }
+  try {
+    pppoeUsers = Number((db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as { c: number })?.c || 0);
+    routers = Number((db.prepare('SELECT COUNT(*) AS c FROM routers').get() as { c: number })?.c || 0);
+  } catch {
+    /* ignore */
+  }
   res.json({
     ok: true,
     ts: Date.now(),
@@ -449,6 +483,13 @@ app.get('/api/health', (_req, res) => {
     pollHintMs: a.appliance
       ? { map: 45_000, hotspot: 30_000, pppoeUsers: 20_000, pppoeActive: 4_000 }
       : { map: 15_000, hotspot: 15_000, pppoeUsers: 12_000, pppoeActive: 2_000 },
+    instance: {
+      hostname: os.hostname(),
+      pid: process.pid,
+      dbMtimeMs,
+      pppoeUsers,
+      routers,
+    },
   });
 });
 

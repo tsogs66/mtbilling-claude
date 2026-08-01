@@ -73,15 +73,46 @@ publicApi.interceptors.request.use((config) => {
   return config;
 });
 
+function isApiJsonUnauthorized(err: any): boolean {
+  if (err?.response?.status !== 401) return false;
+  const ct = String(err?.response?.headers?.['content-type'] || err?.response?.headers?.['Content-Type'] || '');
+  // Cloudflare Access / WAF / HTML error pages often return 401/403 with text/html —
+  // never treat those as "session expired" or we bounce staff to /login mid-work.
+  if (ct && !/application\/json/i.test(ct)) return false;
+  const data = err?.response?.data;
+  if (data == null) return false;
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data);
+      return !!(parsed && (parsed.error || parsed.message || parsed.code));
+    } catch {
+      return false;
+    }
+  }
+  return typeof data === 'object';
+}
+
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // Sliding session: server may attach a fresh JWT when the current one is aging.
+    const refreshed =
+      res?.headers?.['x-mt-token'] ||
+      res?.headers?.['X-Mt-Token'] ||
+      (res?.data && typeof res.data === 'object' ? (res.data as any).token : null);
+    if (typeof refreshed === 'string' && refreshed.length > 20 && localStorage.getItem('mt_token')) {
+      localStorage.setItem('mt_token', refreshed);
+    }
+    return res;
+  },
   (err) => {
     const url = String(err?.config?.url || '');
     // Never wipe an existing session because a login/auth attempt returned 401
     // (wrong password, expired 2FA pending token, etc.).
     const isAuthAttempt =
       /(^|\/)login(\/|$|\?)/i.test(url) || /\/auth\//i.test(url) || /\/login\/totp\b/i.test(url);
-    if (err?.response?.status === 401 && localStorage.getItem('mt_token') && !isAuthAttempt) {
+    // Network blips / Cloudflare edge errors must not clear the session.
+    if (!err?.response) return Promise.reject(err);
+    if (err?.response?.status === 401 && localStorage.getItem('mt_token') && !isAuthAttempt && isApiJsonUnauthorized(err)) {
       localStorage.removeItem('mt_token');
       localStorage.removeItem('mt_licensed');
       localStorage.removeItem('mt_can_write');

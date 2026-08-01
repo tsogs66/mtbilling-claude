@@ -86,55 +86,62 @@ export function buildBrandedEmail(opts: {
     opts.bodyHtml ||
     (opts.plainText ? `<div style="font-size:14px;line-height:1.55;color:#111827;">${nl2br(opts.plainText)}</div>` : '');
 
+  // Plain-text body only — no company-name header/footer under the message.
   const textParts = [
-    company.name,
     opts.plainText || stripTags(opts.bodyHtml || ''),
-    '',
-    [company.address, company.phone || '', company.email].filter(Boolean).join('\n'),
     showUnofficial ? '' : null,
     showUnofficial ? 'This is not an official receipt / formal notice unless stated otherwise.' : null,
   ].filter((p) => p != null && String(p).length);
 
   const logoBlock = logoCid
-    ? `<img src="cid:${logoCid}" alt="${name}" width="72" height="72" style="display:block;margin:0 auto 10px;max-width:72px;height:auto;border:0;border-radius:10px;" />`
+    ? `<img src="cid:${logoCid}" alt="${name || 'Logo'}" width="72" height="72" style="display:block;margin:0 auto 10px;max-width:72px;height:auto;border:0;border-radius:10px;" />`
     : '';
 
   const unofficialFooter = showUnofficial
     ? `<div style="font-size:11px;font-weight:700;margin-top:12px;text-transform:uppercase;color:#111827;">This is not an official receipt</div>`
     : '';
 
+  // Contact details (address/phone/email) stay optional for receipts; company NAME
+  // is intentionally omitted below the message per operator request.
+  const contactFooter =
+    address || phone || email || unofficialFooter
+      ? `<tr>
+            <td style="padding:16px 24px 22px;background:#f8fafc;border-top:1px solid #e5e7eb;text-align:center;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+              ${address ? `<div style="font-size:12px;line-height:1.4;margin:2px 0;">${address}</div>` : ''}
+              ${phone ? `<div style="font-size:12px;margin:2px 0;line-height:1.4;">${phone}</div>` : ''}
+              ${email ? `<div style="font-size:12px;margin:2px 0;">${email}</div>` : ''}
+              ${unofficialFooter}
+            </td>
+          </tr>`
+      : '';
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(opts.subject || company.name)}</title>
+  <title>${escapeHtml(opts.subject || 'Notice')}</title>
 </head>
 <body style="margin:0;padding:0;background:#f3f4f6;color:#111827;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 12px;">
     <tr>
       <td align="center">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
-          <tr>
+          ${
+            logoBlock
+              ? `<tr>
             <td style="padding:22px 24px 16px;text-align:center;background:#0f172a;color:#ffffff;">
               ${logoBlock}
-              <div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;font-weight:800;letter-spacing:0.02em;text-transform:uppercase;color:#ffffff;">${name}</div>
             </td>
-          </tr>
+          </tr>`
+              : ''
+          }
           <tr>
             <td style="padding:22px 24px;font-family:Arial,Helvetica,sans-serif;color:#111827;">
               ${bodyHtml}
             </td>
           </tr>
-          <tr>
-            <td style="padding:16px 24px 22px;background:#f8fafc;border-top:1px solid #e5e7eb;text-align:center;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-              <div style="font-size:13px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${name}</div>
-              ${address ? `<div style="font-size:12px;line-height:1.4;margin:2px 0;">${address}</div>` : ''}
-              ${phone ? `<div style="font-size:12px;margin:2px 0;line-height:1.4;">${phone}</div>` : ''}
-              ${email ? `<div style="font-size:12px;margin:2px 0;">${email}</div>` : ''}
-              ${unofficialFooter}
-            </td>
-          </tr>
+          ${contactFooter}
         </table>
       </td>
     </tr>

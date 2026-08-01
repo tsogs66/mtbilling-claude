@@ -73,12 +73,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api
       .get('/me')
       .then((r) => {
+        if (typeof r.data?.token === 'string' && r.data.token) {
+          localStorage.setItem('mt_token', r.data.token);
+        }
         const u = normalizeUser(r.data.user);
         persistSessionFlags(u);
         setUser(u);
       })
-      .catch(() => {
-        clearSessionFlags();
+      .catch((err) => {
+        // Only clear session on a real API 401 JSON. Network blips, CF edge HTML,
+        // and 5xx must not log the operator out while they are working.
+        const status = err?.response?.status;
+        const ct = String(err?.response?.headers?.['content-type'] || '');
+        const isJson401 = status === 401 && (!ct || /application\/json/i.test(ct));
+        if (isJson401) clearSessionFlags();
       })
       .finally(() => setLoading(false));
   }, []);

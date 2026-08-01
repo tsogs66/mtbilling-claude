@@ -83,7 +83,7 @@ export default function Notifications() {
   const [target, setTarget] = useState<'all' | 'selected'>('all');
   const [selected, setSelected] = useState<number[]>([]);
   const [clientSearch, setClientSearch] = useState('');
-  const [subject, setSubject] = useState('Notice from Pa-North');
+  const [subject, setSubject] = useState('Notice');
   const [message, setMessage] = useState('');
   const [banner, setBanner] = useState('');
   const [bannerType, setBannerType] = useState<'success' | 'error' | 'info'>('success');
@@ -276,11 +276,6 @@ export default function Notifications() {
             )}
             <FormField label="Message">
               <textarea className="input min-h-[110px]" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type your announcement or reminder…" />
-              {(channel === 'sms' || channel === 'both') && (
-                <p className="text-xs text-slate-400 mt-1">
-                  SMS messages automatically end with your company name as a signature (from <strong>Company</strong> settings), e.g. <code>— Pa-North Fiber Internet</code>.
-                </p>
-              )}
             </FormField>
 
             {/* Live preview of what subscribers will receive */}
@@ -315,7 +310,6 @@ export default function Notifications() {
                   </div>
                   <div className="rounded-2xl rounded-bl-md bg-white border border-emerald-100 px-3 py-2 text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
                     {previewFill(message) || <span className="text-slate-400 italic">SMS text…</span>}
-                    <div className="text-xs text-slate-400 mt-2">— (company name signature appended on send)</div>
                   </div>
                   <div className="text-[11px] text-slate-400 mt-2 text-right">
                     ~{previewFill(message).length} chars
