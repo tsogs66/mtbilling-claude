@@ -89,17 +89,28 @@ function isApiJsonUnauthorized(err: any): boolean {
       return false;
     }
   }
-  return typeof data === 'object';
+  // Require an explicit API error payload — not an empty object / HTML-as-object quirk.
+  return (
+    typeof data === 'object' &&
+    !!(data.error || data.message || data.code)
+  );
+}
+
+/** JWT session tokens are compact JWS (header.payload.sig) — never payment-link ids. */
+function looksLikeSessionJwt(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 40) return false;
+  const parts = value.split('.');
+  return parts.length === 3 && parts.every((p) => p.length > 0);
 }
 
 api.interceptors.response.use(
   (res) => {
-    // Sliding session: server may attach a fresh JWT when the current one is aging.
-    const refreshed =
-      res?.headers?.['x-mt-token'] ||
-      res?.headers?.['X-Mt-Token'] ||
-      (res?.data && typeof res.data === 'object' ? (res.data as any).token : null);
-    if (typeof refreshed === 'string' && refreshed.length > 20 && localStorage.getItem('mt_token')) {
+    // Sliding session: ONLY trust the dedicated header. Never read res.data.token —
+    // payment links and other APIs also return a `token` field and that was
+    // overwriting the JWT, causing instant logout right after login.
+    const headers = res?.headers || {};
+    const refreshed = headers['x-mt-token'] || headers['X-Mt-Token'];
+    if (looksLikeSessionJwt(refreshed) && localStorage.getItem('mt_token')) {
       localStorage.setItem('mt_token', refreshed);
     }
     return res;
