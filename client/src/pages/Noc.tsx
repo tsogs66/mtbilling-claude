@@ -61,6 +61,7 @@ export default function Noc() {
   const [detail, setDetail] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'online' | 'offline' | 'custom'>('all');
   const [sshOpen, setSshOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -69,17 +70,27 @@ export default function Noc() {
 
   const load = (live = false) => {
     setBusy(true);
+    setLoadError(null);
+    // Short timeout — never leave the page on infinite Loading… if API/tunnel is wedged
     return Promise.all([
-      api.get('/noc', { params: live ? { live: 1 } : {} }),
-      api.get('/noc/health', { params: { hours: 24 } }),
+      api.get('/noc', { params: live ? { live: 1 } : {}, timeout: 12000 }),
+      api.get('/noc/health', { params: { hours: 24 }, timeout: 12000 }),
     ])
       .then(([nocRes, healthRes]) => {
         setData(nocRes.data);
         setHealth(healthRes.data);
+        setLoadError(null);
       })
-      .catch(() => {
-        setData({ devices: [], counts: { total: 0, online: 0, offline: 0, unknown: 0 } });
-        setHealth({ devices: [] });
+      .catch((e: any) => {
+        setData((prev: any) =>
+          prev || { devices: [], counts: { total: 0, online: 0, offline: 0, unknown: 0 } }
+        );
+        setHealth((prev: any) => prev || { devices: [] });
+        setLoadError(
+          e?.code === 'ECONNABORTED'
+            ? 'NOC API timed out — the panel may be busy or the tunnel is down. Try LAN IP, or wait and Retry.'
+            : 'Could not load NOC data. If the whole panel feels hung, open by LAN IP and restart mt-billing-api.'
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -200,7 +211,16 @@ export default function Noc() {
   if (!data) {
     return (
       <Layout title="NOC">
-        <LoadingPage />
+        {loadError ? (
+          <Card className="max-w-xl" interactive>
+            <p className="text-sm text-rose-700 mb-3">{loadError}</p>
+            <button type="button" className="btn-primary text-sm" onClick={() => load(false)} disabled={busy}>
+              <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Retry
+            </button>
+          </Card>
+        ) : (
+          <LoadingPage />
+        )}
       </Layout>
     );
   }
@@ -220,6 +240,14 @@ export default function Noc() {
 
   return (
     <Layout title="NOC">
+      {loadError && (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 flex flex-wrap items-center justify-between gap-2">
+          <span>{loadError}</span>
+          <button type="button" className="btn-secondary text-xs py-1" onClick={() => load(false)} disabled={busy}>
+            Retry
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <PageHeader
           title="NOC Suite"
