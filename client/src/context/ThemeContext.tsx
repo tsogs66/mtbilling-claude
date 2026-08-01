@@ -5,25 +5,40 @@ export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech';
 export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'];
 
 const STORAGE_KEY = 'mt_theme';
+/** One-time migrate panel chrome to landing-snapshot ISP Tech look. */
+const MIGRATION_KEY = 'mt_theme_snapshot_v1';
+const DEFAULT_THEME: ThemeId = 'isptech';
 
 interface ThemeCtx {
   theme: ThemeId;
   setTheme: (t: ThemeId) => void;
 }
 
-const Ctx = createContext<ThemeCtx>({ theme: 'light', setTheme: () => undefined });
+const Ctx = createContext<ThemeCtx>({ theme: DEFAULT_THEME, setTheme: () => undefined });
 
 function applyTheme(theme: ThemeId) {
   document.documentElement.setAttribute('data-theme', theme);
   document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeId>(() => {
+function resolveInitialTheme(): ThemeId {
+  try {
+    const migrated = localStorage.getItem(MIGRATION_KEY);
+    if (!migrated) {
+      localStorage.setItem(MIGRATION_KEY, '1');
+      localStorage.setItem(STORAGE_KEY, DEFAULT_THEME);
+      return DEFAULT_THEME;
+    }
     const saved = localStorage.getItem(STORAGE_KEY) as ThemeId | null;
     if (saved && THEME_IDS.includes(saved)) return saved;
-    return 'light';
-  });
+  } catch {
+    /* ignore storage errors */
+  }
+  return DEFAULT_THEME;
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setThemeState] = useState<ThemeId>(() => resolveInitialTheme());
 
   useEffect(() => {
     applyTheme(theme);
@@ -31,7 +46,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setTheme = useCallback((t: ThemeId) => {
     setThemeState(t);
-    localStorage.setItem(STORAGE_KEY, t);
+    try {
+      localStorage.setItem(STORAGE_KEY, t);
+      localStorage.setItem(MIGRATION_KEY, '1');
+    } catch {
+      /* ignore */
+    }
     applyTheme(t);
   }, []);
 
