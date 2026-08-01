@@ -423,6 +423,39 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
 });
 
 // ---------- Database management ----------
+/** Selective backup categories → tables (missing tables are skipped). */
+export const BACKUP_CATEGORIES: Record<string, string[]> = {
+  settings: ['app_settings', 'company', 'users', 'notify_settings', 'fair_use_settings'],
+  clients: ['pppoe_users', 'profiles', 'ipoe_profiles', 'ipoe_plans', 'ipoe_lease_meta'],
+  network: ['routers', 'naps', 'splitters', 'splitter_loss_reference', 'noc_devices', 'queues'],
+  reports: ['transactions', 'payment_links', 'invoices', 'invoice_payments', 'expenses'],
+  operations: ['notifications', 'job_orders', 'ai_scripts', 'inventory', 'usage_alerts'],
+};
+
+function listExistingTables(): Set<string> {
+  const rows = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+settingsRouter.get('/db/backup-categories', (_req, res) => {
+  const existing = listExistingTables();
+  const categories = Object.entries(BACKUP_CATEGORIES).map(([id, tables]) => ({
+    id,
+    tables: tables.filter((t) => existing.has(t)),
+    label:
+      id === 'settings'
+        ? 'Settings'
+        : id === 'clients'
+          ? 'Clients / subscribers'
+          : id === 'network'
+            ? 'Network'
+            : id === 'reports'
+              ? 'Reports / billing'
+              : 'Operations',
+  }));
+  res.json({ categories });
+});
+
 settingsRouter.post('/db/backup', async (_req, res) => {
   try {
     const name = `backup-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
@@ -433,13 +466,83 @@ settingsRouter.post('/db/backup', async (_req, res) => {
   }
 });
 
+/** Selective JSON backup by category (downloadable without full DB replace). */
+settingsRouter.post('/db/backup/selective', (req, res) => {
+  try {
+    const cats = (Array.isArray(req.body?.categories) ? req.body.categories : [])
+      .map((c: unknown) => String(c))
+      .filter((c: string) => BACKUP_CATEGORIES[c]);
+    if (!cats.length) return res.status(400).json({ error: 'Select at least one category.' });
+    const existing = listExistingTables();
+    const payload: Record<string, unknown[]> = {};
+    const included: string[] = [];
+    for (const cat of cats) {
+      for (const table of BACKUP_CATEGORIES[cat]) {
+        if (!existing.has(table)) continue;
+        payload[table] = db.prepare(`SELECT * FROM ${table}`).all() as unknown[];
+        included.push(table);
+      }
+    }
+    const name = `selective-${cats.join('-')}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const full = path.join(backupsDir, name);
+    fs.writeFileSync(full, JSON.stringify({ version: 1, categories: cats, tables: included, data: payload }, null, 2));
+    res.json({ ok: true, name, tables: included, categories: cats });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Selective backup failed' });
+  }
+});
+
+/** Restore selective JSON (merges/replaces rows per table; does not wipe unrelated data). */
+settingsRouter.post('/db/restore/selective', express.json({ limit: '80mb' }), (req, res) => {
+  try {
+    const body = req.body || {};
+    const data = body.data && typeof body.data === 'object' ? body.data : body;
+    const cats = Array.isArray(body.categories) ? body.categories.map(String) : Object.keys(BACKUP_CATEGORIES);
+    const allowed = new Set<string>();
+    for (const c of cats) {
+      for (const t of BACKUP_CATEGORIES[c] || []) allowed.add(t);
+    }
+    const existing = listExistingTables();
+    let tablesRestored = 0;
+    let rows = 0;
+    const tx = db.transaction(() => {
+      for (const [table, list] of Object.entries(data)) {
+        if (!allowed.has(table) || !existing.has(table) || !Array.isArray(list)) continue;
+        const colsInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+        const colNames = colsInfo.map((c) => c.name);
+        if (!colNames.length) continue;
+        // Replace table contents for selected category tables
+        db.prepare(`DELETE FROM ${table}`).run();
+        const placeholders = colNames.map(() => '?').join(',');
+        const insert = db.prepare(
+          `INSERT INTO ${table} (${colNames.join(',')}) VALUES (${placeholders})`
+        );
+        for (const row of list as Record<string, unknown>[]) {
+          insert.run(...colNames.map((c) => (row[c] !== undefined ? row[c] : null)));
+          rows += 1;
+        }
+        tablesRestored += 1;
+      }
+    });
+    tx();
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'database',
+      `Selective restore applied (${tablesRestored} tables, ${rows} rows)`
+    );
+    res.json({ ok: true, tablesRestored, rows });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Selective restore failed' });
+  }
+});
+
 settingsRouter.get('/db/backups', (_req, res) => {
   const files = fs
     .readdirSync(backupsDir)
-    .filter((f) => f.endsWith('.db'))
+    .filter((f) => f.endsWith('.db') || f.endsWith('.json'))
     .map((f) => {
       const st = fs.statSync(path.join(backupsDir, f));
-      return { name: f, size: st.size, created: st.mtime.toISOString() };
+      return { name: f, size: st.size, created: st.mtime.toISOString(), kind: f.endsWith('.json') ? 'selective' : 'full' };
     })
     .sort((a, b) => (a.created < b.created ? 1 : -1));
   res.json(files);
@@ -447,7 +550,7 @@ settingsRouter.get('/db/backups', (_req, res) => {
 
 function safeBackupPath(name: string): string | null {
   const base = path.basename(name); // prevent path traversal
-  if (!base.endsWith('.db')) return null;
+  if (!base.endsWith('.db') && !base.endsWith('.json')) return null;
   const full = path.join(backupsDir, base);
   return fs.existsSync(full) ? full : null;
 }

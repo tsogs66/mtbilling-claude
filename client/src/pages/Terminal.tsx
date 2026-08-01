@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { TerminalSquare, Plug, PlugZap, Router as RouterIcon, ExternalLink, Loader2 } from 'lucide-react';
+import { TerminalSquare, Plug, PlugZap, Router as RouterIcon, ExternalLink, Loader2, Server } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -22,13 +22,19 @@ type ConnInfo = {
   type: string;
   status: string;
   ssh_uri: string | null;
+  source?: 'router' | 'noc';
 };
 
 type TermMode = 'disconnected' | 'connecting' | 'ssh' | 'api' | 'demo' | 'error';
 
+type NetTarget =
+  | { kind: 'router'; id: number; label: string }
+  | { kind: 'noc'; id: number; label: string; host: string; sshCapable: boolean };
+
 export default function TerminalPage() {
   const { routers, current, setCurrent } = useRouterDevice();
-  const [routerId, setRouterId] = useState<number | ''>('');
+  const [targetKey, setTargetKey] = useState('');
+  const [nocDevices, setNocDevices] = useState<any[]>([]);
   const [info, setInfo] = useState<ConnInfo | null>(null);
   const [mode, setMode] = useState<TermMode>('disconnected');
   const [message, setMessage] = useState('');
@@ -39,17 +45,66 @@ export default function TerminalPage() {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    if (current?.id) setRouterId(current.id);
-  }, [current?.id]);
+  const targets: NetTarget[] = [
+    ...routers.map((r) => ({
+      kind: 'router' as const,
+      id: r.id,
+      label: `${r.name} (router)`,
+    })),
+    ...nocDevices
+      .filter((d) => d.source === 'custom' && (d.sshCapable || d.ssh_user || d.ssh_pass_set))
+      .map((d) => ({
+        kind: 'noc' as const,
+        id: d.id,
+        label: `${d.name} · ${d.host} (NOC)`,
+        host: d.host,
+        sshCapable: !!(d.sshCapable || d.ssh_user),
+      })),
+  ];
 
   useEffect(() => {
-    if (!routerId) {
+    api
+      .get('/noc')
+      .then((r) => setNocDevices(r.data.devices || []))
+      .catch(() => setNocDevices([]));
+  }, []);
+
+  useEffect(() => {
+    if (current?.id && !targetKey) setTargetKey(`router:${current.id}`);
+  }, [current?.id, targetKey]);
+
+  useEffect(() => {
+    if (!targetKey) {
       setInfo(null);
       return;
     }
-    api.get(`/terminal/routers/${routerId}`).then((r) => setInfo(r.data));
-  }, [routerId]);
+    const [kind, idStr] = targetKey.split(':');
+    const id = Number(idStr);
+    if (kind === 'router') {
+      api.get(`/terminal/routers/${id}`).then((r) => setInfo({ ...r.data, source: 'router' }));
+    } else if (kind === 'noc') {
+      api
+        .get(`/noc/devices/${id}/info`)
+        .then((r) => {
+          const d = r.data.device || {};
+          setInfo({
+            id: d.id,
+            name: d.name,
+            host: d.host,
+            api_port: 0,
+            ssh_port: d.ssh_port || 22,
+            user: d.ssh_user || 'admin',
+            has_credentials: !!(d.ssh_user && d.host),
+            board: d.model || d.sys_name || '',
+            type: d.kind || 'noc',
+            status: d.status || 'unknown',
+            ssh_uri: d.host ? `ssh://${d.ssh_user || 'admin'}@${d.host}:${d.ssh_port || 22}` : null,
+            source: 'noc',
+          });
+        })
+        .catch(() => setInfo(null));
+    }
+  }, [targetKey]);
 
   const writeTerm = useCallback((text: string) => {
     xtermRef.current?.write(text);
@@ -64,7 +119,7 @@ export default function TerminalPage() {
   }, []);
 
   const connect = useCallback(() => {
-    if (!routerId || !info?.has_credentials) return;
+    if (!info?.has_credentials) return;
     disconnect();
 
     const token = localStorage.getItem('mt_token');
@@ -78,7 +133,11 @@ export default function TerminalPage() {
     setMode('connecting');
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'connect', routerId }));
+      if (info.source === 'noc') {
+        ws.send(JSON.stringify({ type: 'connect', nocDeviceId: info.id }));
+      } else {
+        ws.send(JSON.stringify({ type: 'connect', routerId: info.id }));
+      }
       setConnected(true);
     };
 
@@ -116,7 +175,7 @@ export default function TerminalPage() {
       writeTerm('\r\n\x1b[31mWebSocket error — is the API server running?\x1b[0m\r\n');
       setMode('error');
     };
-  }, [routerId, info, disconnect, writeTerm]);
+  }, [info, disconnect, writeTerm]);
 
   useEffect(() => {
     if (!termRef.current || xtermRef.current) return;
@@ -137,8 +196,8 @@ export default function TerminalPage() {
     term.loadAddon(fit);
     term.open(termRef.current);
     fit.fit();
-    term.writeln('\x1b[1;36mMikroTik Terminal · ts0gs v1.0.0\x1b[0m');
-    term.writeln('Select a router and click Connect. Uses SSH (port 22) with API/demo fallback.\r\n');
+    term.writeln('\x1b[1;36mNetwork Terminal · ts0gs v1.0.0\x1b[0m');
+    term.writeln('Select a network device (router or NOC SSH) and click Connect.\r\n');
 
     term.onData((data) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -174,32 +233,38 @@ export default function TerminalPage() {
   };
 
   return (
-    <Layout title="Terminal">
+    <Layout title="Network Terminal">
       <PageHeader
-        title="MikroTik Terminal"
-        description="SSH session to the selected router with API and demo fallback."
+        title="Network Terminal"
+        description="SSH session to routers or NOC devices with SSH credentials. MikroTik routers also support API/demo fallback."
         icon={TerminalSquare}
       />
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-5">
         <div className="xl:col-span-1 space-y-4">
-          <Card title="Router connection" icon={RouterIcon} interactive>
+          <Card title="Network connection" icon={RouterIcon} interactive>
             <div className="space-y-4">
-              <FormField label="Linked router" hint="Synced with the global router selector in the top bar.">
+              <FormField
+                label="Device"
+                hint="Routers from Router Management and NOC custom devices with SSH."
+              >
                 <select
                   className="input"
-                  value={routerId}
+                  value={targetKey}
                   onChange={(e) => {
-                    const id = e.target.value ? Number(e.target.value) : '';
-                    setRouterId(id);
-                    if (id) {
+                    const key = e.target.value;
+                    setTargetKey(key);
+                    if (key.startsWith('router:')) {
+                      const id = Number(key.split(':')[1]);
                       const r = routers.find((x) => x.id === id);
                       if (r) setCurrent(r);
                     }
                   }}
                 >
-                  <option value="">— Select router —</option>
-                  {routers.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
+                  <option value="">— Select device —</option>
+                  {targets.map((t) => (
+                    <option key={`${t.kind}:${t.id}`} value={`${t.kind}:${t.id}`}>
+                      {t.label}
+                    </option>
                   ))}
                 </select>
               </FormField>
@@ -207,15 +272,27 @@ export default function TerminalPage() {
               {info && (
                 <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 text-sm space-y-2">
                   <div className="flex items-center gap-2">
-                    <RouterIcon size={15} className="text-slate-400" />
+                    {info.source === 'noc' ? (
+                      <Server size={15} className="text-slate-400" />
+                    ) : (
+                      <RouterIcon size={15} className="text-slate-400" />
+                    )}
                     <span className="font-medium text-slate-800">{info.name}</span>
                     <StatusBadge status={info.status} />
                   </div>
                   <div className="text-xs text-slate-500 grid grid-cols-2 gap-1">
-                    <span>Host</span><span className="font-mono text-slate-700">{info.host || '—'}</span>
-                    <span>SSH</span><span className="font-mono text-slate-700">:{info.ssh_port}</span>
-                    <span>API</span><span className="font-mono text-slate-700">:{info.api_port}</span>
-                    <span>User</span><span className="font-mono text-slate-700">{info.user}</span>
+                    <span>Host</span>
+                    <span className="font-mono text-slate-700">{info.host || '—'}</span>
+                    <span>SSH</span>
+                    <span className="font-mono text-slate-700">:{info.ssh_port}</span>
+                    {info.source === 'router' && (
+                      <>
+                        <span>API</span>
+                        <span className="font-mono text-slate-700">:{info.api_port}</span>
+                      </>
+                    )}
+                    <span>User</span>
+                    <span className="font-mono text-slate-700">{info.user}</span>
                   </div>
                   {info.ssh_uri && (
                     <a
@@ -231,62 +308,59 @@ export default function TerminalPage() {
 
               {!info?.has_credentials && info && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                  Configure host and API credentials in{' '}
-                  <Link to="/settings" className="font-medium underline">System Settings → Router Management</Link>.
+                  {info.source === 'noc' ? (
+                    <>
+                      Set SSH user/password on the device under{' '}
+                      <Link to="/noc" className="font-medium underline">
+                        NOC Suite
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Configure host and API credentials in{' '}
+                      <Link to="/settings" className="font-medium underline">
+                        System Settings → Router Management
+                      </Link>
+                      .
+                    </>
+                  )}
                 </div>
               )}
 
               <div className="flex gap-2">
-                <button
-                  className="btn-primary flex-1 flex items-center justify-center gap-2"
-                  onClick={connect}
-                  disabled={!info?.has_credentials || connected}
-                >
-                  {mode === 'connecting' ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />}
-                  Connect
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary flex-1"
-                  onClick={disconnect}
-                  disabled={!connected}
-                >
-                  <PlugZap size={16} /> Disconnect
-                </button>
+                {!connected ? (
+                  <button
+                    type="button"
+                    className="btn-primary flex-1"
+                    disabled={!info?.has_credentials || mode === 'connecting'}
+                    onClick={connect}
+                  >
+                    {mode === 'connecting' ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Plug size={16} />
+                    )}
+                    Connect
+                  </button>
+                ) : (
+                  <button type="button" className="btn-secondary flex-1" onClick={disconnect}>
+                    <PlugZap size={16} /> Disconnect
+                  </button>
+                )}
               </div>
-
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-500">Session</span>
-                <StatusBadge status={mode === 'ssh' || mode === 'api' ? 'running' : mode === 'demo' ? 'offline' : 'inactive'} />
-                <span className="text-slate-600 font-medium">{modeLabel[mode]}</span>
+              <div className="text-xs text-slate-400">
+                Mode: <span className="font-medium text-slate-600">{modeLabel[mode]}</span>
+                {message ? ` · ${message}` : ''}
               </div>
-              {message && <p className="text-xs text-slate-400">{message}</p>}
             </div>
-          </Card>
-
-          <Card className="text-xs text-slate-500" interactive>
-            <div className="font-semibold text-slate-700 flex items-center gap-1.5 mb-2">
-              <TerminalSquare size={14} /> Connection order
-            </div>
-            <ol className="list-decimal list-inside space-y-1">
-              <li>SSH to router (port 22)</li>
-              <li>RouterOS API command mode</li>
-              <li>Demo terminal (offline dev)</li>
-            </ol>
           </Card>
         </div>
 
         <div className="xl:col-span-3">
-          <div className="card overflow-hidden p-0 shadow-card-hover">
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700/50 bg-gradient-to-r from-slate-900 to-slate-800 text-slate-400 text-xs">
-              <span className="font-mono flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 animate-pulse-soft' : 'bg-slate-500'}`} />
-                {info ? `${info.user}@${info.host}` : 'no router selected'}
-              </span>
-              <span className="uppercase tracking-wider font-semibold">{connected ? 'live' : 'idle'}</span>
-            </div>
-            <div ref={termRef} className="h-[min(52dvh,420px)] sm:h-[min(70vh,520px)] p-1 bg-slate-950" />
-          </div>
+          <Card className="overflow-hidden p-0">
+            <div ref={termRef} className="min-h-[420px] bg-slate-900 p-2" />
+          </Card>
         </div>
       </div>
     </Layout>

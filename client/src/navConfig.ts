@@ -33,7 +33,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/network', label: 'Network', icon: Network, permission: 'network' },
       { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
       { to: '/noc', label: 'NOC Suite', icon: Activity, permission: 'noc' },
-      { to: '/terminal', label: 'Terminal', icon: TerminalSquare, permission: 'terminal' },
+      { to: '/terminal', label: 'Network Terminal', icon: TerminalSquare, permission: 'terminal' },
       { to: '/ai-scripting', label: 'AI Scripting', icon: Bot, permission: 'ai' },
       { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
       { to: '/twingate', label: 'Twingate', icon: Globe2, permission: 'twingate' },

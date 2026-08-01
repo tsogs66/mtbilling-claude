@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
 import { api, peso } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
+
+const LINK_TTL_DAYS = 15;
 
 export default function PayPortal() {
   const [links, setLinks] = useState<any[]>([]);
@@ -13,7 +15,9 @@ export default function PayPortal() {
   const [months, setMonths] = useState(1);
   const [busy, setBusy] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [resendIds, setResendIds] = useState<Set<number>>(new Set());
   const [toast, setToast] = useState('');
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [effective, setEffective] = useState<string | null>(null);
@@ -124,17 +128,61 @@ export default function PayPortal() {
       const r = await api.post('/payment-links', {
         userId: Number(userId),
         months,
+        ttlHours: LINK_TTL_DAYS * 24,
         fallbackOrigin: window.location.origin,
       });
       const full = resolvePayUrl(r.data);
       if (r.data.warning) show(r.data.warning);
       const ok = full ? await copyTextOrPrompt(full, 'Pay link — copy:') : false;
-      show(ok ? `Pay link created and copied: ${full}` : full ? `Pay link created: ${full}` : 'Pay link created');
+      show(
+        ok
+          ? `Pay link created (${LINK_TTL_DAYS} days) and copied: ${full}`
+          : full
+            ? `Pay link created (${LINK_TTL_DAYS} days): ${full}`
+            : 'Pay link created'
+      );
       load();
     } catch (e: any) {
       show(e?.response?.data?.error || e?.response?.data?.message || 'Failed');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const toggleResend = (id: number) => {
+    setResendIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const resendSelected = async () => {
+    const ids = [...resendIds];
+    if (!ids.length) {
+      show('Select one or more subscribers to resend links.');
+      return;
+    }
+    setResendBusy(true);
+    try {
+      const r = await api.post('/payment-links/resend', {
+        userIds: ids,
+        months,
+        fallbackOrigin: window.location.origin,
+      });
+      const list = r.data.links || [];
+      const lines = list
+        .map((l: any) => `${l.username || l.customer || l.account}: ${resolvePayUrl(l)}`)
+        .join('\n');
+      if (lines) await copyTextOrPrompt(lines, 'Resent pay links — copy:');
+      show(`Resent ${list.length} link(s) · valid ${LINK_TTL_DAYS} days`);
+      setResendIds(new Set());
+      load();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Resend failed');
+    } finally {
+      setResendBusy(false);
     }
   };
 
@@ -313,7 +361,7 @@ export default function PayPortal() {
       <Card>
         <div className="text-sm text-slate-500 mb-4">
           Subscribers submit GCash/Maya proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
-          Upload your merchant QR under <b>Company</b>.
+          New links are valid for <b>{LINK_TTL_DAYS} days</b>. Upload your merchant QR under <b>Company</b>.
         </div>
         <div className="flex flex-wrap gap-2 items-end mb-6">
           <label className="text-sm flex-1 min-w-[200px]">
@@ -337,6 +385,41 @@ export default function PayPortal() {
           <button type="button" className="btn-secondary" onClick={load}>
             <RefreshCw size={16} /> Refresh
           </button>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <div className="font-semibold text-slate-800 text-sm">Resend links</div>
+              <p className="text-xs text-slate-500">Select subscribers below, then resend fresh {LINK_TTL_DAYS}-day pay links (copied as a list).</p>
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-sm"
+              disabled={resendBusy || resendIds.size === 0}
+              onClick={resendSelected}
+            >
+              <Send size={14} /> {resendBusy ? 'Resending…' : `Resend selected (${resendIds.size})`}
+            </button>
+          </div>
+          <div className="max-h-40 overflow-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+            {clients.length === 0 ? (
+              <div className="text-xs text-slate-400 px-3 py-4 text-center">No subscribers loaded.</div>
+            ) : (
+              clients.map((c: any) => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-300"
+                    checked={resendIds.has(Number(c.id))}
+                    onChange={() => toggleResend(Number(c.id))}
+                  />
+                  <span className="font-medium text-slate-800 truncate">{c.username}</span>
+                  <span className="text-slate-400 truncate text-xs">{c.customer_name || c.customer || ''}</span>
+                </label>
+              ))
+            )}
+          </div>
         </div>
 
         <Toolbar

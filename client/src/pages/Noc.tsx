@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity, Plus, Pencil, Trash2, RefreshCw, Radio, Router, Wifi, Server, Cable,
-  TerminalSquare, Plug, PlugZap, X, Info,
+  TerminalSquare, Plug, PlugZap, X, Info, ScanSearch,
 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -63,6 +63,9 @@ export default function Noc() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<'all' | 'online' | 'offline' | 'custom'>('all');
   const [sshOpen, setSshOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<any>(null);
+  const [scanPick, setScanPick] = useState<Set<string>>(new Set());
 
   const load = (live = false) => {
     setBusy(true);
@@ -229,6 +232,34 @@ export default function Noc() {
           </button>
           <button
             type="button"
+            className="btn-secondary text-sm"
+            disabled={scanning}
+            onClick={async () => {
+              setScanning(true);
+              setScanResult(null);
+              setScanPick(new Set());
+              try {
+                const r = await api.post('/noc/scan', { hops: 2 }, { timeout: 120000 });
+                setScanResult(r.data);
+                setScanPick(
+                  new Set(
+                    (r.data.devices || [])
+                      .filter((d: any) => !d.alreadyMonitored)
+                      .map((d: any) => d.host)
+                  )
+                );
+              } catch (e: any) {
+                alert(e?.response?.data?.error || 'Network scan failed');
+              } finally {
+                setScanning(false);
+              }
+            }}
+          >
+            <ScanSearch size={14} className={scanning ? 'animate-pulse' : ''} />
+            {scanning ? 'Scanning…' : 'Scan network (2 hops)'}
+          </button>
+          <button
+            type="button"
             className="btn-primary"
             onClick={() =>
               setEdit({
@@ -249,6 +280,74 @@ export default function Noc() {
           </button>
         </div>
       </div>
+
+      {scanResult && (
+        <Card
+          className="mb-5"
+          title={`Discovered devices · ${scanResult.devices?.length || 0}`}
+          right={
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary text-sm" onClick={() => setScanResult(null)}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={!scanPick.size}
+                onClick={async () => {
+                  const devices = (scanResult.devices || []).filter((d: any) => scanPick.has(d.host));
+                  try {
+                    const r = await api.post('/noc/scan/import', { devices });
+                    alert(`Added ${r.data.added} device(s) to NOC monitor.`);
+                    setScanResult(null);
+                    load(false);
+                  } catch (e: any) {
+                    alert(e?.response?.data?.error || 'Import failed');
+                  }
+                }}
+              >
+                Monitor selected ({scanPick.size})
+              </button>
+            </div>
+          }
+        >
+          <p className="text-xs text-slate-500 mb-3">
+            Scanned {scanResult.scanned} addresses on {((scanResult.localCidrs || []) as string[]).join(', ') || 'LAN'}
+            {scanResult.gateways?.length ? ` · gateway ${scanResult.gateways.join(', ')}` : ''}. Select devices to add to monitoring.
+          </p>
+          <div className="max-h-64 overflow-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+            {(scanResult.devices || []).length === 0 ? (
+              <div className="text-sm text-slate-400 p-4 text-center">No hosts responded on common ports.</div>
+            ) : (
+              (scanResult.devices || []).map((d: any) => (
+                <label key={d.host} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-300"
+                    disabled={d.alreadyMonitored}
+                    checked={scanPick.has(d.host)}
+                    onChange={() => {
+                      setScanPick((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(d.host)) next.delete(d.host);
+                        else next.add(d.host);
+                        return next;
+                      });
+                    }}
+                  />
+                  <span className="font-mono font-medium text-slate-800">{d.host}</span>
+                  <span className="text-xs text-slate-400">hop {d.hop}</span>
+                  <span className="text-xs text-slate-500">{d.kind}</span>
+                  <span className="text-xs text-slate-400 truncate">ports {d.openPorts?.join(',')}</span>
+                  {d.isGateway && <span className="text-[10px] uppercase text-sky-600 font-semibold">gateway</span>}
+                  {d.sshCapable && <span className="text-[10px] uppercase text-emerald-600 font-semibold">ssh</span>}
+                  {d.alreadyMonitored && <span className="text-[10px] text-slate-400">already monitored</span>}
+                </label>
+              ))
+            )}
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatTile label="Total" value={String(data.counts?.total ?? 0)} icon={Server} tone="text-slate-700" accent="from-slate-500/15 to-transparent" delay={0} />

@@ -1,9 +1,13 @@
 import express from 'express';
+import net from 'net';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { db } from './db.js';
 import { probeOlt } from './olt.js';
 import { probeRouter } from './mikrotik.js';
 
 export const nocRouter = express.Router();
+const execFileAsync = promisify(execFile);
 
 export type NocKind = 'olt' | 'router' | 'switch' | 'ap' | 'radio' | 'other';
 
@@ -455,6 +459,205 @@ nocRouter.post('/noc/test', async (req, res) => {
     snmp_community: b.snmpCommunity ?? b.snmp_community ?? 'public',
   });
   res.json(probe);
+});
+
+function tcpProbe(host: string, port: number, timeoutMs = 350): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host, port });
+    const done = (ok: boolean) => {
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+  });
+}
+
+async function readIpJson(args: string[]): Promise<any[]> {
+  try {
+    const { stdout } = await execFileAsync('ip', ['-j', ...args], { timeout: 5000 });
+    return JSON.parse(stdout || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function cidrHosts(cidr: string, maxHosts = 254): string[] {
+  const m = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/);
+  if (!m) return [];
+  const ip =
+    ((Number(m[1]) << 24) | (Number(m[2]) << 16) | (Number(m[3]) << 8) | Number(m[4])) >>> 0;
+  const prefix = Number(m[5]);
+  if (prefix < 24 || prefix > 30) return [];
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  const network = (ip & mask) >>> 0;
+  const broadcast = (network | (~mask >>> 0)) >>> 0;
+  const out: string[] = [];
+  for (let h = network + 1; h < broadcast && out.length < maxHosts; h++) {
+    out.push([(h >>> 24) & 255, (h >>> 16) & 255, (h >>> 8) & 255, h & 255].join('.'));
+  }
+  return out;
+}
+
+async function mapPoolScan<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length || 1) }, () => worker()));
+  return results;
+}
+
+const SCAN_PORTS = [22, 80, 443, 8728, 8291, 161, 23, 8080];
+
+/**
+ * Discover devices on the connected LAN (hop 1) and neighbors learned via the
+ * gateway / ARP/NDP (hop ≤ 2). Returns candidates the operator can add to NOC.
+ */
+nocRouter.post('/noc/scan', async (req, res) => {
+  try {
+    const hops = Math.min(2, Math.max(1, Number(req.body?.hops) || 2));
+    const addrs = await readIpJson(['-4', 'addr', 'show']);
+    const routes = await readIpJson(['route', 'show', 'default']);
+    const neigh = await readIpJson(['neigh', 'show']);
+    const gateways = new Set<string>();
+    for (const r of routes) {
+      if (r.gateway) gateways.add(String(r.gateway));
+    }
+
+    const localCidrs: string[] = [];
+    const selfIps = new Set<string>();
+    for (const iface of addrs) {
+      if (iface.operstate === 'DOWN') continue;
+      for (const a of iface.addr_info || []) {
+        if (a.family !== 'inet' || !a.local) continue;
+        if (String(a.local).startsWith('127.')) continue;
+        selfIps.add(String(a.local));
+        const prefix = Number(a.prefixlen) || 24;
+        if (prefix >= 24 && prefix <= 30) localCidrs.push(`${a.local}/${prefix}`);
+      }
+    }
+
+    const hop1Hosts = new Set<string>();
+    for (const cidr of localCidrs) {
+      for (const h of cidrHosts(cidr, 254)) hop1Hosts.add(h);
+    }
+    // Always include gateways
+    for (const g of gateways) hop1Hosts.add(g);
+
+    const hop2Hosts = new Set<string>();
+    if (hops >= 2) {
+      for (const n of neigh) {
+        const dst = String(n.dst || '');
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(dst)) continue;
+        if (selfIps.has(dst) || hop1Hosts.has(dst)) continue;
+        // Neighbors outside local CIDR = typically beyond gateway (2nd hop)
+        hop2Hosts.add(dst);
+      }
+    }
+
+    const known = new Set(
+      (db.prepare('SELECT host FROM noc_devices').all() as { host: string }[])
+        .map((r) => String(r.host || '').trim())
+        .filter(Boolean)
+    );
+    for (const r of db.prepare('SELECT host FROM routers').all() as { host: string }[]) {
+      if (r.host) known.add(String(r.host).trim());
+    }
+
+    const probeHost = async (host: string, hop: number) => {
+      if (selfIps.has(host)) return null;
+      const openPorts: number[] = [];
+      for (const p of SCAN_PORTS) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await tcpProbe(host, p)) openPorts.push(p);
+      }
+      if (!openPorts.length) return null;
+      let kind = 'other';
+      if (openPorts.includes(8728) || openPorts.includes(8291)) kind = 'router';
+      else if (openPorts.includes(161)) kind = 'switch';
+      else if (openPorts.includes(22) && openPorts.includes(80)) kind = 'other';
+      else if (openPorts.includes(22)) kind = 'other';
+      return {
+        host,
+        hop,
+        kind,
+        openPorts,
+        sshCapable: openPorts.includes(22),
+        alreadyMonitored: known.has(host),
+        isGateway: gateways.has(host),
+      };
+    };
+
+    const hop1List = [...hop1Hosts];
+    const hop1Found = (
+      await mapPoolScan(hop1List, 40, (h) => probeHost(h, 1))
+    ).filter(Boolean) as any[];
+
+    const hop2List = [...hop2Hosts].slice(0, 64);
+    const hop2Found =
+      hops >= 2
+        ? ((await mapPoolScan(hop2List, 20, (h) => probeHost(h, 2))).filter(Boolean) as any[])
+        : [];
+
+    const devices = [...hop1Found, ...hop2Found].sort((a, b) =>
+      a.hop !== b.hop ? a.hop - b.hop : a.host.localeCompare(b.host)
+    );
+
+    res.json({
+      ok: true,
+      hops,
+      localCidrs,
+      gateways: [...gateways],
+      scanned: hop1List.length + hop2List.length,
+      devices,
+      probedAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Network scan failed' });
+  }
+});
+
+/** Add multiple discovered hosts as NOC custom devices. */
+nocRouter.post('/noc/scan/import', async (req, res) => {
+  const items = Array.isArray(req.body?.devices) ? req.body.devices : [];
+  if (!items.length) return res.status(400).json({ error: 'No devices selected.' });
+  let added = 0;
+  for (const d of items) {
+    const host = String(d.host || '').trim();
+    if (!host) continue;
+    const exists = db.prepare('SELECT id FROM noc_devices WHERE host = ?').get(host);
+    if (exists) continue;
+    const kind = String(d.kind || 'other').toLowerCase() || 'other';
+    const name = String(d.name || host).trim();
+    const ports = Array.isArray(d.openPorts) ? d.openPorts.join(',') : '22,80,443';
+    const info = db
+      .prepare(
+        `INSERT INTO noc_devices (name, kind, host, ports, snmp_port, snmp_community, notes, enabled, ssh_port, ssh_user)
+         VALUES (?, ?, ?, ?, 161, 'public', ?, 1, 22, ?)`
+      )
+      .run(name, kind, host, ports, d.isGateway ? 'Discovered gateway' : 'Discovered via network scan', d.sshCapable ? 'admin' : null);
+    const id = Number(info.lastInsertRowid);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const probe = await probeNocDevice({ host, ports, snmp_port: 161, snmp_community: 'public' });
+      persistProbe(id, probe);
+    } catch {
+      /* ignore */
+    }
+    added += 1;
+  }
+  res.json({ ok: true, added });
 });
 
 /** Health series for graphic display (uptime-style). Defaults to last 24h. */
