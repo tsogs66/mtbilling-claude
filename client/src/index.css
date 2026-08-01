@@ -730,139 +730,282 @@ body {
   color: #d99a3f !important;
 }
 
-/* ── ISP Tech theme (fiber-grid NOC console) ── */
+/* ── ISP Tech theme — landing snapshot look (navy glass · orange brand · cyan accents) ── */
 [data-theme='isptech'] {
   color-scheme: dark;
-  --brand: #2dd4bf;
-  --brand-glow: rgba(45, 212, 191, 0.4);
-  --page-bg: #050b14;
-  --page-fg: #d6f5f0;
-  --card-bg: rgba(8, 20, 32, 0.92);
-  --card-border: rgba(45, 212, 191, 0.25);
-  --modal-bg: rgba(5, 14, 24, 0.97);
-  --modal-border: rgba(45, 212, 191, 0.32);
-  --sidebar-bg: #030810;
-  --sidebar-fg: #b8ece4;
-  --sidebar-border: rgba(45, 212, 191, 0.28);
-  --sidebar-muted: #5b8a89;
-  --sidebar-hover-bg: rgba(45, 212, 191, 0.08);
-  --sidebar-active-bg: rgba(45, 212, 191, 0.16);
-  --sidebar-active-fg: #5eead4;
-  --sidebar-icon-bg: rgba(5, 14, 24, 0.75);
-  --bottom-nav-bg: rgba(5, 14, 24, 0.96);
-  --bottom-nav-border: rgba(45, 212, 191, 0.25);
-  --bottom-nav-fg: #5b8a89;
-  --bottom-nav-active-fg: #5eead4;
-  --bottom-nav-sheet-bg: rgba(3, 8, 16, 0.98);
-  --topbar-bg: rgba(5, 14, 24, 0.9);
-  --topbar-border: rgba(45, 212, 191, 0.25);
-  --topbar-fg: #d6f5f0;
-  --topbar-muted: #5b8a89;
-  --topbar-pill-bg: rgba(8, 20, 32, 0.75);
-  --topbar-pill-border: rgba(45, 212, 191, 0.3);
-  --topbar-pill-hover-border: rgba(45, 212, 191, 0.55);
-  --topbar-icon-hover-bg: rgba(45, 212, 191, 0.1);
-  --topbar-menu-bg: rgba(5, 14, 24, 0.98);
-  --topbar-menu-border: rgba(45, 212, 191, 0.3);
-  --topbar-divider: rgba(45, 212, 191, 0.25);
-  --topbar-avatar-bg: linear-gradient(145deg, #0b2b33, #030810);
-  --topbar-avatar-fg: #5eead4;
+  --brand: #f97316;
+  --brand-glow: rgba(249, 115, 22, 0.45);
+  --accent-cyan: #22d3ee;
+  --page-bg: #050a14;
+  --page-fg: #e8eef7;
+  --card-bg: rgba(12, 22, 40, 0.62);
+  --card-border: rgba(148, 163, 184, 0.16);
+  --modal-bg: rgba(8, 16, 30, 0.96);
+  --modal-border: rgba(34, 211, 238, 0.22);
+  --sidebar-bg: #030711;
+  --sidebar-fg: #cbd5e1;
+  --sidebar-border: rgba(34, 211, 238, 0.14);
+  --sidebar-muted: #64748b;
+  --sidebar-hover-bg: rgba(34, 211, 238, 0.07);
+  --sidebar-active-bg: rgba(249, 115, 22, 0.16);
+  --sidebar-active-fg: #fdba74;
+  --sidebar-icon-bg: rgba(8, 16, 30, 0.7);
+  --bottom-nav-bg: rgba(5, 10, 20, 0.94);
+  --bottom-nav-border: rgba(34, 211, 238, 0.14);
+  --bottom-nav-fg: #64748b;
+  --bottom-nav-active-fg: #fb923c;
+  --bottom-nav-sheet-bg: rgba(3, 7, 17, 0.98);
+  --topbar-bg: rgba(5, 10, 20, 0.72);
+  --topbar-border: rgba(148, 163, 184, 0.12);
+  --topbar-fg: #e8eef7;
+  --topbar-muted: #64748b;
+  --topbar-pill-bg: rgba(12, 22, 40, 0.7);
+  --topbar-pill-border: rgba(34, 211, 238, 0.2);
+  --topbar-pill-hover-border: rgba(249, 115, 22, 0.5);
+  --topbar-icon-hover-bg: rgba(34, 211, 238, 0.1);
+  --topbar-menu-bg: rgba(8, 16, 30, 0.97);
+  --topbar-menu-border: rgba(34, 211, 238, 0.18);
+  --topbar-divider: rgba(148, 163, 184, 0.14);
+  --topbar-avatar-bg: linear-gradient(145deg, #ea580c, #0e7490);
+  --topbar-avatar-fg: #fff7ed;
 }
 [data-theme='isptech'] body {
-  background-color: #050b14;
+  font-family: Manrope, 'Space Grotesk', system-ui, sans-serif;
+  background-color: #050a14;
   background-image:
-    radial-gradient(circle at 18% 12%, rgba(45, 212, 191, 0.16) 0%, transparent 42%),
-    radial-gradient(circle at 82% 88%, rgba(34, 211, 238, 0.12) 0%, transparent 42%),
-    linear-gradient(rgba(45, 212, 191, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(45, 212, 191, 0.05) 1px, transparent 1px);
-  background-size: auto, auto, 28px 28px, 28px 28px;
-  color: #d6f5f0;
+    radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249, 115, 22, 0.18), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 90% 8%, rgba(34, 211, 238, 0.14), transparent 50%),
+    radial-gradient(ellipse 55% 40% at 50% 110%, rgba(14, 165, 233, 0.1), transparent 55%),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: auto, auto, auto, 48px 48px, 48px 48px;
+  color: #e8eef7;
 }
 [data-theme='isptech'] .theme-main,
 [data-theme='isptech'] .bg-slate-100,
 [data-theme='isptech'] .bg-mesh-light {
-  background-color: #050b14 !important;
+  background-color: #050a14 !important;
   background-image:
-    radial-gradient(circle at 18% 12%, rgba(45, 212, 191, 0.13) 0%, transparent 42%),
-    radial-gradient(circle at 82% 88%, rgba(34, 211, 238, 0.1) 0%, transparent 42%),
-    linear-gradient(rgba(45, 212, 191, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(45, 212, 191, 0.045) 1px, transparent 1px) !important;
-  background-size: auto, auto, 28px 28px, 28px 28px !important;
+    radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249, 115, 22, 0.14), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 90% 8%, rgba(34, 211, 238, 0.11), transparent 50%),
+    radial-gradient(ellipse 55% 40% at 50% 110%, rgba(14, 165, 233, 0.08), transparent 55%),
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px) !important;
+  background-size: auto, auto, auto, 48px 48px, 48px 48px !important;
 }
 [data-theme='isptech'] .theme-sidebar,
 [data-theme='isptech'] aside.theme-sidebar {
-  background: linear-gradient(180deg, #030810 0%, #081b28 50%, #050b14 100%) !important;
-  border-right-color: rgba(45, 212, 191, 0.28) !important;
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
-  color: #b8ece4;
+  background: linear-gradient(180deg, rgba(3, 7, 17, 0.96) 0%, rgba(8, 16, 30, 0.94) 55%, rgba(5, 10, 20, 0.98) 100%) !important;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-right: 1px solid rgba(34, 211, 238, 0.14) !important;
+  box-shadow: 8px 0 40px -12px rgba(0, 0, 0, 0.65), inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  color: #cbd5e1;
+}
+[data-theme='isptech'] .theme-sidebar-header {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.06), transparent);
+}
+[data-theme='isptech'] .theme-sidebar-section {
+  color: #64748b !important;
+  letter-spacing: 0.14em;
+}
+[data-theme='isptech'] .theme-sidebar-link {
+  border-radius: 0.85rem;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+[data-theme='isptech'] .theme-sidebar-link:hover {
+  background: rgba(34, 211, 238, 0.08) !important;
+  color: #f1f5f9 !important;
+}
+[data-theme='isptech'] .theme-sidebar-link.is-active,
+[data-theme='isptech'] a.theme-sidebar-link.active {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(34, 211, 238, 0.08)) !important;
+  color: #fdba74 !important;
+  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.28), 0 8px 24px -16px rgba(249, 115, 22, 0.55);
 }
 [data-theme='isptech'] .theme-sidebar-banner {
-  border-color: rgba(45, 212, 191, 0.35);
-  background: rgba(45, 212, 191, 0.1);
-  color: #99f6e4;
+  border: 1px solid rgba(249, 115, 22, 0.28);
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.12), rgba(34, 211, 238, 0.06));
+  color: #fdba74;
+  border-radius: 0.9rem;
+}
+[data-theme='isptech'] .theme-topbar {
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+[data-theme='isptech'] .theme-topbar-title {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+[data-theme='isptech'] .theme-topbar-pill {
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 [data-theme='isptech'] .card,
 [data-theme='isptech'] .card-interactive {
-  background: linear-gradient(145deg, rgba(8, 20, 32, 0.94), rgba(5, 14, 24, 0.9)) !important;
-  border-color: rgba(45, 212, 191, 0.26) !important;
-  box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(45, 212, 191, 0.08);
-  color: #d6f5f0;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.07), rgba(12, 22, 40, 0.55) 40%, rgba(5, 14, 28, 0.72)) !important;
+  border: 1px solid rgba(148, 163, 184, 0.14) !important;
+  box-shadow:
+    0 20px 50px -28px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(34, 211, 238, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: #e8eef7;
+  border-radius: 1.15rem;
+}
+[data-theme='isptech'] .card-interactive:hover {
+  border-color: rgba(34, 211, 238, 0.28) !important;
+  box-shadow:
+    0 24px 56px -24px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(34, 211, 238, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+[data-theme='isptech'] .card-header {
+  border-bottom-color: rgba(148, 163, 184, 0.1) !important;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.04), transparent);
+}
+[data-theme='isptech'] .card-title {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  color: #f1f5f9 !important;
 }
 [data-theme='isptech'] .glass {
-  background: rgba(5, 14, 24, 0.85) !important;
-  border-color: rgba(45, 212, 191, 0.2) !important;
+  background: rgba(12, 22, 40, 0.55) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  backdrop-filter: blur(18px);
+}
+[data-theme='isptech'] .stat-tile::before {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), transparent 60%) !important;
 }
 [data-theme='isptech'] .theme-modal {
-  background: linear-gradient(160deg, rgba(8, 24, 36, 0.97), rgba(3, 10, 18, 0.98)) !important;
-  border-color: rgba(45, 212, 191, 0.32) !important;
-  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(45, 212, 191, 0.12);
-  color: #d6f5f0;
+  background: linear-gradient(165deg, rgba(16, 28, 48, 0.97), rgba(5, 10, 20, 0.98)) !important;
+  border-color: rgba(34, 211, 238, 0.2) !important;
+  box-shadow: 0 28px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(249, 115, 22, 0.1);
+  color: #e8eef7;
+  backdrop-filter: blur(20px);
 }
 [data-theme='isptech'] .theme-modal-header,
 [data-theme='isptech'] .theme-modal-footer {
-  border-color: rgba(45, 212, 191, 0.2) !important;
-  background: rgba(3, 10, 18, 0.55) !important;
+  border-color: rgba(148, 163, 184, 0.12) !important;
+  background: rgba(3, 8, 18, 0.45) !important;
 }
 [data-theme='isptech'] .theme-modal-backdrop {
-  background: rgba(2, 6, 12, 0.78) !important;
+  background: rgba(2, 6, 14, 0.72) !important;
+  backdrop-filter: blur(8px);
 }
 [data-theme='isptech'] .btn-primary,
 [data-theme='isptech'] button.btn-primary {
-  background: linear-gradient(135deg, #0891b2, #2dd4bf) !important;
+  background: linear-gradient(135deg, #f97316, #fbbf24 55%, #ea580c) !important;
+  background-size: 160% 100%;
   border: none;
-  color: #04241f !important;
+  color: #0f172a !important;
+  box-shadow: 0 10px 28px -10px rgba(249, 115, 22, 0.7);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-position 0.35s ease;
+}
+[data-theme='isptech'] .btn-primary:hover,
+[data-theme='isptech'] button.btn-primary:hover {
+  background-position: 100% 0;
+  box-shadow: 0 14px 34px -10px rgba(249, 115, 22, 0.85);
+  transform: translateY(-1px);
+}
+[data-theme='isptech'] .btn-secondary,
+[data-theme='isptech'] button.btn-secondary {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+  color: #e2e8f0 !important;
+  backdrop-filter: blur(8px);
+}
+[data-theme='isptech'] .btn-secondary:hover,
+[data-theme='isptech'] button.btn-secondary:hover {
+  background: rgba(34, 211, 238, 0.08) !important;
+  border-color: rgba(34, 211, 238, 0.35) !important;
+  color: #fff !important;
 }
 [data-theme='isptech'] .input,
 [data-theme='isptech'] input.input,
 [data-theme='isptech'] select.input,
 [data-theme='isptech'] textarea.input {
-  background: rgba(3, 10, 18, 0.85) !important;
-  border-color: rgba(45, 212, 191, 0.28) !important;
-  color: #d6f5f0 !important;
+  background: rgba(3, 8, 18, 0.72) !important;
+  border-color: rgba(148, 163, 184, 0.22) !important;
+  color: #e8eef7 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+[data-theme='isptech'] .input:focus,
+[data-theme='isptech'] input.input:focus,
+[data-theme='isptech'] select.input:focus,
+[data-theme='isptech'] textarea.input:focus {
+  border-color: rgba(249, 115, 22, 0.55) !important;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+}
+[data-theme='isptech'] .data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+[data-theme='isptech'] .data-table thead tr {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.08), rgba(8, 16, 30, 0.65)) !important;
+  color: #94a3b8 !important;
+}
+[data-theme='isptech'] .data-table th {
+  border-bottom-color: rgba(34, 211, 238, 0.16) !important;
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  letter-spacing: 0.06em;
+}
+[data-theme='isptech'] .data-table td {
+  border-bottom-color: rgba(148, 163, 184, 0.08) !important;
+  color: #cbd5e1 !important;
+}
+[data-theme='isptech'] .table-scroll-touch {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  background: rgba(3, 8, 18, 0.35);
+  border-radius: 1rem;
 }
 [data-theme='isptech'] .text-slate-900,
 [data-theme='isptech'] .text-slate-800,
 [data-theme='isptech'] .text-slate-700 {
-  color: #d6f5f0 !important;
+  color: #e8eef7 !important;
 }
 [data-theme='isptech'] .text-slate-600,
-[data-theme='isptech'] .text-slate-500 {
-  color: #5b8a89 !important;
+[data-theme='isptech'] .text-slate-500,
+[data-theme='isptech'] .text-slate-400 {
+  color: #94a3b8 !important;
 }
 [data-theme='isptech'] .border-slate-200,
 [data-theme='isptech'] .border-slate-100 {
-  border-color: rgba(45, 212, 191, 0.2) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
 }
 [data-theme='isptech'] .bg-white,
 [data-theme='isptech'] .bg-white\/90,
 [data-theme='isptech'] .bg-white\/95,
 [data-theme='isptech'] .bg-slate-50 {
-  background-color: rgba(8, 20, 32, 0.92) !important;
+  background-color: rgba(12, 22, 40, 0.72) !important;
 }
 [data-theme='isptech'] .text-brand-600,
 [data-theme='isptech'] .text-brand-500,
 [data-theme='isptech'] .text-brand-400 {
-  color: #2dd4bf !important;
+  color: #fb923c !important;
+}
+[data-theme='isptech'] .bg-brand-50,
+[data-theme='isptech'] .bg-brand-50\/30 {
+  background-color: rgba(249, 115, 22, 0.14) !important;
+}
+[data-theme='isptech'] .nav-active-indicator {
+  background: linear-gradient(180deg, #f97316, #22d3ee) !important;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.55);
+}
+[data-theme='isptech'] .font-display,
+[data-theme='isptech'] .theme-topbar-title,
+[data-theme='isptech'] h1,
+[data-theme='isptech'] h2,
+[data-theme='isptech'] h3 {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+}
+[data-theme='isptech'] .theme-bottom-nav {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 -8px 32px -16px rgba(0, 0, 0, 0.65);
 }
 
 /* Extra bg-white/bg-slate-50 opacity variants used around the app that the

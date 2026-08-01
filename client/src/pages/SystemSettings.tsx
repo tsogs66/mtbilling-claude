@@ -86,7 +86,7 @@ function PanelSettings({ app, setA, save }: any) {
     { key: 'dark', label: 'Dark', Icon: Moon, hint: 'Low-light operations' },
     { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Nautical map art · gold & crimson' },
     { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
-    { key: 'isptech', label: 'ISP Tech', Icon: Network, hint: 'Fiber-grid NOC console' },
+    { key: 'isptech', label: 'Snapshot', Icon: Network, hint: 'Landing navy glass · orange + cyan' },
   ];
   const selectTheme = (key: ThemeId) => {
     setA({ theme: key });

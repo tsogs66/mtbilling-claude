@@ -72,7 +72,7 @@ export function Card({
           {title && (
             <h3 className="card-title flex items-center gap-2">
               {Icon && (
-                <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand-50 text-brand-500">
+                <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand-50 text-brand-500 shadow-[0_0_16px_-6px_rgba(249,115,22,0.55)]">
                   <Icon size={16} />
                 </span>
               )}
@@ -212,11 +212,11 @@ export function PageHeader({ title, description, icon: Icon }: { title: string; 
     <div className="mb-6 animate-fade-in-up">
       <div className="flex items-center gap-3 mb-1">
         {Icon && (
-          <span className="flex items-center justify-center w-10 h-10 rounded-xl bg-brand-50 text-brand-500">
+          <span className="flex items-center justify-center w-10 h-10 rounded-xl bg-brand-50 text-brand-500 ring-1 ring-brand-500/20 shadow-[0_0_20px_-8px_rgba(249,115,22,0.65)]">
             <Icon size={20} />
           </span>
         )}
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">{title}</h2>
+        <h2 className="font-display text-xl font-bold text-slate-900 tracking-tight">{title}</h2>
       </div>
       {description && <p className="text-sm text-slate-500 max-w-3xl ml-[52px]">{description}</p>}
     </div>
