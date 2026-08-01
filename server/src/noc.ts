@@ -103,12 +103,29 @@ export async function probeNocDevice(row: {
     return { online: false, latencyMs: null, sysName: null, vendor: null, model: null, error: 'Host required' };
   }
   const started = Date.now();
-  const result = await probeOlt({
-    host,
-    snmpPort: row.snmp_port || 161,
-    snmpCommunity: row.snmp_community || 'public',
-    ports: parsePorts(row.ports),
-  });
+  // Cap ports — full OLT default list (6×2.5s) was starving the whole panel API.
+  const ports = parsePorts(row.ports) || [];
+  const tryPorts = (ports.length ? ports : [22, 80, 443, 161]).slice(0, 4);
+  const result = await withTimeout(
+    probeOlt({
+      host,
+      snmpPort: row.snmp_port || 161,
+      snmpCommunity: row.snmp_community || 'public',
+      ports: tryPorts,
+    }),
+    6000,
+    {
+      online: false,
+      sysName: null,
+      sysDescr: null,
+      vendor: null,
+      model: null,
+      firmware: null,
+      uptimeTicks: null,
+      probedPort: null,
+      error: `Host ${host} probe timed out`,
+    }
+  );
   const latencyMs = result.online ? Date.now() - started : null;
   return {
     online: result.online,
@@ -147,10 +164,42 @@ function recordHistory(deviceKey: string, online: boolean, latencyMs: number | n
     db.prepare(
       `INSERT INTO noc_probe_history (device_key, online, latency_ms) VALUES (?, ?, ?)`
     ).run(deviceKey, online ? 1 : 0, latencyMs);
-    db.prepare(`DELETE FROM noc_probe_history WHERE probed_at < datetime('now', '-2 day')`).run();
   } catch {
     /* table may be mid-migrate */
   }
+}
+
+function pruneNocHistory() {
+  try {
+    db.prepare(`DELETE FROM noc_probe_history WHERE probed_at < datetime('now', '-2 day')`).run();
+  } catch {
+    /* ignore */
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, ms);
+    p.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
 }
 
 async function probeLinkedRouters(): Promise<
@@ -189,12 +238,22 @@ async function probeLinkedRouters(): Promise<
     }
     const t0 = Date.now();
     try {
-      const p = await probeRouter({
-        host: r.host,
-        api_user: r.api_user,
-        api_pass: r.api_pass || '',
-        port: r.port || 8728,
-      });
+      const p = await withTimeout(
+        probeRouter({
+          host: r.host,
+          api_user: r.api_user,
+          api_pass: r.api_pass || '',
+          port: r.port || 8728,
+        }),
+        5000,
+        {
+          online: false,
+          board: null,
+          identity: null,
+          version: null,
+          error: 'Router probe timed out',
+        }
+      );
       out.push({
         source: 'router',
         id: r.id,
@@ -269,11 +328,26 @@ async function probeLinkedOlts(): Promise<
       continue;
     }
     const t0 = Date.now();
-    const p = await probeOlt({
-      host: o.host,
-      snmpPort: o.snmp_port || 161,
-      snmpCommunity: o.snmp_community || 'public',
-    });
+    const p = await withTimeout(
+      probeOlt({
+        host: o.host,
+        snmpPort: o.snmp_port || 161,
+        snmpCommunity: o.snmp_community || 'public',
+        ports: [22, 80, 443, 161],
+      }),
+      6000,
+      {
+        online: false,
+        sysName: null,
+        sysDescr: null,
+        vendor: null,
+        model: null,
+        firmware: null,
+        uptimeTicks: null,
+        probedPort: null,
+        error: 'OLT probe timed out',
+      }
+    );
     out.push({
       source: 'olt',
       id: o.id,
@@ -308,34 +382,65 @@ async function probeLinkedOlts(): Promise<
   return out;
 }
 
+let nocProbeRunning = false;
+
 export async function runNocProbePass(): Promise<{
   custom: number;
   linked: number;
   online: number;
   offline: number;
+  skipped?: boolean;
+  truncated?: boolean;
 }> {
-  const devices = db.prepare('SELECT * FROM noc_devices WHERE enabled = 1').all() as any[];
-  let online = 0;
-  let offline = 0;
-  for (const d of devices) {
-    // eslint-disable-next-line no-await-in-loop
-    const probe = await probeNocDevice(d);
-    persistProbe(d.id, probe);
-    if (probe.online) online += 1;
-    else offline += 1;
+  // Overlap guard — a slow pass used to stack every 5 min and freeze /api for the whole panel
+  if (nocProbeRunning) {
+    return { custom: 0, linked: 0, online: 0, offline: 0, skipped: true };
   }
-  const linkedRouters = await probeLinkedRouters();
-  const linkedOlts = await probeLinkedOlts();
-  for (const x of [...linkedRouters, ...linkedOlts]) {
-    if (x.online) online += 1;
-    else offline += 1;
+  nocProbeRunning = true;
+  const deadline = Date.now() + 90_000;
+  let truncated = false;
+  try {
+    const devices = db.prepare('SELECT * FROM noc_devices WHERE enabled = 1').all() as any[];
+    let online = 0;
+    let offline = 0;
+    for (const d of devices) {
+      if (Date.now() > deadline) {
+        truncated = true;
+        break;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const probe = await probeNocDevice(d);
+      persistProbe(d.id, probe);
+      if (probe.online) online += 1;
+      else offline += 1;
+    }
+    let linkedRouters: Awaited<ReturnType<typeof probeLinkedRouters>> = [];
+    let linkedOlts: Awaited<ReturnType<typeof probeLinkedOlts>> = [];
+    if (Date.now() <= deadline) {
+      linkedRouters = await probeLinkedRouters();
+    } else {
+      truncated = true;
+    }
+    if (Date.now() <= deadline) {
+      linkedOlts = await probeLinkedOlts();
+    } else {
+      truncated = true;
+    }
+    for (const x of [...linkedRouters, ...linkedOlts]) {
+      if (x.online) online += 1;
+      else offline += 1;
+    }
+    pruneNocHistory();
+    return {
+      custom: devices.length,
+      linked: linkedRouters.length + linkedOlts.length,
+      online,
+      offline,
+      truncated: truncated || undefined,
+    };
+  } finally {
+    nocProbeRunning = false;
   }
-  return {
-    custom: devices.length,
-    linked: linkedRouters.length + linkedOlts.length,
-    online,
-    offline,
-  };
 }
 
 nocRouter.get('/noc/summary', async (_req, res) => {
@@ -361,8 +466,10 @@ nocRouter.get('/noc/summary', async (_req, res) => {
 
 nocRouter.get('/noc', async (req, res) => {
   const live = String(req.query.live || '') === '1' || String(req.query.live || '') === 'true';
+  // Never await a full probe pass on GET — that blocked the whole panel for minutes
+  // (Cloudflare hostname looked hung while the SPA shell still painted).
   if (live) {
-    await runNocProbePass();
+    void runNocProbePass().catch((e) => console.error('[noc] background live probe failed:', e));
   }
   const devices = db
     .prepare('SELECT * FROM noc_devices ORDER BY kind, name')
@@ -379,9 +486,7 @@ nocRouter.get('/noc', async (req, res) => {
     });
 
   let linked: any[] = [];
-  if (live) {
-    linked = [...(await probeLinkedRouters()), ...(await probeLinkedOlts())];
-  } else {
+  {
     // Cheap snapshot without re-probing routers/OLTs (use last known)
     const routers = db
       .prepare('SELECT id, name, host, board, status FROM routers ORDER BY name')
@@ -807,10 +912,10 @@ let nocTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startNocMonitor(intervalMs = 60_000) {
   if (nocTimer) clearInterval(nocTimer);
-  // Defer first pass so boot isn't slammed alongside other schedulers
+  // Defer first pass so boot isn't slammed alongside StatusHub / notify (same 5‑min cadence)
   setTimeout(() => {
     runNocProbePass().catch((e) => console.error('[noc] probe pass failed:', e));
-  }, 20_000);
+  }, 75_000);
   nocTimer = setInterval(() => {
     runNocProbePass().catch((e) => console.error('[noc] probe pass failed:', e));
   }, intervalMs);
