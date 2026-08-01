@@ -74,6 +74,8 @@ import {
   listOutageOverview,
   getOutageService,
   runOutageSweep,
+  initOutageReportTables,
+  listRecentSubscriberOutageReports,
 } from './outageMonitor.js';
 import {
   recordPppoePayment,
@@ -4424,6 +4426,11 @@ app.get('/api/outage-monitor/check', async (_req, res) => {
   }
 });
 
+app.get('/api/outage-monitor/reports', (req, res) => {
+  const limit = Number(req.query.limit) || 50;
+  res.json({ reports: listRecentSubscriberOutageReports(limit) });
+});
+
 app.get('/api/outage-monitor/:slug', (req, res) => {
   const row = getOutageService(String(req.params.slug || ''));
   if (!row) return res.status(404).json({ error: 'Service not found' });
@@ -4610,6 +4617,7 @@ server.listen(PORT, () => {
   // restart, when the box is already under pressure and the dataset just got
   // bigger. Stagger them instead of firing the whole burst at once.
   // On RPi/thin PC, intervals stretch so Cloudflare + panel API stay responsive.
+  initOutageReportTables();
   startStatusHub(ap.intervals.statusHub);
   startOutageMonitor(ap.intervals.outage);
   startUptime(ap.intervals.uptime);

@@ -7,6 +7,11 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { fetchDhcpLeases, removeHotspotActive, type RouterConn } from './mikrotik.js';
+import {
+  listOutageServiceCatalog,
+  recordSubscriberOutageReport,
+  resolveOutageServiceSlugs,
+} from './outageMonitor.js';
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -851,13 +856,29 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
   });
 });
 
+publicPortalRouter.get('/public/portal/outage-services', (_req, res) => {
+  res.json({ services: listOutageServiceCatalog() });
+});
+
 publicPortalRouter.post('/public/portal/ticket', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
   if (!sess) return res.status(401).json({ error: 'Session expired' });
   const description = String(req.body?.description || '').trim();
-  const type = String(req.body?.type || 'repair');
-  if (!description) return res.status(400).json({ error: 'Description required' });
+  const serviceSlugs = resolveOutageServiceSlugs(req.body?.serviceSlugs ?? req.body?.services);
+  const type = String(req.body?.type || (serviceSlugs.length ? 'other' : 'repair'));
+  if (!description && !serviceSlugs.length) {
+    return res.status(400).json({ error: 'Describe the issue or select affected services' });
+  }
+  const serviceNames = listOutageServiceCatalog()
+    .filter((s) => serviceSlugs.includes(s.slug))
+    .map((s) => s.name);
+  const fullDescription = [
+    description,
+    serviceNames.length ? `Affected services: ${serviceNames.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   const number = nextNumber('JO', 'job_orders', 'number');
   const info = db
     .prepare(
@@ -872,9 +893,22 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
       sess.contact,
       sess.address,
       ['repair', 'new_install', 'follow_up', 'disconnect', 'other'].includes(type) ? type : 'repair',
-      description
+      fullDescription
     );
-  res.status(201).json(db.prepare('SELECT * FROM job_orders WHERE id = ?').get(info.lastInsertRowid));
+  const job = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(info.lastInsertRowid) as any;
+  let outageReport = null;
+  if (serviceSlugs.length) {
+    outageReport = recordSubscriberOutageReport({
+      pppoeUserId: sess.uid,
+      customerName: sess.customer_name || sess.username,
+      contact: sess.contact,
+      accountNumber: sess.account_number,
+      description: description || fullDescription,
+      jobOrderId: job?.id ?? null,
+      serviceSlugs,
+    });
+  }
+  res.status(201).json({ ...job, outageReport });
 });
 
 publicPortalRouter.post('/public/portal/logout', (req, res) => {

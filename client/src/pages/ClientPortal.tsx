@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Wallet, FileText, LifeBuoy, LogOut } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -16,6 +16,13 @@ type PortalSettings = {
   showInvoices?: boolean;
   showTickets?: boolean;
   showCompany?: boolean;
+};
+
+type OutageServiceOpt = {
+  slug: string;
+  name: string;
+  category: string;
+  region: string;
 };
 
 async function portalFetch(path: string, opts: RequestInit = {}) {
@@ -41,6 +48,9 @@ export default function ClientPortal() {
   const [ticket, setTicket] = useState('');
   const [ticketMsg, setTicketMsg] = useState('');
   const [pageSettings, setPageSettings] = useState<PortalSettings>({});
+  const [outageServices, setOutageServices] = useState<OutageServiceOpt[]>([]);
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [serviceFilter, setServiceFilter] = useState('');
 
   const loadMe = async (t = token) => {
     if (!t) return;
@@ -62,7 +72,28 @@ export default function ClientPortal() {
       setToken('');
       setMe(null);
     });
+    portalFetch('/public/portal/outage-services')
+      .then((d) => setOutageServices(d.services || []))
+      .catch(() => setOutageServices([]));
   }, [token]);
+
+  const servicesByCategory = useMemo(() => {
+    const q = serviceFilter.trim().toLowerCase();
+    const map = new Map<string, OutageServiceOpt[]>();
+    for (const s of outageServices) {
+      if (q && !s.name.toLowerCase().includes(q) && !s.category.toLowerCase().includes(q)) continue;
+      const list = map.get(s.category) || [];
+      list.push(s);
+      map.set(s.category, list);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [outageServices, serviceFilter]);
+
+  const toggleService = (slug: string) => {
+    setSelectedServices((prev) =>
+      prev.includes(slug) ? prev.filter((x) => x !== slug) : [...prev, slug]
+    );
+  };
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,17 +122,32 @@ export default function ClientPortal() {
     localStorage.removeItem(TOKEN_KEY);
     setToken('');
     setMe(null);
+    setSelectedServices([]);
   };
 
   const submitTicket = async () => {
     setTicketMsg('');
+    if (!ticket.trim() && !selectedServices.length) {
+      setTicketMsg('Describe the issue or select one or more affected services.');
+      return;
+    }
     try {
-      await portalFetch('/public/portal/ticket', {
+      const data = await portalFetch('/public/portal/ticket', {
         method: 'POST',
-        body: JSON.stringify({ description: ticket, type: 'repair' }),
+        body: JSON.stringify({
+          description: ticket,
+          type: selectedServices.length ? 'other' : 'repair',
+          serviceSlugs: selectedServices,
+        }),
       });
       setTicket('');
-      setTicketMsg('Support request submitted. Our team will follow up.');
+      setSelectedServices([]);
+      const named = data?.outageReport?.serviceNames?.join(', ');
+      setTicketMsg(
+        named
+          ? `Report submitted. Outage noted for: ${named}. Our team will follow up.`
+          : 'Support request submitted. Our team will follow up.'
+      );
       loadMe();
     } catch (err: any) {
       setTicketMsg(err.message || 'Failed');
@@ -225,13 +271,80 @@ export default function ClientPortal() {
         {showTickets && (
           <section className="bg-white rounded-xl border border-slate-200 p-4">
             <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3"><LifeBuoy size={16} /> Request support</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Select any apps or services that are down (optional), then describe the issue. Service outage reports also appear on the ISP Outage Monitor.
+            </p>
+            {outageServices.length > 0 && (
+              <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Affected services
+                    {selectedServices.length > 0 && (
+                      <span className="ml-1 normal-case font-medium text-brand-600">
+                        ({selectedServices.length} selected)
+                      </span>
+                    )}
+                  </div>
+                  {selectedServices.length > 0 && (
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 hover:text-slate-800"
+                      onClick={() => setSelectedServices([])}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <input
+                  className="input mb-2 text-sm"
+                  placeholder="Filter services (GCash, Facebook…)"
+                  value={serviceFilter}
+                  onChange={(e) => setServiceFilter(e.target.value)}
+                />
+                <div className="max-h-52 overflow-y-auto space-y-3 pr-1">
+                  {servicesByCategory.map(([cat, items]) => (
+                    <div key={cat}>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">{cat}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {items.map((svc) => {
+                          const on = selectedServices.includes(svc.slug);
+                          return (
+                            <button
+                              key={svc.slug}
+                              type="button"
+                              onClick={() => toggleService(svc.slug)}
+                              className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                                on
+                                  ? 'bg-rose-50 border-rose-300 text-rose-800 font-semibold'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                              }`}
+                            >
+                              {svc.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  {!servicesByCategory.length && (
+                    <p className="text-xs text-slate-400 py-2">No services match that filter.</p>
+                  )}
+                </div>
+              </div>
+            )}
             <textarea
               className="input min-h-[90px] mb-2"
               placeholder="Describe the issue (no signal, slow, relocation…)"
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
             />
-            <button className="btn-primary" disabled={!ticket.trim()} onClick={submitTicket}>Submit ticket</button>
+            <button
+              className="btn-primary"
+              disabled={!ticket.trim() && !selectedServices.length}
+              onClick={submitTicket}
+            >
+              Submit report
+            </button>
             {ticketMsg && <p className="text-sm text-slate-600 mt-2">{ticketMsg}</p>}
             {(me.openJobs || []).length > 0 && (
               <ul className="mt-4 space-y-2 text-sm">

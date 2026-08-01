@@ -1,9 +1,40 @@
 /**
  * Outage Monitor — Downdetector-style public-internet status directory.
  * Crowdsourced feeds (isitdownstatus.com) + official status pages.
+ * Also stores ISP-local subscriber reports from the client portal.
  * Separate from Status Hub (router WAN probes).
  */
+import { db } from './db.js';
+
 export type OutageLevel = 'no_problems' | 'possible_problems' | 'problems' | 'unknown';
+
+let tablesReady = false;
+
+export function initOutageReportTables() {
+  if (tablesReady) return;
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS outage_subscriber_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER,
+      customer_name TEXT,
+      contact TEXT,
+      account_number TEXT,
+      description TEXT,
+      job_order_id INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS outage_subscriber_report_services (
+      report_id INTEGER NOT NULL,
+      service_slug TEXT NOT NULL,
+      PRIMARY KEY (report_id, service_slug)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outage_report_services_slug
+      ON outage_subscriber_report_services(service_slug);
+    CREATE INDEX IF NOT EXISTS idx_outage_reports_created
+      ON outage_subscriber_reports(created_at);
+  `);
+  tablesReady = true;
+}
 
 type ServiceSeed = {
   slug: string;
@@ -64,11 +95,137 @@ type CacheRow = {
   level: OutageLevel;
   status: string;
   detail: string;
+  /** Crowdsourced feed counts */
   reports1h: number;
   reports24h: number;
+  /** ISP subscriber reports from /portal */
+  localReports1h: number;
+  localReports24h: number;
   checkedAt: number;
   history: { t: number; level: OutageLevel; reports1h: number }[];
 };
+
+export function listOutageServiceCatalog() {
+  return SERVICE_SEEDS.map((s) => ({
+    slug: s.slug,
+    name: s.name,
+    category: s.category,
+    region: s.region || 'global',
+  }));
+}
+
+export function resolveOutageServiceSlugs(slugs: unknown): string[] {
+  if (!Array.isArray(slugs)) return [];
+  const valid = new Set(SERVICE_SEEDS.map((s) => s.slug));
+  const out: string[] = [];
+  for (const raw of slugs) {
+    const slug = String(raw || '').trim().toLowerCase();
+    if (slug && valid.has(slug) && !out.includes(slug)) out.push(slug);
+  }
+  return out;
+}
+
+function localReportCounts(): Map<string, { h1: number; h24: number }> {
+  initOutageReportTables();
+  const map = new Map<string, { h1: number; h24: number }>();
+  const rows = db
+    .prepare(
+      `SELECT s.service_slug AS slug,
+              SUM(CASE WHEN r.created_at >= datetime('now', '-1 hour') THEN 1 ELSE 0 END) AS h1,
+              SUM(CASE WHEN r.created_at >= datetime('now', '-24 hour') THEN 1 ELSE 0 END) AS h24
+       FROM outage_subscriber_report_services s
+       JOIN outage_subscriber_reports r ON r.id = s.report_id
+       WHERE r.created_at >= datetime('now', '-24 hour')
+       GROUP BY s.service_slug`
+    )
+    .all() as { slug: string; h1: number; h24: number }[];
+  for (const row of rows) {
+    map.set(row.slug, { h1: Number(row.h1) || 0, h24: Number(row.h24) || 0 });
+  }
+  return map;
+}
+
+function levelWithLocal(feedLevel: OutageLevel, local1h: number): OutageLevel {
+  // Subscriber reports are high-signal for a small ISP — elevate sooner than public feed thresholds.
+  if (local1h >= 3) return 'problems';
+  if (local1h >= 1) {
+    if (feedLevel === 'problems') return 'problems';
+    return 'possible_problems';
+  }
+  return feedLevel;
+}
+
+export type RecordSubscriberOutageInput = {
+  pppoeUserId: number;
+  customerName?: string | null;
+  contact?: string | null;
+  accountNumber?: string | null;
+  description?: string | null;
+  jobOrderId?: number | null;
+  serviceSlugs: string[];
+};
+
+export function recordSubscriberOutageReport(input: RecordSubscriberOutageInput) {
+  initOutageReportTables();
+  const slugs = resolveOutageServiceSlugs(input.serviceSlugs);
+  if (!slugs.length) return null;
+  const info = db
+    .prepare(
+      `INSERT INTO outage_subscriber_reports
+       (pppoe_user_id, customer_name, contact, account_number, description, job_order_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.pppoeUserId,
+      input.customerName || null,
+      input.contact || null,
+      input.accountNumber || null,
+      input.description || null,
+      input.jobOrderId ?? null
+    );
+  const reportId = Number(info.lastInsertRowid);
+  const ins = db.prepare(
+    `INSERT INTO outage_subscriber_report_services (report_id, service_slug) VALUES (?, ?)`
+  );
+  for (const slug of slugs) ins.run(reportId, slug);
+  return {
+    id: reportId,
+    serviceSlugs: slugs,
+    serviceNames: slugs.map((slug) => SERVICE_SEEDS.find((s) => s.slug === slug)?.name || slug),
+  };
+}
+
+export function listRecentSubscriberOutageReports(limit = 50) {
+  initOutageReportTables();
+  const reports = db
+    .prepare(
+      `SELECT id, pppoe_user_id, customer_name, contact, account_number, description, job_order_id, created_at
+       FROM outage_subscriber_reports
+       ORDER BY id DESC LIMIT ?`
+    )
+    .all(Math.min(200, Math.max(1, limit))) as any[];
+  const svcStmt = db.prepare(
+    `SELECT service_slug FROM outage_subscriber_report_services WHERE report_id = ? ORDER BY service_slug`
+  );
+  return reports.map((r) => {
+    const slugs = (svcStmt.all(r.id) as { service_slug: string }[]).map((x) => x.service_slug);
+    return {
+      id: r.id,
+      pppoeUserId: r.pppoe_user_id,
+      customerName: r.customer_name,
+      contact: r.contact,
+      accountNumber: r.account_number,
+      description: r.description,
+      jobOrderId: r.job_order_id,
+      createdAt: r.created_at,
+      services: slugs.map((slug) => ({
+        slug,
+        name: SERVICE_SEEDS.find((s) => s.slug === slug)?.name || slug,
+        category: SERVICE_SEEDS.find((s) => s.slug === slug)?.category || '',
+      })),
+    };
+  });
+}
 
 const cache = new Map<string, CacheRow>();
 let lastSweepAt: number | null = null;
@@ -163,6 +320,8 @@ async function probeService(seed: ServiceSeed): Promise<Omit<CacheRow, 'history'
     detail,
     reports1h,
     reports24h,
+    localReports1h: 0,
+    localReports24h: 0,
     checkedAt: Date.now(),
   };
 }
@@ -200,10 +359,13 @@ export async function runOutageSweep() {
 }
 
 export function listOutageOverview() {
+  initOutageReportTables();
+  const local = localReportCounts();
   const services = SERVICE_SEEDS.map((s) => {
     const c = cache.get(s.slug);
-    return (
-      c || {
+    const base =
+      c ||
+      ({
         slug: s.slug,
         name: s.name,
         category: s.category,
@@ -214,16 +376,43 @@ export function listOutageOverview() {
         detail: 'Waiting for first sweep…',
         reports1h: 0,
         reports24h: 0,
+        localReports1h: 0,
+        localReports24h: 0,
         checkedAt: 0,
         history: [],
-      }
-    );
+      } satisfies CacheRow);
+    const loc = local.get(s.slug) || { h1: 0, h24: 0 };
+    const localReports1h = loc.h1;
+    const localReports24h = loc.h24;
+    const level =
+      base.level === 'unknown' && !localReports1h
+        ? base.level
+        : levelWithLocal(base.level === 'unknown' ? 'no_problems' : base.level, localReports1h);
+    let detail = base.detail;
+    if (localReports1h > 0) {
+      detail = `${detail} · ${localReports1h} subscriber report${localReports1h === 1 ? '' : 's'}/1h`;
+    }
+    return {
+      ...base,
+      localReports1h,
+      localReports24h,
+      level,
+      detail,
+    };
   });
 
   const mostReported = [...services]
-    .filter((s) => s.reports1h > 0 || s.level !== 'no_problems')
-    .sort((a, b) => b.reports1h - a.reports1h || b.reports24h - a.reports24h)
+    .filter((s) => s.reports1h > 0 || s.localReports1h > 0 || (s.level !== 'no_problems' && s.level !== 'unknown'))
+    .sort(
+      (a, b) =>
+        b.localReports1h - a.localReports1h ||
+        b.reports1h - a.reports1h ||
+        b.localReports24h - a.localReports24h ||
+        b.reports24h - a.reports24h
+    )
     .slice(0, 8);
+
+  const localReportTotal24h = [...local.values()].reduce((n, v) => n + v.h24, 0);
 
   const summary = {
     total: services.length,
@@ -231,11 +420,18 @@ export function listOutageOverview() {
     possibleProblems: services.filter((s) => s.level === 'possible_problems').length,
     problems: services.filter((s) => s.level === 'problems').length,
     unknown: services.filter((s) => s.level === 'unknown').length,
+    localReports24h: localReportTotal24h,
     lastSweepAt,
     sweeping,
   };
 
-  return { services, mostReported, summary, categories: [...new Set(SERVICE_SEEDS.map((s) => s.category))] };
+  return {
+    services,
+    mostReported,
+    summary,
+    categories: [...new Set(SERVICE_SEEDS.map((s) => s.category))],
+    subscriberReports: listRecentSubscriberOutageReports(40),
+  };
 }
 
 export function getOutageService(slug: string) {
