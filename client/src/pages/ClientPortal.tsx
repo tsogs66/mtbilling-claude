@@ -8,6 +8,7 @@ import { getApiBase } from '../config';
 import Logo from '../components/Logo';
 import { PRODUCT_TITLE } from '../branding';
 import { usePortalInstall } from '../lib/portalInstall';
+import { subscribePortalLive } from '../lib/portalLive';
 
 const TOKEN_KEY = 'mt_portal_token';
 
@@ -106,6 +107,30 @@ export default function ClientPortal() {
     portalFetch('/public/portal/plans')
       .then((d) => setPlans(d.plans || []))
       .catch(() => setPlans([]));
+  }, [token]);
+
+  // Realtime: when staff accepts/rejects a plan change, refresh without reload.
+  useEffect(() => {
+    if (!token) return;
+    const stop = subscribePortalLive({
+      path: '/public/portal/events',
+      headers: { 'X-Portal-Token': token },
+      onEvent: (event, data) => {
+        if (event === 'plan_change' || data?.type === 'plan_change') {
+          void loadMe().catch(() => undefined);
+          if (data?.action === 'accepted') {
+            setPlanMsg(
+              data?.payload?.toPlan
+                ? `Plan change approved — you are now on ${data.payload.toPlan}.`
+                : 'Plan change approved.'
+            );
+          } else if (data?.action === 'rejected') {
+            setPlanMsg('Plan change was declined by your ISP. You can request again.');
+          }
+        }
+      },
+    });
+    return stop;
   }, [token]);
 
   const servicesByCategory = useMemo(() => {

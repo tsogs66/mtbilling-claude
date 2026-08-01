@@ -6,6 +6,7 @@ import {
 import Layout from '../components/Layout';
 import { Card, FormField, Modal, ModalFooter, PageHeader, StatusBadge, Toolbar } from '../components/ui';
 import { api, peso } from '../api';
+import { subscribePortalLive } from '../lib/portalLive';
 
 type PortalSettings = {
   title: string;
@@ -56,6 +57,7 @@ export default function PortalAdmin() {
   const [toast, setToast] = useState('');
   const [edit, setEdit] = useState<Partial<PortalAccount> & { pin?: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'retry'>('connecting');
 
   const show = (m: string) => {
     setToast(m);
@@ -84,6 +86,31 @@ export default function PortalAdmin() {
     loadAccounts();
     loadSettings();
     loadPlanRequests();
+  }, []);
+
+  // Realtime: new/updated portal plan-change requests without refresh.
+  useEffect(() => {
+    const token = localStorage.getItem('mt_token') || '';
+    const stop = subscribePortalLive({
+      path: '/client-portal/events',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      onStatus: setLiveStatus,
+      onEvent: (event, data) => {
+        if (event === 'plan_change' || data?.type === 'plan_change') {
+          loadPlanRequests();
+          if (data?.action === 'created') {
+            show(`New plan-change request${data?.payload?.toPlan ? `: → ${data.payload.toPlan}` : ''}`);
+          }
+        }
+        if (event === 'ticket' || data?.type === 'ticket') {
+          // Keep list fresh if staff is watching portal admin; Job Orders also benefits from toast.
+          if (data?.action === 'created') {
+            show(`New portal support ticket${data?.payload?.number ? ` ${data.payload.number}` : ''}`);
+          }
+        }
+      },
+    });
+    return stop;
   }, []);
 
   const filtered = useMemo(() => {
@@ -237,6 +264,18 @@ export default function PortalAdmin() {
         >
           <ExternalLink size={16} /> Open /portal
         </a>
+        <span
+          className={`text-[11px] font-medium px-2 py-1 rounded-full ring-1 ${
+            liveStatus === 'live'
+              ? 'text-emerald-700 bg-emerald-50 ring-emerald-200'
+              : liveStatus === 'retry'
+                ? 'text-amber-700 bg-amber-50 ring-amber-200'
+                : 'text-slate-500 bg-slate-50 ring-slate-200'
+          }`}
+          title="Live updates from subscriber portal"
+        >
+          {liveStatus === 'live' ? '● Live' : liveStatus === 'retry' ? '○ Reconnecting…' : '○ Connecting…'}
+        </span>
       </div>
 
       {tab === 'accounts' && (

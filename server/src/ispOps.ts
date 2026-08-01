@@ -13,6 +13,7 @@ import {
   resolveOutageServiceSlugs,
 } from './outageMonitor.js';
 import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
+import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
 
 const PLAN_CYCLE_DAYS = 30;
 
@@ -761,6 +762,11 @@ ispOpsRouter.get('/client-portal/plan-changes', (req, res) => {
   res.json({ requests: db.prepare(sql).all(...params) });
 });
 
+/** Live stream of portal requests (plan changes, tickets) for staff. */
+ispOpsRouter.get('/client-portal/events', (req, res) => {
+  pipePortalSse(res);
+});
+
 ispOpsRouter.post('/client-portal/plan-changes/:id/accept', async (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) as any;
@@ -838,9 +844,18 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/accept', async (req, res) => 
     id
   );
 
+  const accepted = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id);
+  publishPortalEvent({
+    type: 'plan_change',
+    action: 'accepted',
+    pppoeUserId: user.id,
+    requestId: id,
+    status: 'accepted',
+    payload: { proration, toPlan: plan.name },
+  });
   res.json({
     ok: true,
-    request: db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id),
+    request: accepted,
     proration,
     planChange: change,
     invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invInfo.lastInsertRowid),
@@ -855,7 +870,15 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/reject', (req, res) => {
   db.prepare(
     `UPDATE plan_change_requests SET status = 'rejected', review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`
   ).run(String(req.body?.note || '').trim() || null, id);
-  res.json({ ok: true, request: db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) });
+  const rejected = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id);
+  publishPortalEvent({
+    type: 'plan_change',
+    action: 'rejected',
+    pppoeUserId: row.pppoe_user_id,
+    requestId: id,
+    status: 'rejected',
+  });
+  res.json({ ok: true, request: rejected });
 });
 
 // ─── Rogue MAC ──────────────────────────────────────────────────────────────
@@ -1205,7 +1228,23 @@ publicPortalRouter.post('/public/portal/plan-change', (req, res) => {
        FROM plan_change_requests WHERE id = ?`
     )
     .get(info.lastInsertRowid);
+  publishPortalEvent({
+    type: 'plan_change',
+    action: 'created',
+    pppoeUserId: sess.uid,
+    requestId: Number(info.lastInsertRowid),
+    status: 'pending',
+    payload: { toPlan: plan.name, fromPlan: user?.profile || null, proratedBalance: proration.proratedBalance },
+  });
   res.status(201).json({ request: row, proration });
+});
+
+/** Live stream for the signed-in subscriber (their requests only). */
+publicPortalRouter.get('/public/portal/events', (req, res) => {
+  const token = String(req.headers['x-portal-token'] || req.query.token || '');
+  const sess = portalUserFromToken(token);
+  if (!sess) return res.status(401).json({ error: 'Session expired' });
+  pipePortalSse(res, { pppoeUserId: sess.uid });
 });
 
 publicPortalRouter.post('/public/portal/ticket', (req, res) => {
@@ -1256,6 +1295,14 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
       serviceSlugs,
     });
   }
+  publishPortalEvent({
+    type: 'ticket',
+    action: 'created',
+    pppoeUserId: sess.uid,
+    requestId: Number(job?.id) || Number(info.lastInsertRowid),
+    status: 'open',
+    payload: { number: job?.number || number },
+  });
   res.status(201).json({ ...job, outageReport });
 });
 
