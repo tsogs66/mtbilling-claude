@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Wallet, FileText, LifeBuoy, LogOut, CreditCard, ExternalLink, Copy, Check,
-  Phone, Building2, ChevronRight, Sparkles, Download, Share, X, Mail, MapPin,
+  Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
+  Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -52,10 +52,6 @@ async function portalFetch(path: string, opts: RequestInit = {}) {
   return data;
 }
 
-function copyText(text: string) {
-  return navigator.clipboard?.writeText(text).catch(() => undefined);
-}
-
 function statusTone(status?: string) {
   const s = String(status || '').toLowerCase();
   if (s === 'active' || s === 'paid') return 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30';
@@ -79,7 +75,9 @@ export default function ClientPortal() {
   const [serviceFilter, setServiceFilter] = useState('');
   const [payBusy, setPayBusy] = useState(false);
   const [payMsg, setPayMsg] = useState('');
-  const [copied, setCopied] = useState('');
+  const [plans, setPlans] = useState<{ id: number; name: string; rateLimit: string; price: number }[]>([]);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planMsg, setPlanMsg] = useState('');
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
 
   const loadMe = async () => {
@@ -105,6 +103,9 @@ export default function ClientPortal() {
     portalFetch('/public/portal/outage-services')
       .then((d) => setOutageServices(d.services || []))
       .catch(() => setOutageServices([]));
+    portalFetch('/public/portal/plans')
+      .then((d) => setPlans(d.plans || []))
+      .catch(() => setPlans([]));
   }, [token]);
 
   const servicesByCategory = useMemo(() => {
@@ -123,12 +124,6 @@ export default function ClientPortal() {
     setSelectedServices((prev) =>
       prev.includes(slug) ? prev.filter((x) => x !== slug) : [...prev, slug]
     );
-  };
-
-  const onCopy = async (label: string, value: string) => {
-    await copyText(value);
-    setCopied(label);
-    setTimeout(() => setCopied(''), 1800);
   };
 
   const login = async (e: React.FormEvent) => {
@@ -183,6 +178,24 @@ export default function ClientPortal() {
       setPayMsg(err.message || 'Could not open payment page');
     } finally {
       setPayBusy(false);
+    }
+  };
+
+  const requestPlanChange = async (planName: string) => {
+    setPlanMsg('');
+    if (!confirm(`Request change to ${planName}? Your ISP must accept before the plan updates.`)) return;
+    setPlanBusy(true);
+    try {
+      await portalFetch('/public/portal/plan-change', {
+        method: 'POST',
+        body: JSON.stringify({ plan: planName }),
+      });
+      setPlanMsg(`Plan change to ${planName} submitted — waiting for ISP approval.`);
+      await loadMe();
+    } catch (err: any) {
+      setPlanMsg(err.message || 'Could not submit plan change');
+    } finally {
+      setPlanBusy(false);
     }
   };
 
@@ -323,16 +336,34 @@ export default function ClientPortal() {
   const paymentLink: PaymentLink | null = me.paymentLink || null;
   const balance = Number(me.balance) || 0;
   const company = me.company || {};
-  const payAmount = paymentLink?.amount || balance || Number(c.price) || 0;
   const canPay = balance > 0 || !!paymentLink || Number(c.price) > 0;
+  const pendingPlan = me.planChangeRequest || null;
 
   const payCtaLabel = (() => {
-    if (paymentLink?.status === 'submitted') return 'View payment status';
-    if (paymentLink?.status === 'rejected') return 'Resubmit payment';
+    if (paymentLink?.status === 'submitted') return 'View status';
+    if (paymentLink?.status === 'rejected') return 'Resubmit';
     if (paymentLink?.status === 'pending') return 'Pay now';
-    if (balance > 0) return 'Open payment page';
-    return 'Get payment link';
+    if (balance > 0) return 'Pay now';
+    return 'Pay';
   })();
+
+  const previewProration = (newPrice: number) => {
+    const CYCLE = 30;
+    const due = c.due ? String(c.due).slice(0, 10) : null;
+    const asOf = new Date().toISOString().slice(0, 10);
+    let remaining = CYCLE;
+    if (due) {
+      const rem = Math.round(
+        (Date.parse(`${due}T00:00:00Z`) - Date.parse(`${asOf}T00:00:00Z`)) / 864e5
+      );
+      remaining = Math.max(0, Math.min(CYCLE, rem));
+    }
+    const consumed = CYCLE - remaining;
+    const oldP = Number(c.price) || 0;
+    const oldPortion = Math.round((oldP / CYCLE) * consumed);
+    const newPortion = Math.round((newPrice / CYCLE) * remaining);
+    return { consumed, remaining, oldPortion, newPortion, total: oldPortion + newPortion };
+  };
 
   return (
     <div
@@ -416,22 +447,46 @@ export default function ClientPortal() {
             </p>
           )}
 
-          <div className="relative mt-6 grid grid-cols-2 gap-3">
+          <div className="relative mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {showBalance && (
-              <div className="rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm">
-                <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider mb-1">
-                  <Wallet size={13} /> Balance due
+              <div className="rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm flex flex-col">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider">
+                    <Wallet size={13} /> Balance due
+                  </div>
+                  {paymentLink?.status && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-slate-300 capitalize">
+                      {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
+                    </span>
+                  )}
                 </div>
                 <div
                   className={`text-2xl sm:text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
                   style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
                 >
-                  {peso(balance)}
+                  {peso(paymentLink?.amount || balance)}
                 </div>
+                {paymentLink?.expiresAt && paymentLink.status === 'pending' && (
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
+                  </div>
+                )}
+                {canPay && (
+                  <button
+                    type="button"
+                    onClick={openPayment}
+                    disabled={payBusy}
+                    className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold px-4 py-2.5 text-sm shadow-lg shadow-orange-500/25 disabled:opacity-60 transition w-full"
+                  >
+                    {payBusy ? 'Opening…' : payCtaLabel}
+                    <ExternalLink size={15} />
+                  </button>
+                )}
+                {payMsg && <p className="mt-2 text-xs text-rose-300">{payMsg}</p>}
               </div>
             )}
-            <div className={`rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm ${showBalance ? '' : 'col-span-2'}`}>
-              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Plan</div>
+            <div className={`rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm ${showBalance ? '' : 'sm:col-span-2'}`}>
+              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Current plan</div>
               <div className="font-semibold text-white truncate">{c.plan || '—'}</div>
               <div className="text-sm text-slate-400 mt-0.5">
                 {peso(c.price)} · due {c.due || '—'}
@@ -442,106 +497,78 @@ export default function ClientPortal() {
       </div>
 
       <main className="portal-light relative max-w-3xl mx-auto px-4 -mt-4 pb-10 space-y-4">
-        {/* Payment — deep-link to dedicated /pay page (proof upload lives there) */}
-        <section className="rounded-2xl border border-orange-200/80 bg-gradient-to-br from-orange-50 via-white to-sky-50 shadow-lg shadow-orange-500/5 overflow-hidden">
-          <div className="p-5 sm:p-6">
-            <div className="flex items-start gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-500 text-white shadow-md shadow-orange-500/30">
-                <CreditCard size={20} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2
-                    className="text-lg font-bold text-slate-900"
-                    style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
-                  >
-                    Pay your bill
-                  </h2>
-                  {paymentLink?.status && (
-                    <span className="text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-900/5 text-slate-600 capitalize">
-                      {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
-                  {paymentLink
-                    ? 'Open the secure payment page to send GCash or Maya with a screenshot proof.'
-                    : 'Pay via GCash or Maya on the payment portal — upload your receipt there for faster posting.'}
+        {plans.length > 0 && (
+          <section className="rounded-2xl border border-slate-200/80 bg-white/70 backdrop-blur-md p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <div>
+                <h2 className="font-semibold text-slate-900 flex items-center gap-2" style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}>
+                  <Zap size={16} className="text-orange-500" /> Change plan
+                </h2>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Request a new plan — your ISP must accept it. Mid-cycle changes are prorated (30-day month).
                 </p>
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Amount</div>
-                <div
-                  className="text-3xl font-bold text-slate-900 tabular-nums"
-                  style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
-                >
-                  {peso(payAmount)}
-                </div>
-                {paymentLink?.months ? (
-                  <div className="text-xs text-slate-500 mt-0.5">{paymentLink.months} month{paymentLink.months === 1 ? '' : 's'}</div>
-                ) : null}
+            {pendingPlan && (
+              <div className="mt-3 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                Pending: <b>{pendingPlan.fromPlan || '—'}</b> → <b>{pendingPlan.toPlan}</b>
+                {' '}· estimated due {peso(pendingPlan.proratedBalance)}
+                <span className="block text-xs text-amber-800/80 mt-0.5">
+                  {pendingPlan.consumedDays}d @ {peso(pendingPlan.fromPrice)} + {pendingPlan.remainingDays}d @ {peso(pendingPlan.toPrice)}
+                </span>
               </div>
-              {canPay && (
-                <button
-                  type="button"
-                  onClick={openPayment}
-                  disabled={payBusy}
-                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold px-5 py-3 text-sm shadow-lg shadow-slate-900/20 disabled:opacity-60 transition"
-                >
-                  {payBusy ? 'Opening…' : payCtaLabel}
-                  <ExternalLink size={16} />
-                </button>
-              )}
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+              {plans.map((p) => {
+                const current = p.name === c.plan;
+                const preview = !current ? previewProration(Number(p.price) || 0) : null;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={planBusy || current || !!pendingPlan}
+                    onClick={() => void requestPlanChange(p.name)}
+                    className="portal-plan-glass group text-left rounded-2xl p-4 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 tracking-tight truncate group-hover:text-orange-700 transition-colors">
+                          {p.name}
+                        </div>
+                        {p.rateLimit && (
+                          <div className="mt-1 inline-flex items-center gap-1 text-xs text-slate-500">
+                            <Gauge size={12} /> {p.rateLimit}
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className="text-lg font-bold text-slate-900 tabular-nums shrink-0"
+                        style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                      >
+                        {peso(p.price)}
+                      </div>
+                    </div>
+                    <div className="mt-3 text-[11px] text-slate-500">
+                      {current && <span className="text-emerald-600 font-semibold">Current plan</span>}
+                      {!current && preview && (
+                        <span>
+                          Est. balance if accepted today: <b className="text-slate-800">{peso(preview.total)}</b>
+                          <span className="block opacity-80">
+                            {preview.consumed}d × {peso(c.price)}/30 + {preview.remaining}d × {peso(p.price)}/30
+                          </span>
+                        </span>
+                      )}
+                      {!!pendingPlan && !current && <span>Wait for pending request</span>}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-
-            {(company.gcash_number || company.maya_number) && (
-              <div className="mt-4 grid sm:grid-cols-2 gap-2">
-                {company.gcash_number && (
-                  <button
-                    type="button"
-                    onClick={() => onCopy('gcash', company.gcash_number)}
-                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2.5 text-left hover:border-orange-300 transition"
-                  >
-                    <div>
-                      <div className="text-[11px] font-semibold text-slate-500 uppercase">GCash</div>
-                      <div className="font-mono text-sm text-slate-800">{company.gcash_number}</div>
-                    </div>
-                    {copied === 'gcash' ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-slate-400" />}
-                  </button>
-                )}
-                {company.maya_number && (
-                  <button
-                    type="button"
-                    onClick={() => onCopy('maya', company.maya_number)}
-                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2.5 text-left hover:border-sky-300 transition"
-                  >
-                    <div>
-                      <div className="text-[11px] font-semibold text-slate-500 uppercase">Maya</div>
-                      <div className="font-mono text-sm text-slate-800">{company.maya_number}</div>
-                    </div>
-                    {copied === 'maya' ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-slate-400" />}
-                  </button>
-                )}
-              </div>
-            )}
-
-            {company.payment_instructions && (
-              <p className="mt-3 text-xs text-slate-500 leading-relaxed flex gap-1.5">
-                <Sparkles size={12} className="mt-0.5 shrink-0 text-orange-500" />
-                {company.payment_instructions}
-              </p>
-            )}
-            {payMsg && <p className="mt-2 text-sm text-rose-600">{payMsg}</p>}
-            {paymentLink?.expiresAt && paymentLink.status === 'pending' && (
-              <p className="mt-2 text-[11px] text-slate-400">
-                Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
-              </p>
-            )}
-          </div>
-        </section>
+            {planMsg && <p className="text-sm text-slate-600 mt-3">{planMsg}</p>}
+          </section>
+        )}
 
         {showInvoices && (
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

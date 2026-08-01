@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Globe2, KeyRound, Pencil, Plus, Save, Search, Settings2, Users, ExternalLink,
+  Globe2, KeyRound, Pencil, Plus, Save, Search, Settings2, Users, ExternalLink, Zap, Check, X,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, FormField, Modal, ModalFooter, PageHeader, StatusBadge, Toolbar } from '../components/ui';
-import { api } from '../api';
+import { api, peso } from '../api';
 
 type PortalSettings = {
   title: string;
@@ -46,8 +46,9 @@ const DEFAULT_SETTINGS: PortalSettings = {
 };
 
 export default function PortalAdmin() {
-  const [tab, setTab] = useState<'accounts' | 'settings'>('accounts');
+  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings'>('accounts');
   const [accounts, setAccounts] = useState<PortalAccount[]>([]);
+  const [planRequests, setPlanRequests] = useState<any[]>([]);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [settings, setSettings] = useState<PortalSettings>(DEFAULT_SETTINGS);
@@ -67,6 +68,12 @@ export default function PortalAdmin() {
       .then((r) => setAccounts(r.data || []))
       .catch(() => setAccounts([]));
 
+  const loadPlanRequests = () =>
+    api
+      .get('/client-portal/plan-changes', { params: { status: 'all' } })
+      .then((r) => setPlanRequests(r.data.requests || []))
+      .catch(() => setPlanRequests([]));
+
   const loadSettings = () =>
     api
       .get('/client-portal/settings')
@@ -76,6 +83,7 @@ export default function PortalAdmin() {
   useEffect(() => {
     loadAccounts();
     loadSettings();
+    loadPlanRequests();
   }, []);
 
   const filtered = useMemo(() => {
@@ -157,11 +165,35 @@ export default function PortalAdmin() {
     }
   };
 
+  const pendingPlans = planRequests.filter((r) => r.status === 'pending').length;
+
+  const acceptPlan = async (id: number) => {
+    if (!confirm('Accept this plan change? Prorated balance will replace open invoices.')) return;
+    try {
+      const r = await api.post(`/client-portal/plan-changes/${id}/accept`, {});
+      show(`Plan updated · new balance ${peso(r.data?.proration?.proratedBalance || 0)}`);
+      loadPlanRequests();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Accept failed');
+    }
+  };
+
+  const rejectPlan = async (id: number) => {
+    const note = prompt('Reject reason (optional)') || '';
+    try {
+      await api.post(`/client-portal/plan-changes/${id}/reject`, { note });
+      show('Plan change rejected');
+      loadPlanRequests();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Reject failed');
+    }
+  };
+
   return (
     <Layout title="Subscriber Portal">
       <PageHeader
         title="Subscriber Portal"
-        description="Create and edit portal logins, set PINs, and customize the public /portal page."
+        description="Create and edit portal logins, set PINs, review plan-change requests, and customize /portal."
         icon={Globe2}
       />
 
@@ -179,6 +211,16 @@ export default function PortalAdmin() {
         >
           <Users size={16} /> Accounts
           <span className="ml-1 text-xs opacity-80">({enabledCount}/{accounts.length})</span>
+        </button>
+        <button
+          type="button"
+          className={tab === 'plans' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setTab('plans')}
+        >
+          <Zap size={16} /> Plan changes
+          {pendingPlans > 0 && (
+            <span className="ml-1 text-xs opacity-80">({pendingPlans})</span>
+          )}
         </button>
         <button
           type="button"
@@ -292,6 +334,78 @@ export default function PortalAdmin() {
                   <tr>
                     <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
                       No subscribers match. Enable access for a PPPoE user to create a portal login.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {tab === 'plans' && (
+        <Card title="Plan change requests" icon={Zap}>
+          <p className="text-sm text-slate-500 mb-3">
+            Subscribers request plan changes from <code className="text-brand-600">/portal</code>.
+            Accepting applies the new plan and replaces open invoices with a 30-day proration
+            (consumed days × old rate + remaining days × new rate).
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-400 bg-slate-50 border-b border-slate-100">
+                  <th className="px-3 py-2.5">Subscriber</th>
+                  <th className="px-3 py-2.5">Change</th>
+                  <th className="px-3 py-2.5">Proration</th>
+                  <th className="px-3 py-2.5">Status</th>
+                  <th className="px-3 py-2.5 w-36" />
+                </tr>
+              </thead>
+              <tbody>
+                {planRequests.map((r) => (
+                  <tr key={r.id} className="border-b border-slate-50">
+                    <td className="px-3 py-2.5">
+                      <div className="font-medium text-slate-800">{r.customer_name || r.username || '—'}</div>
+                      <div className="text-xs text-slate-400 font-mono">{r.account_number || r.username}</div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="font-medium text-slate-800">
+                        {r.from_plan || '—'} → {r.to_plan}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {peso(r.from_price)} → {peso(r.to_price)} · due {r.subscription_due || '—'}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-600">
+                      <div className="font-semibold text-slate-800">{peso(r.prorated_balance)}</div>
+                      <div className="text-xs">
+                        {r.consumed_days}d @ old + {r.remaining_days}d @ new
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 capitalize">
+                      <StatusBadge status={r.status} />
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        {String(r.created_at || '').replace('T', ' ').slice(0, 16)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+                      {r.status === 'pending' && (
+                        <>
+                          <button type="button" className="btn-primary !px-2 !py-1 text-xs" onClick={() => acceptPlan(r.id)}>
+                            <Check size={14} /> Accept
+                          </button>
+                          <button type="button" className="btn-ghost text-rose-600" onClick={() => rejectPlan(r.id)}>
+                            <X size={14} />
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {!planRequests.length && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-10 text-center text-slate-400">
+                      No plan-change requests yet.
                     </td>
                   </tr>
                 )}
