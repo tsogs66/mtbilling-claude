@@ -607,6 +607,38 @@ ensure_supported_arch() {
   esac
 }
 
+# Normalize raw `twingate status` text → online|authenticating|not-running|…
+normalize_tg_status() {
+  local s
+  s="$(echo "${1:-}" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | head -1)"
+  s="$(echo "$s" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ -z "$s" || "$s" == "offline" ]]; then
+    echo offline
+    return 0
+  fi
+  if [[ "$s" == *not-installed* || "$s" == *not_installed* ]]; then
+    echo not-installed
+    return 0
+  fi
+  if [[ "$s" == *not-running* || "$s" == *not_running* ]]; then
+    echo not-running
+    return 0
+  fi
+  if [[ "$s" == *authenticating* ]]; then
+    echo authenticating
+    return 0
+  fi
+  if [[ "$s" == *online* ]]; then
+    echo online
+    return 0
+  fi
+  # "status=authenticating" / last token
+  if [[ "$s" == *=* ]]; then
+    s="${s##*=}"
+  fi
+  echo "$(echo "$s" | awk '{print $NF}')"
+}
+
 tg_client_status() {
   if ! command -v twingate >/dev/null 2>&1; then
     echo "not-installed"
@@ -614,11 +646,37 @@ tg_client_status() {
   fi
   # twingate status can hang like "Waiting for status…" — never block the panel.
   # Keep this short: apply polls often; a 5s timeout made "30s wait" feel like 90s+.
+  local raw
   if command -v timeout >/dev/null 2>&1; then
-    timeout --signal=KILL 2s twingate status 2>/dev/null || echo offline
+    raw="$(timeout --signal=KILL 2s twingate status 2>/dev/null || true)"
   else
-    twingate status 2>/dev/null || echo offline
+    raw="$(twingate status 2>/dev/null || true)"
   fi
+  if [[ -z "$raw" ]]; then
+    echo offline
+    return 0
+  fi
+  normalize_tg_status "$raw"
+}
+
+# Re-pin LAN + public DNS without calling twingate status (safe mid-apply on RPi).
+reassert_panel_network() {
+  if declare -F write_coexist_resolv >/dev/null 2>&1; then
+    write_coexist_resolv fast 2>/dev/null || true
+  else
+    augment_resolv_fallbacks 2>/dev/null || true
+  fi
+  if declare -F protect_local_lan_routes >/dev/null 2>&1; then
+    protect_local_lan_routes >/dev/null 2>&1 || true
+  fi
+  ip route del default dev sdwan0 2>/dev/null || true
+}
+
+heal_panel_api() {
+  # Twingate DNS blips often leave nginx/API wedged from the browser's POV
+  systemctl reset-failed mt-billing-api nginx 2>/dev/null || true
+  systemctl try-restart mt-billing-api 2>/dev/null || systemctl start mt-billing-api 2>/dev/null || true
+  systemctl try-restart nginx 2>/dev/null || systemctl start nginx 2>/dev/null || true
 }
 
 dump_twingate_logs() {
@@ -687,24 +745,40 @@ EOF
     systemctl start --no-block "$UNIT_NAME" 2>/dev/null || systemctl start --no-block "$UNIT_NAME" || true
 
     local i=0 st
-    while [[ $i -lt 15 ]]; do
+    while [[ $i -lt 12 ]]; do
       sleep 1
       i=$((i + 1))
+      # Twingate rewrites resolv.conf during authenticating — keep panel/API alive
+      if [[ $((i % 2)) -eq 0 ]]; then
+        reassert_panel_network
+      fi
       st="$(tg_client_status)"
       if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+        reassert_panel_network
         log_ok "Daemon responded: status=${st} (${i}s)"
+        return 0
+      fi
+      if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null && [[ $i -ge 4 ]]; then
+        # Unit is up; status probe may spuriously say offline on RPi — do not wait 15s
+        reassert_panel_network
+        log_ok "twingate.service active (status=${st}) — continuing without long wait"
         return 0
       fi
       if systemctl is-failed --quiet "$UNIT_NAME" 2>/dev/null; then
         log_warn "twingate.service failed (status=${st})"
         return 1
       fi
-      if [[ $((i % 5)) -eq 0 ]]; then
+      if [[ $((i % 4)) -eq 0 ]]; then
         log_info "Waiting for daemon… status=${st} (${i}s)"
       fi
     done
     st="$(tg_client_status)"
-    log_warn "Daemon did not become ready in 15s (status=${st})"
+    if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+      reassert_panel_network
+      log_warn "Daemon active but status=${st} — continuing (coexist will protect LAN/DNS)"
+      return 0
+    fi
+    log_warn "Daemon did not become ready in 12s (status=${st})"
     # Do NOT fall through to `twingate start` — that hangs the apply job
     return 1
   fi
@@ -749,10 +823,8 @@ wait_for_client_online() {
   local auth_hits=0
   log_info "Waiting for Twingate client to reach online (up to ${timeout}s)…"
   while [[ $i -lt $timeout ]]; do
+    reassert_panel_network
     st="$(tg_client_status)"
-    # Strip CR / extra words — some builds print "status=authenticating"
-    st="${st%%$'\r'}"
-    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
     if [[ "$st" == "online" ]]; then
       log_ok "Twingate client status: online"
       return 0
@@ -763,8 +835,8 @@ wait_for_client_online() {
     fi
     if [[ "$st" == "authenticating" ]]; then
       auth_hits=$((auth_hits + 1))
-      # After ~6s of stable authenticating, stop blocking Install & connect
-      if [[ "$auth_hits" -ge 3 ]]; then
+      # After ~4s of stable authenticating, stop blocking Install & connect
+      if [[ "$auth_hits" -ge 2 ]]; then
         log_warn "Client is authenticating — ending wait so the panel is not stuck."
         log_warn "  Daemon keeps running. In Twingate Admin check:"
         log_warn "    1) Connector for the remote network is Online"
@@ -781,7 +853,6 @@ wait_for_client_online() {
     i=$((i + 2))
   done
   st="$(tg_client_status)"
-  st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
   log_warn "Timed out waiting for online — current status: ${st}"
   # authenticating is a soft-success for apply (daemon up; Admin config may be incomplete)
   [[ "$st" == "online" || "$st" == "authenticating" ]]
@@ -801,17 +872,23 @@ do_start() {
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
+    # CRITICAL (RPi/PC): pin LAN + public DNS BEFORE start. Twingate rewrites
+    # resolv.conf while authenticating and was killing the panel API mid-apply.
+    log_info "Pre-start coexistence (protect LAN/DNS before Twingate rewrites them)"
+    apply_coexist_after_twingate || true
+    reassert_panel_network
+
     # Single start path — ensure_client_started uses systemd --no-block (no twingate start)
     ensure_client_started || true
     apply_coexist_after_twingate
+    reassert_panel_network
 
     local unit_ok=0
     systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null && unit_ok=1
     local st
     st="$(tg_client_status)"
-    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
 
-    if [[ "$st" == "not-running" ]]; then
+    if [[ "$st" == "not-running" && "$unit_ok" -ne 1 ]]; then
       log_err "Twingate client is not-running after start attempts"
       if [[ ! -c /dev/net/tun ]]; then
         print_tun_fix
@@ -822,6 +899,7 @@ do_start() {
       fi
       kill_daemon_hard
       restore_resolv
+      heal_panel_api
       set_db_status offline
       return 1
     fi
@@ -831,26 +909,32 @@ do_start() {
       dump_twingate_logs
       kill_daemon_hard
       restore_resolv
+      heal_panel_api
       set_db_status offline
       return 1
     fi
 
-    # Fast path: daemon already authenticating/online after coexist — end apply NOW.
-    # Do not park the panel on a 20s health loop + wait (RPi/PC "Working…" hang).
-    if [[ "$st" == "online" || "$st" == "authenticating" ]]; then
+    # Fast path: daemon authenticating/online OR unit active after coexist — end NOW.
+    # Status probes often return "offline" on RPi even while authenticating.
+    if [[ "$st" == "online" || "$st" == "authenticating" || "$unit_ok" -eq 1 ]]; then
+      reassert_panel_network
       if ! gateway_reachable || ! dns_works; then
         log_warn "Re-applying coexistence after start (DNS/gateway soft)"
         apply_coexist_after_twingate || true
+        reassert_panel_network
       fi
       if [[ "$st" == "online" ]]; then
         set_db_status online "$(network_from_key)"
+        heal_panel_api
         log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
         return 0
       fi
       set_db_status authenticating "$(network_from_key)"
+      heal_panel_api
       log_warn "Apply finished with status=authenticating (panel will not keep spinning)."
       log_warn "  Fix in Twingate Admin, then Refresh. Host DNS/LAN coexistence is already applied."
       log_warn "  No Admin 'Accept' click for Service Keys — need Connector Online + Resource grants."
+      log_warn "  If the UI still says API down, open http://<LAN-IP>/login and Refresh."
       return 0
     fi
 
@@ -869,6 +953,7 @@ do_start() {
       fi
       # Soft success: authenticating — leave daemon up for Admin fixes
       set_db_status authenticating "$(network_from_key)"
+      heal_panel_api
       log_warn "Apply finished with status=authenticating (panel will not keep spinning)."
       log_warn "  Fix in Twingate Admin, then Refresh. Host DNS/LAN coexistence is already applied."
       dump_twingate_logs
@@ -876,19 +961,21 @@ do_start() {
     fi
 
     st="$(tg_client_status)"
-    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
-    if [[ "$st" == "not-running" ]]; then
+    systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null && unit_ok=1
+    if [[ "$st" == "not-running" && "$unit_ok" -ne 1 ]]; then
       log_err "Client stayed not-running — daemon crashed or never started"
       dump_twingate_logs
       kill_daemon_hard
       restore_resolv
+      heal_panel_api
       set_db_status offline
       return 1
     fi
 
     # Host DNS/LAN still healthy (coexist). Leave client running so it can finish auth.
-    if [[ "$st" == "authenticating" ]] || [[ "$unit_ok" -eq 1 && "$st" != "offline" ]]; then
+    if [[ "$st" == "authenticating" || "$st" == "online" || "$unit_ok" -eq 1 ]]; then
       set_db_status authenticating "$(network_from_key)"
+      heal_panel_api
       log_warn "Client is still authenticating — no Admin 'Accept' click for Service Keys."
       log_warn "  Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs)."
       log_warn "Host network is OK (coexistence kept). Re-check status in a minute."
@@ -900,6 +987,7 @@ do_start() {
     dump_twingate_logs
     kill_daemon_hard
     restore_resolv
+    heal_panel_api
     set_db_status offline
     return 1
   fi

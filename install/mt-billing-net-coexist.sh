@@ -114,21 +114,26 @@ EOF
 
 # DNS for coexistence: local/public FIRST, Twingate LAST.
 # IP-based Twingate Resources do not need Twingate DNS; Cloudflare / apt / git do.
+# Optional arg "1" / "fast": skip twingate status probe and never append 100.95.*
+# (use during apply — Twingate rewrites resolv.conf while authenticating and a
+# status probe here only adds hang risk on RPi).
 write_coexist_resolv() {
   mkdir -p "$MT_CONF"
   local tmp tw_online=0
+  local mode="${1:-}"
   tmp="$(mktemp)"
 
   # Never call bare `twingate status` — it can hang and freeze Cloudflare apply
   # (and then the panel feels like login is broken while the job is stuck).
-  if command -v twingate >/dev/null 2>&1; then
+  if [[ "$mode" != "1" && "$mode" != "fast" ]] && command -v twingate >/dev/null 2>&1; then
     local st=""
     if command -v timeout >/dev/null 2>&1; then
-      st="$(timeout --signal=KILL 3s twingate status 2>/dev/null || true)"
+      st="$(timeout --signal=KILL 2s twingate status 2>/dev/null || true)"
     else
       st="$(twingate status 2>/dev/null || true)"
     fi
-    [[ "$st" == "online" ]] && tw_online=1
+    st="$(echo "$st" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+    [[ "$st" == *online* && "$st" != *not* ]] && tw_online=1
   fi
 
   {
