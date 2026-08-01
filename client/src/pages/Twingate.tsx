@@ -93,6 +93,7 @@ export default function Twingate() {
   const [elapsed, setElapsed] = useState(0);
   const jobPollRef = useRef<number | null>(null);
   const logRef = useRef<HTMLPreElement | null>(null);
+  const jobLogRef = useRef('');
   const saveAbortRef = useRef<AbortController | null>(null);
 
   const stopJobPoll = () => {
@@ -268,6 +269,7 @@ export default function Twingate() {
   const pollJob = (action: string) => {
     stopJobPoll();
     const startedAt = Date.now();
+    jobLogRef.current = '';
     setJob({ action, log: '', running: true, code: null, startedAt });
     setElapsed(0);
     const tick = async () => {
@@ -275,6 +277,7 @@ export default function Twingate() {
         const r = await api.get('/twingate/job', { timeout: 5000 });
         setElapsed(Math.round((Date.now() - startedAt) / 1000));
         const logText = r.data.log || '';
+        jobLogRef.current = logText;
         setJob((j) => (j ? { ...j, log: logText } : j));
         // Soft-update badge while apply is still running
         if (/status=authenticating|still authenticating|status: authenticating/i.test(logText)) {
@@ -283,16 +286,16 @@ export default function Twingate() {
           );
         }
         // End Working… as soon as apply soft-succeeds (even if job poll lags)
-        if (
-          r.data.running &&
-          /Apply finished with status=authenticating|Apply finished with status=online/i.test(logText)
-        ) {
+        const applySoftDone =
+          /Apply finished with status=authenticating|Apply finished with status=online/i.test(logText) ||
+          (/authenticating/i.test(logText) && /Coexistence applied|COEXIST\] Coexistence applied/i.test(logText));
+        if (r.data.running && applySoftDone) {
           stopJobPoll();
           setJob((j) => (j ? { ...j, running: false, code: 0, log: logText } : j));
           setFlash({
             type: /authenticating/i.test(logText) ? 'error' : 'success',
             msg: /authenticating/i.test(logText)
-              ? 'Apply finished but client is still authenticating — not stuck in Working. In Twingate Admin: Connector Online + grant this Service Account Resources (specific IPs) + Service Key Active. Then Refresh.'
+              ? 'Apply finished but client is still authenticating — not stuck in Working. In Twingate Admin: Connector Online + grant this Service Account Resources (specific IPs) + Service Key Active. Then open the panel by LAN IP and Refresh.'
               : 'Twingate apply finished successfully.',
           });
           load({ live: true });
@@ -319,14 +322,20 @@ export default function Twingate() {
           setBusy(false);
         }
       } catch {
-        /* keep polling — but bail if API stays down too long */
-        if (Date.now() - startedAt > 90000) {
+        /* API often dies mid-apply on RPi when Twingate rewrites DNS — stop spinning early */
+        const logText = jobLogRef.current || '';
+        const sawAuth =
+          /authenticating/i.test(logText) && /Coexistence applied|COEXIST|Daemon responded/i.test(logText);
+        if (sawAuth || Date.now() - startedAt > 35000) {
           stopJobPoll();
           setBusy(false);
-          setJob((j) => (j ? { ...j, running: false, code: 124 } : j));
+          setApiDown(true);
+          setJob((j) => (j ? { ...j, running: false, code: sawAuth ? 0 : 124 } : j));
           setFlash({
             type: 'error',
-            msg: 'Lost contact with panel API while Twingate was working. Restart API / run Emergency restore on the console.',
+            msg: sawAuth
+              ? 'Panel API dropped during Twingate apply (common on RPi). Open http://<LAN-IP>/login, then: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore && sudo systemctl restart mt-billing-api nginx — Update the panel and retry.'
+              : 'Lost contact with panel API while Twingate was working. On the console: sudo bash /opt/mt-billing/install/mt-billing-net-rescue.sh',
           });
         }
       }
