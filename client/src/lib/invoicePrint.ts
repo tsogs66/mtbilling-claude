@@ -134,16 +134,81 @@ function businessHeader(company: CompanyPrint | null | undefined, docTitle: stri
   </div>`;
 }
 
-function openPrintWindow(html: string, title: string) {
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=860,height=1100');
-  if (!w) {
-    alert('Pop-up blocked — allow pop-ups to print.');
+/**
+ * Print via a hidden iframe — no pop-up window.
+ * (window.open + noopener returns null / blank about:blank after async clicks.)
+ */
+function openPrintWindow(html: string, _title: string) {
+  // Strip auto-print scripts; we call print() ourselves after the iframe loads
+  const bodyHtml = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+
+  const prev = document.getElementById('mt-a4-print-frame');
+  if (prev) prev.remove();
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'mt-a4-print-frame';
+  iframe.setAttribute('title', 'Print');
+  iframe.style.cssText =
+    'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) {
+    // Last resort: same-tab blob (still no popup)
+    const blob = new Blob([bodyHtml], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return;
   }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.document.title = title;
+
+  doc.open();
+  doc.write(bodyHtml);
+  doc.close();
+
+  const doPrint = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch {
+      /* ignore */
+    }
+    // Keep iframe briefly so the print dialog can read it
+    window.setTimeout(() => {
+      try {
+        iframe.remove();
+      } catch {
+        /* ignore */
+      }
+    }, 60_000);
+  };
+
+  // Wait for images (logo) then print
+  const imgs = Array.from(doc.images || []);
+  if (!imgs.length) {
+    window.setTimeout(doPrint, 150);
+    return;
+  }
+  let left = imgs.length;
+  const tick = () => {
+    left -= 1;
+    if (left <= 0) window.setTimeout(doPrint, 100);
+  };
+  imgs.forEach((img) => {
+    if (img.complete) tick();
+    else {
+      img.onload = tick;
+      img.onerror = tick;
+    }
+  });
+  // Safety timeout if a logo never loads
+  window.setTimeout(() => {
+    if (document.getElementById('mt-a4-print-frame') === iframe) doPrint();
+  }, 2500);
 }
 
 export function buildInvoiceHtml(data: InvoicePrintData): string {
