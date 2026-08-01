@@ -24,6 +24,9 @@ function isIosSafari(): boolean {
 /** Swap main manifest for the portal one while /portal is open. */
 export function usePortalManifest() {
   useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add('portal-route');
+
     const link =
       document.querySelector<HTMLLinkElement>('link[rel="manifest"]') ||
       (() => {
@@ -34,7 +37,8 @@ export function usePortalManifest() {
       })();
     const prev = link.getAttribute('href');
     link.setAttribute('href', '/portal-manifest.webmanifest');
-    document.documentElement.style.setProperty('color-scheme', 'dark');
+    const prevScheme = html.style.getPropertyValue('color-scheme');
+    html.style.setProperty('color-scheme', 'light');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     const prevTheme = metaTheme?.getAttribute('content') || '';
     metaTheme?.setAttribute('content', '#020617');
@@ -44,6 +48,9 @@ export function usePortalManifest() {
     }
 
     return () => {
+      html.classList.remove('portal-route');
+      if (prevScheme) html.style.setProperty('color-scheme', prevScheme);
+      else html.style.removeProperty('color-scheme');
       if (prev) link.setAttribute('href', prev);
       else link.setAttribute('href', '/manifest.webmanifest');
       if (metaTheme && prevTheme) metaTheme.setAttribute('content', prevTheme);

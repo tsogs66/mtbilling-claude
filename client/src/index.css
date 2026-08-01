@@ -2361,3 +2361,137 @@ body {
 .landing-float-card {
   transform-style: preserve-3d;
 }
+
+/* ── Subscriber portal (/portal) ───────────────────────────────────────────
+   Panel shell locks body/#root overflow for the staff Layout scroller.
+   Public portal is outside Layout, so enable #root scrolling while mounted.
+   Dark themes also remap slate/white utilities for the panel — restore
+   readable dark-on-light contrast inside .subscriber-portal content. */
+html.portal-route,
+html.portal-route body {
+  height: 100%;
+  overflow: hidden;
+}
+html.portal-route #root {
+  height: 100%;
+  max-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  background: #f1f5f9;
+  color: #0f172a;
+}
+html.portal-route .subscriber-portal {
+  min-height: 100%;
+  color: #0f172a;
+}
+html.portal-route .subscriber-portal--login {
+  background: #020617;
+  color: #e2e8f0;
+  min-height: 100%;
+}
+
+/* Undo dark/isptech remaps on light portal panels only (not login/hero). */
+html.portal-route .subscriber-portal .portal-light {
+  color: #0f172a;
+}
+html.portal-route .subscriber-portal .portal-light .text-slate-900,
+html.portal-route .subscriber-portal .portal-light .text-slate-800,
+html.portal-route .subscriber-portal .portal-light .text-slate-700 {
+  color: #0f172a !important;
+}
+html.portal-route .subscriber-portal .portal-light .text-slate-600,
+html.portal-route .subscriber-portal .portal-light .text-slate-500 {
+  color: #475569 !important;
+}
+html.portal-route .subscriber-portal .portal-light .text-slate-400 {
+  color: #64748b !important;
+}
+html.portal-route .subscriber-portal .portal-light .text-rose-600 {
+  color: #e11d48 !important;
+}
+html.portal-route .subscriber-portal .portal-light .text-orange-600 {
+  color: #ea580c !important;
+}
+html.portal-route .subscriber-portal .portal-light .text-emerald-600 {
+  color: #059669 !important;
+}
+html.portal-route .subscriber-portal .portal-light .bg-white,
+html.portal-route .subscriber-portal .portal-light .bg-white\/80,
+html.portal-route .subscriber-portal .portal-light .bg-white\/90 {
+  background-color: #ffffff !important;
+}
+html.portal-route .subscriber-portal .portal-light .bg-slate-50,
+html.portal-route .subscriber-portal .portal-light .bg-slate-50\/90 {
+  background-color: #f8fafc !important;
+}
+html.portal-route .subscriber-portal .portal-light .border-slate-200,
+html.portal-route .subscriber-portal .portal-light .border-slate-100,
+html.portal-route .subscriber-portal .portal-light .border-slate-50 {
+  border-color: #e2e8f0 !important;
+}
+html.portal-route .subscriber-portal .portal-light .from-orange-50 {
+  --tw-gradient-from: #fff7ed !important;
+}
+html.portal-route .subscriber-portal .portal-light .via-white {
+  --tw-gradient-stops: var(--tw-gradient-from), #ffffff, var(--tw-gradient-to, rgb(255 255 255 / 0)) !important;
+}
+html.portal-route .subscriber-portal .portal-light .to-sky-50 {
+  --tw-gradient-to: #f0f9ff !important;
+}
+html.portal-route .subscriber-portal .portal-field,
+html.portal-route .subscriber-portal input.portal-field,
+html.portal-route .subscriber-portal textarea.portal-field {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+}
+html.portal-route .subscriber-portal .portal-field::placeholder {
+  color: #94a3b8 !important;
+}
+html.portal-route .subscriber-portal .portal-field:focus {
+  border-color: #fb923c !important;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2) !important;
+}
+
+/* Hero / login keep light-on-dark text */
+html.portal-route .subscriber-portal-hero .text-white,
+html.portal-route .subscriber-portal--login .text-white {
+  color: #ffffff !important;
+}
+html.portal-route .subscriber-portal-hero .text-slate-300,
+html.portal-route .subscriber-portal-hero .text-slate-400,
+html.portal-route .subscriber-portal--login .text-slate-300,
+html.portal-route .subscriber-portal--login .text-slate-400,
+html.portal-route .subscriber-portal--login .text-slate-500 {
+  color: #cbd5e1 !important;
+}
+html.portal-route .subscriber-portal-hero .text-orange-300\/90,
+html.portal-route .subscriber-portal-hero .text-orange-200,
+html.portal-route .subscriber-portal--login .text-orange-300\/90 {
+  color: #fdba74 !important;
+}
+html.portal-route .subscriber-portal-hero .text-rose-300 {
+  color: #fda4af !important;
+}
+html.portal-route .subscriber-portal-hero .text-emerald-300 {
+  color: #6ee7b7 !important;
+}
+html.portal-route .subscriber-portal-hero .bg-white\/5 {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+/* iOS install modal on login stays readable */
+html.portal-route .subscriber-portal--login .bg-white {
+  background-color: #ffffff !important;
+}
+html.portal-route .subscriber-portal--login .bg-white .text-slate-900,
+html.portal-route .subscriber-portal--login .bg-white .text-slate-800 {
+  color: #0f172a !important;
+}
+html.portal-route .subscriber-portal--login .bg-white .text-slate-700,
+html.portal-route .subscriber-portal--login .bg-white .text-slate-600,
+html.portal-route .subscriber-portal--login .bg-white .text-slate-500 {
+  color: #475569 !important;
+}
