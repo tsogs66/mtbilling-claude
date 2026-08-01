@@ -5,8 +5,8 @@ export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech';
 export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech'];
 
 const STORAGE_KEY = 'mt_theme';
-/** One-time migrate panel chrome to landing-snapshot ISP Tech look. */
-const MIGRATION_KEY = 'mt_theme_snapshot_v1';
+/** Bump to re-apply Snapshot default when the panel look changes again. */
+const MIGRATION_KEY = 'mt_theme_snapshot_v2';
 const DEFAULT_THEME: ThemeId = 'isptech';
 
 interface ThemeCtx {

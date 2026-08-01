@@ -49,7 +49,12 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="relative flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
+      <div className="relative flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main snap-shell overflow-hidden">
+        <div className="snap-ambient pointer-events-none absolute inset-0 z-0" aria-hidden>
+          <span className="snap-orb snap-orb-a" />
+          <span className="snap-orb snap-orb-b" />
+          <span className="snap-grid" />
+        </div>
         <NativeAppBridge />
         {sidebarOpen && !nativeShell && (
           <button

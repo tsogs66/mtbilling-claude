@@ -321,14 +321,31 @@ function DashboardLicensed() {
 
   return (
     <Layout title="Dashboard">
-      <SectionTitle icon={Activity}>Account Status{current ? ` — ${current.name}` : ''}</SectionTitle>
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
-        <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-600" icon={CircleDot} accent="from-emerald-500/15 to-transparent" delay={0} />
-        <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-600" icon={WifiOff} accent="from-amber-500/15 to-transparent" delay={50} />
-        <StatTile label="Active" value={statusCounts?.active ?? '—'} dot="bg-sky-500" tone="text-sky-600" icon={Users} accent="from-sky-500/15 to-transparent" delay={100} />
-        <StatTile label="Expired" value={statusCounts?.expired ?? '—'} dot="bg-rose-500" tone="text-rose-600" icon={AlertTriangle} accent="from-rose-500/15 to-transparent" delay={150} />
-        <StatTile label="Non-payment" value={statusCounts?.nonPayment ?? '—'} dot="bg-orange-500" tone="text-orange-600" icon={Wallet} accent="from-orange-500/15 to-transparent" delay={200} />
-        <StatTile label="Inactive" value={statusCounts?.inactive ?? '—'} dot="bg-slate-400" tone="text-slate-500" icon={CircleDot} accent="from-slate-500/10 to-transparent" delay={250} />
+      <div className="snap-dash-hero mb-6 animate-fade-in-up">
+        <div className="snap-dash-hero-inner">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300/90 mb-1.5">Live operations</p>
+            <h2 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
+              Account Status{current ? <span className="text-orange-300"> — {current.name}</span> : ''}
+            </h2>
+            <p className="mt-1.5 text-sm text-slate-400 max-w-xl">
+              Subscriber health, cashflow, and host vitals in one glass cockpit.
+            </p>
+          </div>
+          <div className="snap-dash-hero-badge hidden sm:flex">
+            <Activity size={16} className="text-orange-300" />
+            Snapshot UI
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 mb-6">
+        <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-400" icon={CircleDot} accent="from-emerald-500/25 to-transparent" delay={0} />
+        <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-300" icon={WifiOff} accent="from-amber-500/25 to-transparent" delay={50} />
+        <StatTile label="Active" value={statusCounts?.active ?? '—'} dot="bg-sky-500" tone="text-sky-300" icon={Users} accent="from-sky-500/25 to-transparent" delay={100} />
+        <StatTile label="Expired" value={statusCounts?.expired ?? '—'} dot="bg-rose-500" tone="text-rose-300" icon={AlertTriangle} accent="from-rose-500/25 to-transparent" delay={150} />
+        <StatTile label="Non-payment" value={statusCounts?.nonPayment ?? '—'} dot="bg-orange-500" tone="text-orange-300" icon={Wallet} accent="from-orange-500/25 to-transparent" delay={200} />
+        <StatTile label="Inactive" value={statusCounts?.inactive ?? '—'} dot="bg-slate-400" tone="text-slate-300" icon={CircleDot} accent="from-slate-500/20 to-transparent" delay={250} />
       </div>
 
       {finance && (
