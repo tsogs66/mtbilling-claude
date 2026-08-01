@@ -1168,6 +1168,45 @@ publicPortalRouter.get('/public/portal/plans', (_req, res) => {
   });
 });
 
+/** Subscriber invoice detail for view / print (must own the invoice). */
+publicPortalRouter.get('/public/portal/invoices/:id', (req, res) => {
+  const token = String(req.headers['x-portal-token'] || req.query.token || '');
+  const sess = portalUserFromToken(token);
+  if (!sess) return res.status(401).json({ error: 'Session expired' });
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid invoice' });
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
+  if (!inv || Number(inv.pppoe_user_id) !== Number(sess.uid)) {
+    return res.status(404).json({ error: 'Invoice not found' });
+  }
+  if (String(inv.status || '') === 'void') {
+    return res.status(404).json({ error: 'Invoice not found' });
+  }
+  const payments = db
+    .prepare(
+      `SELECT id, amount, method, note, created_at, transaction_id
+       FROM invoice_payments WHERE invoice_id = ? ORDER BY id`
+    )
+    .all(id);
+  const company = db
+    .prepare(
+      `SELECT name, address, phone, email, logo, gcash_number, maya_number, payment_instructions
+       FROM company WHERE id = 1`
+    )
+    .get();
+  res.json({
+    invoice: inv,
+    payments,
+    history: (payments as any[]).map((p) => ({
+      amount: p.amount,
+      method: p.method,
+      paid_at: p.created_at,
+      note: p.note,
+    })),
+    company,
+  });
+});
+
 publicPortalRouter.post('/public/portal/plan-change', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
