@@ -34,7 +34,7 @@ export const ALL_PERMISSIONS = [
   'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
   'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
-  'tech-tools', 'job-orders', 'invoices', 'finance', 'rogue', 'twingate', 'noc',
+  'tech-tools', 'job-orders', 'invoices', 'finance', 'portal', 'rogue', 'twingate', 'noc',
 ] as const;
 
 // Shared license / password-reset signing secrets live in panelId.ts.
@@ -127,7 +127,7 @@ export function initExtra() {
     ins.run(
       'Cashier',
       'Billing and payments only',
-      JSON.stringify(['dashboard', 'pppoe', 'sales', 'notifications', 'hotspot', 'license', 'invoices', 'finance'])
+      JSON.stringify(['dashboard', 'pppoe', 'sales', 'notifications', 'hotspot', 'license', 'invoices', 'finance', 'portal'])
     );
     ins.run(
       'Read-only',

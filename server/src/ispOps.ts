@@ -141,7 +141,23 @@ export function initIspOps() {
     }
   };
   merge('Technician', ['job-orders', 'rogue']);
-  merge('Cashier', ['invoices', 'finance']);
+  merge('Cashier', ['invoices', 'finance', 'portal']);
+  // Roles that already manage AR also get subscriber portal admin.
+  for (const row of db.prepare('SELECT id, permissions FROM roles').all() as { id: number; permissions: string }[]) {
+    let perms: string[] = [];
+    try {
+      perms = JSON.parse(row.permissions || '[]');
+    } catch {
+      perms = [];
+    }
+    if (perms.includes('*') || perms.includes('portal')) continue;
+    if (perms.includes('invoices') || perms.includes('finance')) {
+      db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(
+        JSON.stringify([...perms, 'portal']),
+        row.id
+      );
+    }
+  }
 }
 
 function refreshInvoiceStatus(id: number) {
@@ -483,6 +499,55 @@ ispOpsRouter.delete('/finance/expenses/:id', (req, res) => {
 
 // ─── Client portal (staff) ──────────────────────────────────────────────────
 
+function portalSettingsRow() {
+  const row = db
+    .prepare(
+      `SELECT portal_title, portal_subtitle, portal_help_text, portal_welcome_text,
+              portal_show_balance, portal_show_invoices, portal_show_tickets, portal_show_company,
+              portal_session_days
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as any;
+  return {
+    title: row?.portal_title || 'Subscriber Portal',
+    subtitle: row?.portal_subtitle || '',
+    helpText: row?.portal_help_text || 'Ask your ISP for portal access (account + PIN).',
+    welcomeText: row?.portal_welcome_text || '',
+    showBalance: row?.portal_show_balance !== 0,
+    showInvoices: row?.portal_show_invoices !== 0,
+    showTickets: row?.portal_show_tickets !== 0,
+    showCompany: row?.portal_show_company !== 0,
+    sessionDays: Math.min(90, Math.max(1, Number(row?.portal_session_days) || 7)),
+  };
+}
+
+ispOpsRouter.get('/client-portal/settings', (_req, res) => {
+  res.json(portalSettingsRow());
+});
+
+ispOpsRouter.put('/client-portal/settings', (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title ?? 'Subscriber Portal').trim() || 'Subscriber Portal';
+  const subtitle = String(b.subtitle ?? '').trim();
+  const helpText = String(b.helpText ?? '').trim();
+  const welcomeText = String(b.welcomeText ?? '').trim();
+  const showBalance = b.showBalance === false || b.showBalance === 0 ? 0 : 1;
+  const showInvoices = b.showInvoices === false || b.showInvoices === 0 ? 0 : 1;
+  const showTickets = b.showTickets === false || b.showTickets === 0 ? 0 : 1;
+  const showCompany = b.showCompany === false || b.showCompany === 0 ? 0 : 1;
+  let sessionDays = Number(b.sessionDays);
+  if (!Number.isFinite(sessionDays)) sessionDays = 7;
+  sessionDays = Math.min(90, Math.max(1, Math.round(sessionDays)));
+  db.prepare(
+    `UPDATE app_settings SET
+       portal_title = ?, portal_subtitle = ?, portal_help_text = ?, portal_welcome_text = ?,
+       portal_show_balance = ?, portal_show_invoices = ?, portal_show_tickets = ?, portal_show_company = ?,
+       portal_session_days = ?
+     WHERE id = 1`
+  ).run(title, subtitle || null, helpText || null, welcomeText || null, showBalance, showInvoices, showTickets, showCompany, sessionDays);
+  res.json(portalSettingsRow());
+});
+
 ispOpsRouter.post('/client-portal/enable', (req, res) => {
   const userId = Number(req.body?.pppoe_user_id);
   const pin = String(req.body?.pin || '').trim();
@@ -503,14 +568,78 @@ ispOpsRouter.post('/client-portal/disable', (req, res) => {
   res.json({ ok: true });
 });
 
-ispOpsRouter.get('/client-portal/accounts', (_req, res) => {
-  const rows = db
+ispOpsRouter.get('/client-portal/accounts', (req, res) => {
+  const enabledOnly = String(req.query.enabled || '') === '1' || String(req.query.enabled || '') === 'true';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  let rows = db
     .prepare(
-      `SELECT id, username, customer_name, account_number, status, portal_enabled
-       FROM pppoe_users WHERE portal_enabled = 1 ORDER BY customer_name`
+      `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
+              portal_enabled,
+              CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
+       FROM pppoe_users
+       ${enabledOnly ? 'WHERE portal_enabled = 1' : ''}
+       ORDER BY COALESCE(customer_name, username)`
     )
-    .all();
+    .all() as any[];
+  if (q) {
+    rows = rows.filter((r) => {
+      const hay = [r.username, r.customer_name, r.account_number, r.contact, r.email, r.status]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ');
+      return hay.includes(q);
+    });
+  }
   res.json(rows);
+});
+
+ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  if (!user) return res.status(404).json({ error: 'subscriber not found' });
+
+  const b = req.body || {};
+  const customer_name =
+    b.customer_name !== undefined ? String(b.customer_name || '').trim() || null : user.customer_name;
+  const account_number =
+    b.account_number !== undefined ? String(b.account_number || '').trim() || null : user.account_number;
+  const contact = b.contact !== undefined ? String(b.contact || '').trim() || null : user.contact;
+  const email = b.email !== undefined ? String(b.email || '').trim() || null : user.email;
+
+  let portal_enabled = user.portal_enabled ? 1 : 0;
+  if (b.portal_enabled !== undefined) {
+    portal_enabled = b.portal_enabled === false || b.portal_enabled === 0 ? 0 : 1;
+  }
+
+  let pinHash = user.portal_pin_hash;
+  if (b.pin !== undefined && b.pin !== null && String(b.pin).trim() !== '') {
+    const pin = String(b.pin).trim();
+    if (!/^\d{4,8}$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4–8 digits' });
+    }
+    pinHash = bcrypt.hashSync(pin, 10);
+    portal_enabled = 1;
+  }
+  if (!portal_enabled) {
+    pinHash = null;
+    db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(id);
+  }
+
+  db.prepare(
+    `UPDATE pppoe_users SET
+       customer_name = ?, account_number = ?, contact = ?, email = ?,
+       portal_enabled = ?, portal_pin_hash = ?
+     WHERE id = ?`
+  ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, id);
+
+  const updated = db
+    .prepare(
+      `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
+              portal_enabled,
+              CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
+       FROM pppoe_users WHERE id = ?`
+    )
+    .get(id);
+  res.json(updated);
 });
 
 // ─── Rogue MAC ──────────────────────────────────────────────────────────────
@@ -641,6 +770,10 @@ function portalUserFromToken(token: string): any | null {
   return sess || null;
 }
 
+publicPortalRouter.get('/public/portal/settings', (_req, res) => {
+  res.json(portalSettingsRow());
+});
+
 publicPortalRouter.post('/public/portal/login', (req, res) => {
   const account = String(req.body?.account || '').trim();
   const pin = String(req.body?.pin || '').trim();
@@ -655,8 +788,9 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
   if (!user?.portal_pin_hash || !bcrypt.compareSync(pin, user.portal_pin_hash)) {
     return res.status(401).json({ error: 'Invalid account or PIN' });
   }
+  const settings = portalSettingsRow();
   const token = crypto.randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 7 * 864e5).toISOString();
+  const expires = new Date(Date.now() + settings.sessionDays * 864e5).toISOString();
   db.prepare(`INSERT INTO client_portal_sessions (token, pppoe_user_id, expires_at) VALUES (?, ?, ?)`).run(
     token,
     user.id,
@@ -713,6 +847,7 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
     invoices,
     openJobs,
     company,
+    settings: portalSettingsRow(),
   });
 });
 

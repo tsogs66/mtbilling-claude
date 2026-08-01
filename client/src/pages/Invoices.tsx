@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Pie, PieChart, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts';
@@ -15,7 +16,6 @@ export default function Invoices() {
   const [aging, setAging] = useState<any>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [payId, setPayId] = useState<number | null>(null);
-  const [portalUser, setPortalUser] = useState<any>(null);
   const [subs, setSubs] = useState<any[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
   const [previewBusy, setPreviewBusy] = useState<number | null>(null);
@@ -165,9 +165,9 @@ export default function Invoices() {
         icon={FileText}
         right={
           <div className="flex gap-2 flex-wrap">
-            <button className="btn-secondary" onClick={() => setPortalUser({ pin: '' })}>
-              <KeyRound size={16} /> Portal PIN
-            </button>
+            <Link to="/subscriber-portal" className="btn-secondary">
+              <KeyRound size={16} /> Subscriber Portal
+            </Link>
             <button className="btn-secondary" onClick={batch} disabled={batchBusy}>
               {batchBusy ? 'Generating…' : 'Batch generate'}
             </button>
@@ -243,12 +243,6 @@ export default function Invoices() {
           }}
         />
       )}
-      {portalUser && (
-        <PortalPinModal
-          subs={subs}
-          onClose={() => setPortalUser(null)}
-        />
-      )}
     </Layout>
   );
 }
@@ -320,40 +314,3 @@ function PayModal({ invoiceId, onClose, onSaved }: any) {
   );
 }
 
-function PortalPinModal({ subs, onClose }: any) {
-  const [userId, setUserId] = useState('');
-  const [pin, setPin] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState('');
-  const enable = async () => {
-    setBusy(true);
-    setMsg('');
-    try {
-      await api.post('/client-portal/enable', { pppoe_user_id: Number(userId), pin });
-      setMsg('Portal enabled. Share account number + PIN with the subscriber. They log in at /portal');
-    } catch (e: any) {
-      setMsg(e?.response?.data?.error || 'Failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal title="Enable client portal" onClose={onClose} footer={<ModalFooter onCancel={onClose} onConfirm={enable} busy={busy} confirmLabel="Enable" />}>
-      <div className="space-y-3">
-        <p className="text-sm text-slate-500">Subscribers use account number + PIN at <code className="text-brand-600">/portal</code> to view balance, SOA, and open support tickets.</p>
-        <FormField label="Subscriber" required>
-          <select className="input" value={userId} onChange={(e) => setUserId(e.target.value)}>
-            <option value="">Select…</option>
-            {subs.map((s: any) => (
-              <option key={s.id} value={s.id}>{s.customer_name || s.username} ({s.account_number || s.username})</option>
-            ))}
-          </select>
-        </FormField>
-        <FormField label="PIN (4–8 digits)" required>
-          <input className="input" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="1234" />
-        </FormField>
-        {msg && <p className="text-sm text-slate-600">{msg}</p>}
-      </div>
-    </Modal>
-  );
-}

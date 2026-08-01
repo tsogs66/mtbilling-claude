@@ -3,7 +3,7 @@ import {
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, Link2, PieChart,
   ShieldAlert, Cloud, Satellite, RadioTower, Cable, ClipboardList, FileText,
-  TrendingUp, ScanSearch, Globe2,
+  TrendingUp, ScanSearch, Globe2, UserRoundCog,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -39,6 +39,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/invoices', label: 'Invoices & AR', icon: FileText, permission: 'invoices' },
       { to: '/finance', label: 'Finance & MRR', icon: TrendingUp, permission: 'finance' },
       { to: '/pay-portal', label: 'Payment Links', icon: Link2, permission: 'sales' },
+      { to: '/subscriber-portal', label: 'Subscriber Portal', icon: UserRoundCog, permission: 'portal' },
       { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications' },
     ],
   },
@@ -134,7 +135,7 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     icon: BarChart3,
     permission: 'sales',
     matchPaths: [
-      '/sales', '/invoices', '/finance', '/pay-portal',
+      '/sales', '/invoices', '/finance', '/pay-portal', '/subscriber-portal',
       '/notifications', '/job-orders', '/inventory',
     ],
   },
@@ -178,6 +179,7 @@ export function permissionForPath(pathname: string): string {
     '/job-orders': 'job-orders',
     '/rogue-macs': 'rogue',
     '/pay-portal': 'sales',
+    '/subscriber-portal': 'portal',
     '/usage': 'pppoe',
     '/fair-use': 'pppoe',
     '/inventory': 'inventory',
