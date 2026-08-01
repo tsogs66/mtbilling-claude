@@ -5,6 +5,9 @@ import { useCompany } from '../context/CompanyContext';
 import {
   Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft,
   Network, Users, BarChart3, TerminalSquare, Wifi, Map, Bot, X, Menu, Sparkles,
+  LayoutDashboard, Share2, PieChart, ShieldAlert, FileText, TrendingUp, Link2, Bell,
+  ClipboardList, Boxes, Cable, ScanSearch, FileCode2, ServerCog, Globe2, Globe, Cloud,
+  Activity, Satellite, RadioTower, ScrollText, Building2, Settings, ShieldCheck, DownloadCloud,
 } from 'lucide-react';
 import { FormField } from '../components/ui';
 import Logo from '../components/Logo';
@@ -13,46 +16,83 @@ import { copyText } from '../lib/clipboard';
 import { publicApi } from '../api';
 import { isNativeApp, setStoredServerUrl, getStoredServerUrl } from '../config';
 
-const FEATURES = [
+/** Real-panel snapshots (generated from the live Snapshot UI look). */
+const SNAPSHOTS = [
   {
-    id: 'subscribers',
-    title: 'PPPoE & IPoE control',
-    blurb: 'Provision secrets, track expiry, resend pay links, and restore service the moment payment clears.',
-    icon: Users,
-    image: '/landing/landing-pppoe.png',
+    id: 'dashboard',
+    title: 'Dashboard & account health',
+    blurb:
+      'Live Online / Offline / Active / Expired counts, projected MRR, host panel vitals (CPU, RAM, SD), and router reachability — your morning ops board.',
+    icon: LayoutDashboard,
+    image: '/landing/landing-dashboard.png',
     accent: 'from-orange-400/30 to-cyan-400/10',
   },
   {
-    id: 'network',
-    title: 'Live network & NOC',
-    blurb: 'Topology, router health, and NOC probes in one glass cockpit — built for field and NOC desks.',
-    icon: Network,
-    image: '/landing/landing-noc.png',
+    id: 'pppoe',
+    title: 'PPPoE management',
+    blurb:
+      'Create and edit secrets, sync MikroTik profiles, process payments, disable for non-payment, and resend pay links by email or SMS for near-expiry accounts.',
+    icon: Users,
+    image: '/landing/landing-pppoe-real.png',
     accent: 'from-cyan-400/25 to-sky-500/10',
   },
   {
     id: 'billing',
-    title: 'Billing, AR & MRR',
-    blurb: 'Sales, invoices, finance, and public payment links that work over Cloudflare while staff stay on LAN.',
+    title: 'Billing & payment links',
+    blurb:
+      'Sales reports, invoices & AR, finance/MRR, and public payment links with proof upload — subscribers pay on Cloudflare while staff collect on LAN.',
     icon: BarChart3,
-    image: '/landing/landing-billing.png',
+    image: '/landing/landing-billing-real.png',
     accent: 'from-amber-400/25 to-orange-500/10',
   },
   {
-    id: 'ops',
-    title: 'Terminal & AI scripting',
-    blurb: 'SSH-grade network terminal plus AI-assisted RouterOS scripts — ship changes with confidence.',
-    icon: TerminalSquare,
-    image: '/landing/landing-terminal.png',
+    id: 'network',
+    title: 'Network, topology & NOC',
+    blurb:
+      'Router inventory, live topology map, NOC probes, Twingate / ZeroTier / Cloudflare tunnels, and interface traffic graphs in one place.',
+    icon: Network,
+    image: '/landing/landing-network-real.png',
     accent: 'from-teal-400/25 to-cyan-500/10',
   },
 ];
 
-const PILLARS = [
-  { icon: Wifi, title: 'Hotspot & access', text: 'Vouchers, profiles, and guest Wi‑Fi without a second tool.' },
-  { icon: Map, title: 'Field maps', text: 'Pin clients, NAPs, and jobs so techs know where to go next.' },
-  { icon: Bot, title: 'Automation', text: 'Expiry protocols, fair-use alerts, and notify by email or SMS.' },
-  { icon: Shield, title: 'Roles that stick', text: 'Panel users and permissions that survive restarts and logins.' },
+/** Brief catalog of every major panel feature (matches sidebar purpose groups). */
+const ALL_FEATURES: { icon: typeof Users; title: string; text: string; group: string }[] = [
+  { group: 'Overview', icon: LayoutDashboard, title: 'Dashboard', text: 'Subscriber status tiles, MRR/AR snapshot, host health, and live interface traffic.' },
+  { group: 'Subscribers & Access', icon: Users, title: 'PPPoE Management', text: 'Secrets, plans, expiry protocols, bulk actions, and payment processing.' },
+  { group: 'Subscribers & Access', icon: Share2, title: 'IPoE Management', text: 'DHCP leases and IPoE plans alongside PPPoE for hybrid access networks.' },
+  { group: 'Subscribers & Access', icon: Wifi, title: 'Hotspot', text: 'Vouchers, user profiles, and guest Wi‑Fi without a separate portal stack.' },
+  { group: 'Subscribers & Access', icon: PieChart, title: 'Usage Stats', text: 'Per-subscriber download/upload trends to spot heavy users early.' },
+  { group: 'Subscribers & Access', icon: ShieldAlert, title: 'Fair Use Alerts', text: 'Threshold alerts when a plan’s fair-use cap is approached or exceeded.' },
+  { group: 'Billing & Payments', icon: BarChart3, title: 'Sales Report', text: 'Daily/period collections with charts for cashiers and owners.' },
+  { group: 'Billing & Payments', icon: FileText, title: 'Invoices & AR', text: 'Accounts receivable and printable invoices tied to subscribers.' },
+  { group: 'Billing & Payments', icon: TrendingUp, title: 'Finance & MRR', text: 'Projected monthly recurring revenue, income, and expense tracking.' },
+  { group: 'Billing & Payments', icon: Link2, title: 'Payment Links', text: '15-day public pay links, proof review, and resend to near-expiry clients.' },
+  { group: 'Billing & Payments', icon: Bell, title: 'Notifications', text: 'Email/SMS templates for expiry, payment, and operational alerts.' },
+  { group: 'Field Operations', icon: ClipboardList, title: 'Job Orders', text: 'Install/repair tickets for field techs with status tracking.' },
+  { group: 'Field Operations', icon: Boxes, title: 'Stock & Inventory', text: 'Fiber, ONU, and materials on hand for jobs and installs.' },
+  { group: 'Field Operations', icon: Cable, title: 'Tech Tools', text: 'Splitter loss and field calculators for outdoor teams.' },
+  { group: 'Field Operations', icon: ScanSearch, title: 'Rogue MACs', text: 'Find unexpected MAC addresses on the access network.' },
+  { group: 'Network & Infrastructure', icon: Network, title: 'Network', text: 'MikroTik routers, credentials, and sync status.' },
+  { group: 'Network & Infrastructure', icon: Map, title: 'Topology', text: 'Map of clients, NAPs, and links for planning and fault find.' },
+  { group: 'Network & Infrastructure', icon: TerminalSquare, title: 'Network Terminal', text: 'In-browser terminal to routers for quick diagnostics.' },
+  { group: 'Network & Infrastructure', icon: Bot, title: 'AI Scripting', text: 'Generate and review RouterOS scripts with AI assistance.' },
+  { group: 'Network & Infrastructure', icon: FileCode2, title: 'Mikrotik Files', text: 'Browse and manage files on connected routers.' },
+  { group: 'Network & Infrastructure', icon: ServerCog, title: 'Super Router', text: 'Advanced multi-WAN / edge router helpers.' },
+  { group: 'Remote Access', icon: Globe2, title: 'Twingate', text: 'Zero-trust remote access for staff without exposing the LAN.' },
+  { group: 'Remote Access', icon: Globe, title: 'ZeroTier', text: 'Overlay network for routers and technicians.' },
+  { group: 'Remote Access', icon: Cloud, title: 'Cloudflare Tunnel', text: 'Public pay links (and staff login when nginx is full-panel) without opening ports.' },
+  { group: 'Monitoring', icon: Activity, title: 'NOC Suite', text: 'Probe custom hosts, linked routers, and OLTs for up/down state.' },
+  { group: 'Monitoring', icon: Activity, title: 'Uptime Monitor', text: 'Continuous reachability checks with history.' },
+  { group: 'Monitoring', icon: Satellite, title: 'Status Hub', text: 'Public-facing status groups for outages and maintenance.' },
+  { group: 'Monitoring', icon: RadioTower, title: 'Outage Monitor', text: 'Correlate mass offline events across the access network.' },
+  { group: 'Monitoring', icon: ScrollText, title: 'System Logs', text: 'Panel and router-related audit/event logs.' },
+  { group: 'System', icon: Building2, title: 'Company', text: 'Branding, logo, and business details on receipts and login.' },
+  { group: 'System', icon: Settings, title: 'System Settings', text: 'Currency, theme, AI keys, timezone, and panel preferences.' },
+  { group: 'System', icon: ShieldCheck, title: 'Panel Roles', text: 'Staff users with role-based menu permissions (including read-only).' },
+  { group: 'System', icon: DownloadCloud, title: 'Updater', text: 'Pull the latest panel build from GitHub onto the appliance.' },
+  { group: 'System', icon: KeyRound, title: 'License', text: 'Activate hardware-bound licenses to unlock write access.' },
+  { group: 'System', icon: Shield, title: 'Security', text: 'JWT sessions, optional 2FA, and vendor password-reset codes.' },
 ];
 
 export default function Login() {
@@ -150,8 +190,8 @@ export default function Login() {
           </a>
           <nav className="hidden md:flex items-center gap-1 text-sm text-slate-300">
             {[
-              ['#features', 'Features'],
               ['#snapshots', 'Snapshots'],
+              ['#features', 'All features'],
               ['#purpose', 'Purpose'],
             ].map(([href, label]) => (
               <a
@@ -192,8 +232,8 @@ export default function Login() {
         {mobileNav && (
           <div className="md:hidden border-t border-white/5 px-4 py-3 space-y-1 animate-fade-in">
             {[
-              ['#features', 'Features'],
               ['#snapshots', 'Snapshots'],
+              ['#features', 'All features'],
               ['#purpose', 'Purpose'],
             ].map(([href, label]) => (
               <a
@@ -257,63 +297,36 @@ export default function Login() {
               </div>
               <div className="absolute inset-6 sm:inset-10 landing-panel rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/[0.04] to-cyan-400/5 p-3 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] backdrop-blur-md transform-gpu [transform:perspective(1200px)_rotateY(-8deg)_rotateX(6deg)] hover:[transform:perspective(1200px)_rotateY(0deg)_rotateX(0deg)] transition-transform duration-700">
                 <img
-                  src="/landing/landing-noc.png"
-                  alt="NOC and network overview"
+                  src="/landing/landing-dashboard.png"
+                  alt="Live Dashboard snapshot"
                   className="h-full w-full rounded-2xl object-cover object-top shadow-inner"
                 />
                 <div className="pointer-events-none absolute inset-0 rounded-3xl ring-1 ring-inset ring-white/20" />
               </div>
               <div className="absolute -bottom-2 left-4 sm:left-8 landing-float-card animate-float rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 backdrop-blur">
-                Live topology · MikroTik ready
+                Real panel · Dashboard
               </div>
               <div
                 className="absolute top-4 right-2 sm:right-6 landing-float-card animate-float rounded-2xl border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-xs text-orange-100 backdrop-blur"
                 style={{ animationDelay: '1.2s' }}
               >
-                Billing + pay links
+                PPPoE · Billing · NOC
               </div>
             </div>
           </div>
         </section>
 
-        {/* Features */}
-        <section id="features" className="relative border-t border-white/5 py-16 sm:py-20">
-          <div className="mx-auto max-w-6xl px-4 sm:px-6">
-            <div className="max-w-2xl mb-10">
-              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Built for ISP operators</h2>
-              <p className="mt-3 text-slate-400">
-                Everything from subscriber access to cash collection — without bolting five products together.
-              </p>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-4 sm:gap-5">
-              {PILLARS.map((p, i) => (
-                <div
-                  key={p.title}
-                  className="group rounded-3xl border border-white/10 bg-white/[0.03] p-5 sm:p-6 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-white/[0.06] hover:shadow-[0_20px_50px_-24px_rgba(34,211,238,0.35)]"
-                  style={{ animationDelay: `${i * 80}ms` }}
-                >
-                  <div className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500/20 to-cyan-400/10 text-cyan-200 ring-1 ring-white/10 transition-transform group-hover:scale-110">
-                    <p.icon size={20} />
-                  </div>
-                  <h3 className="font-display text-lg font-semibold text-white">{p.title}</h3>
-                  <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{p.text}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Snapshots */}
+        {/* Snapshots of the real system */}
         <section id="snapshots" className="relative border-t border-white/5 py-16 sm:py-24">
           <div className="mx-auto max-w-6xl px-4 sm:px-6">
             <div className="max-w-2xl mb-12">
-              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Feature snapshots</h2>
-              <p className="mt-3 text-slate-400">
-                Peek inside the panel — subscribers, NOC, finance, and the ops terminal.
+              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Inside the real panel</h2>
+              <p className="mt-3 text-slate-300">
+                Snapshots styled after the live Snapshot UI — Dashboard, PPPoE, billing, and network/NOC.
               </p>
             </div>
             <div className="space-y-14 sm:space-y-20">
-              {FEATURES.map((f, i) => {
+              {SNAPSHOTS.map((f, i) => {
                 const reverse = i % 2 === 1;
                 return (
                   <article
@@ -326,7 +339,7 @@ export default function Login() {
                         {f.title}
                       </div>
                       <h3 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">{f.title}</h3>
-                      <p className="mt-3 text-slate-400 leading-relaxed">{f.blurb}</p>
+                      <p className="mt-3 text-slate-300 leading-relaxed">{f.blurb}</p>
                     </div>
                     <div className="relative group">
                       <div className={`absolute -inset-3 rounded-[1.6rem] bg-gradient-to-br ${f.accent} blur-2xl opacity-60 transition-opacity group-hover:opacity-90`} />
@@ -339,6 +352,41 @@ export default function Login() {
                 );
               })}
             </div>
+          </div>
+        </section>
+
+        {/* All features */}
+        <section id="features" className="relative border-t border-white/5 py-16 sm:py-20">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="max-w-2xl mb-10">
+              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">All features</h2>
+              <p className="mt-3 text-slate-300">
+                Every major module in the panel, grouped by purpose — with a short explanation of what each does.
+              </p>
+            </div>
+            {(['Overview', 'Subscribers & Access', 'Billing & Payments', 'Field Operations', 'Network & Infrastructure', 'Remote Access', 'Monitoring', 'System'] as const).map((group) => {
+              const items = ALL_FEATURES.filter((f) => f.group === group);
+              if (!items.length) return null;
+              return (
+                <div key={group} className="mb-10">
+                  <h3 className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-cyan-300/90 mb-4">{group}</h3>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                    {items.map((p) => (
+                      <div
+                        key={`${group}-${p.title}`}
+                        className="group rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:p-5 transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400/30 hover:bg-white/[0.06]"
+                      >
+                        <div className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500/20 to-cyan-400/10 text-cyan-200 ring-1 ring-white/10">
+                          <p.icon size={17} />
+                        </div>
+                        <h4 className="font-display text-base font-semibold text-white">{p.title}</h4>
+                        <p className="mt-1 text-sm text-slate-300 leading-relaxed">{p.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 

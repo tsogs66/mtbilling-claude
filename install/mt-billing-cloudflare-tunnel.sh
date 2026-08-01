@@ -605,25 +605,35 @@ do_apply() {
   # (and the panel hot-sets process.env.PUBLIC_BASE_URL after apply). A deferred
   # restart after Cloudflare install was a common cause of "UI cannot login"
   # (API crash-loop / brief outage / EnvironmentFile parse edge cases).
-  log_info "Skipping mt-billing-api restart (PUBLIC_BASE_URL is in DB; login stays on LAN)"
+  log_info "Skipping mt-billing-api restart (PUBLIC_BASE_URL is in DB)"
+
+  # Pay-only nginx vhosts return 404 for /api/login when Host=tunnel hostname.
+  # Heal so the Cloudflare hostname serves the full panel (staff login + API).
+  if [[ -n "$HOSTNAME" && -f "$(dirname "${BASH_SOURCE[0]}")/mt-billing-nginx-staff-host.sh" ]]; then
+    log_info "Ensuring nginx serves full panel on ${HOSTNAME} (staff login + /api/)…"
+    bash "$(dirname "${BASH_SOURCE[0]}")/mt-billing-nginx-staff-host.sh" "$HOSTNAME" \
+      && log_ok "Staff login enabled on https://${HOSTNAME}/login" \
+      || log_warn "Could not rewrite nginx for staff login — run: sudo bash $(dirname "${BASH_SOURCE[0]}")/mt-billing-nginx-staff-host.sh ${HOSTNAME}"
+  fi
 
   echo
   log_ok "Done"
   echo "  Hostname    : ${HOSTNAME:-'(set in Cloudflare + panel)'}"
   echo "  Local port  : ${LOCAL_PORT} (must match Cloudflare service URL)"
   echo "  Pay links   : https://${HOSTNAME:-YOUR_HOST}/pay/<token>"
-  echo "  Admin login : use LAN IP http://<panel-lan-ip>/login (not the Cloudflare hostname)"
+  echo "  Staff login : https://${HOSTNAME:-YOUR_HOST}/login  (or LAN http://<panel-lan-ip>/login)"
   echo
   echo "Checklist:"
   echo "  1. Cloudflare Tunnel public hostname points to http://127.0.0.1:${LOCAL_PORT}"
-  echo "  2. nginx (or the panel) is listening on that port"
+  echo "  2. nginx is listening on that port with FULL panel for the hostname (not pay-only)"
   echo "  3. Payment Links → Active base shows https://${HOSTNAME:-YOUR_HOST}"
-  echo "  4. Open a full pay link https://${HOSTNAME:-YOUR_HOST}/pay/<token> (not bare /pay/)"
+  echo "  4. Open staff login https://${HOSTNAME:-YOUR_HOST}/login"
   echo "  5. Do NOT enable Cloudflare Access (Zero Trust app) or Bot Fight on this hostname"
-  echo "     — they block POST /api/login. Staff panel login stays on the LAN IP."
+  echo "     — they block POST /api/login at the Cloudflare edge (not in this app)."
   echo "  6. If Cloudflare shows 502 Host Error: cloudflared or nginx is down — run: $0 status"
   echo "  7. If /pay/ returns 403: remove leftover dist/pay/ or re-run public-host / reinstall nginx config"
-  echo "  8. If SSH/panel dies later: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore"
+  echo "  8. If login still 404: sudo bash /opt/mt-billing/install/mt-billing-nginx-staff-host.sh ${HOSTNAME:-YOUR_HOST}"
+  echo "  9. If SSH/panel dies later: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore"
 }
 
 case "$ACTION" in

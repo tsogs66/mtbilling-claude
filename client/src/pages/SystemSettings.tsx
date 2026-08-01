@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
+  Palette,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -87,6 +88,7 @@ function PanelSettings({ app, setA, save }: any) {
     { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Nautical map art · gold & crimson' },
     { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
     { key: 'isptech', label: 'Snapshot', Icon: Network, hint: 'Landing navy glass · orange + cyan' },
+    { key: 'blueglass', label: 'Blue Glass', Icon: Palette, hint: 'Elegant sapphire glass · sky accents' },
   ];
   const selectTheme = (key: ThemeId) => {
     setA({ theme: key });
