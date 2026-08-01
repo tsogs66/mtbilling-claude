@@ -1897,9 +1897,12 @@ body {
     @apply absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-r-full bg-brand-500 shadow-glow-sm;
   }
   .stat-tile {
-    @apply card-interactive px-4 py-4 relative overflow-hidden;
+    @apply relative overflow-hidden;
   }
-  .stat-tile::before {
+  .stat-tile:not(.snap-tile) {
+    @apply card-interactive px-4 py-4;
+  }
+  .stat-tile:not(.snap-tile)::before {
     content: '';
     @apply absolute inset-0 bg-gradient-to-br from-white to-slate-50/50 pointer-events-none;
   }
@@ -1928,6 +1931,167 @@ body {
   .data-table tbody tr:last-child td {
     @apply border-b-0;
   }
+}
+
+/* ── Snapshot panel shell (3D glass chrome used across the app) ── */
+.snap-ambient {
+  overflow: hidden;
+}
+.snap-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(64px);
+  opacity: 0.55;
+  animation: float 10s ease-in-out infinite;
+}
+.snap-orb-a {
+  width: 22rem;
+  height: 22rem;
+  top: -6rem;
+  left: 18%;
+  background: rgba(249, 115, 22, 0.22);
+}
+.snap-orb-b {
+  width: 18rem;
+  height: 18rem;
+  right: -4rem;
+  bottom: 10%;
+  background: rgba(34, 211, 238, 0.16);
+  animation-delay: 1.4s;
+}
+.snap-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 75% 60% at 50% 20%, #000 10%, transparent 75%);
+  opacity: 0.7;
+}
+[data-theme='light'] .snap-ambient {
+  display: none;
+}
+
+.snap-tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.15rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(12, 22, 40, 0.45) 42%, rgba(5, 14, 28, 0.72));
+  box-shadow:
+    0 18px 40px -24px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  padding: 1.05rem 1.1rem;
+  transform: perspective(900px) rotateX(0deg) translateY(0);
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.3s ease, box-shadow 0.35s ease;
+}
+.snap-tile:hover {
+  transform: perspective(900px) rotateX(4deg) translateY(-4px);
+  border-color: rgba(34, 211, 238, 0.35);
+  box-shadow:
+    0 28px 50px -22px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(34, 211, 238, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+.snap-tile-glow {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(120deg, transparent 20%, rgba(34, 211, 238, 0.18), rgba(249, 115, 22, 0.22), transparent 80%);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  padding: 1px;
+}
+.snap-tile:hover .snap-tile-glow {
+  opacity: 1;
+}
+.snap-tile-icon {
+  background: linear-gradient(145deg, rgba(34, 211, 238, 0.16), rgba(249, 115, 22, 0.12));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 20px -10px rgba(34, 211, 238, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.snap-dash-hero {
+  position: relative;
+  border-radius: 1.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(125deg, rgba(249, 115, 22, 0.16), rgba(12, 22, 40, 0.35) 40%, rgba(34, 211, 238, 0.1)),
+    rgba(5, 10, 20, 0.55);
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.snap-dash-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 85% 20%, rgba(34, 211, 238, 0.18), transparent 40%),
+    radial-gradient(circle at 10% 80%, rgba(249, 115, 22, 0.16), transparent 42%);
+  pointer-events: none;
+}
+.snap-dash-hero-inner {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.35rem;
+}
+.snap-dash-hero-badge {
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  background: rgba(249, 115, 22, 0.12);
+  color: #fdba74;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.75rem;
+  box-shadow: 0 0 24px -8px rgba(249, 115, 22, 0.65);
+}
+
+[data-theme='light'] .snap-tile {
+  background: #fff;
+  border-color: rgba(226, 232, 240, 0.9);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 8px 24px -8px rgba(15, 23, 42, 0.08);
+  backdrop-filter: none;
+}
+[data-theme='light'] .snap-tile:hover {
+  transform: translateY(-2px);
+  border-color: rgba(203, 213, 225, 1);
+}
+[data-theme='light'] .snap-tile-icon {
+  background: #fff;
+  color: #64748b;
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+[data-theme='light'] .snap-dash-hero {
+  background: linear-gradient(125deg, #fff7ed, #f8fafc 50%, #ecfeff);
+  border-color: #e2e8f0;
+}
+[data-theme='light'] .snap-dash-hero h2,
+[data-theme='light'] .snap-dash-hero .text-white {
+  color: #0f172a !important;
+}
+[data-theme='light'] .snap-dash-hero .text-slate-400 {
+  color: #64748b !important;
+}
+[data-theme='light'] .snap-dash-hero .text-orange-300 {
+  color: #ea580c !important;
+}
+[data-theme='light'] .snap-dash-hero .text-cyan-300\/90 {
+  color: #0e7490 !important;
 }
 
 /* ── Public landing / login marketing page ── */

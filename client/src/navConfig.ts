@@ -10,6 +10,7 @@ import type { LucideIcon } from 'lucide-react';
 export type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; permission: string };
 export type NavSection = { title: string; items: NavItem[] };
 
+/** Sidebar grouped by operator purpose (matches Snapshot product IA). */
 export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Overview',
@@ -18,7 +19,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: 'Subscribers',
+    title: 'Subscribers & Access',
     items: [
       { to: '/pppoe', label: 'PPPoE Management', icon: Users, permission: 'pppoe' },
       { to: '/ipoe', label: 'IPoE Management', icon: Share2, permission: 'ipoe' },
@@ -28,63 +29,71 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: 'Network',
-    items: [
-      { to: '/network', label: 'Network', icon: Network, permission: 'network' },
-      { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
-      { to: '/noc', label: 'NOC Suite', icon: Activity, permission: 'noc' },
-      { to: '/terminal', label: 'Network Terminal', icon: TerminalSquare, permission: 'terminal' },
-      { to: '/ai-scripting', label: 'AI Scripting', icon: Bot, permission: 'ai' },
-      { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
-      { to: '/twingate', label: 'Twingate', icon: Globe2, permission: 'twingate' },
-      { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
-      { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
-      { to: '/tech-tools', label: 'Tech Tools', icon: Cable, permission: 'tech-tools' },
-    ],
-  },
-  {
-    title: 'Operations',
-    items: [
-      { to: '/job-orders', label: 'Job Orders', icon: ClipboardList, permission: 'job-orders' },
-      { to: '/rogue-macs', label: 'Rogue MACs', icon: ScanSearch, permission: 'rogue' },
-    ],
-  },
-  {
-    title: 'Billing',
+    title: 'Billing & Payments',
     items: [
       { to: '/sales', label: 'Sales Report', icon: BarChart3, permission: 'sales' },
       { to: '/invoices', label: 'Invoices & AR', icon: FileText, permission: 'invoices' },
       { to: '/finance', label: 'Finance & MRR', icon: TrendingUp, permission: 'finance' },
       { to: '/pay-portal', label: 'Payment Links', icon: Link2, permission: 'sales' },
-      { to: '/inventory', label: 'Stock & Inventory', icon: Boxes, permission: 'inventory' },
       { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications' },
+    ],
+  },
+  {
+    title: 'Field Operations',
+    items: [
+      { to: '/job-orders', label: 'Job Orders', icon: ClipboardList, permission: 'job-orders' },
+      { to: '/inventory', label: 'Stock & Inventory', icon: Boxes, permission: 'inventory' },
+      { to: '/tech-tools', label: 'Tech Tools', icon: Cable, permission: 'tech-tools' },
+      { to: '/rogue-macs', label: 'Rogue MACs', icon: ScanSearch, permission: 'rogue' },
+    ],
+  },
+  {
+    title: 'Network & Infrastructure',
+    items: [
+      { to: '/network', label: 'Network', icon: Network, permission: 'network' },
+      { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
+      { to: '/terminal', label: 'Network Terminal', icon: TerminalSquare, permission: 'terminal' },
+      { to: '/ai-scripting', label: 'AI Scripting', icon: Bot, permission: 'ai' },
+      { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
+      { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
+    ],
+  },
+  {
+    title: 'Remote Access',
+    items: [
+      { to: '/twingate', label: 'Twingate', icon: Globe2, permission: 'twingate' },
+      { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
+      { to: '/cloudflare', label: 'Cloudflare Tunnel', icon: Cloud, permission: 'settings' },
+    ],
+  },
+  {
+    title: 'Monitoring',
+    items: [
+      { to: '/noc', label: 'NOC Suite', icon: Activity, permission: 'noc' },
+      { to: '/uptime', label: 'Uptime Monitor', icon: Activity, permission: 'uptime' },
+      { to: '/status-hub', label: 'Status Hub', icon: Satellite, permission: 'uptime' },
+      { to: '/outage-monitor', label: 'Outage Monitor', icon: RadioTower, permission: 'uptime' },
+      { to: '/logs', label: 'System Logs', icon: ScrollText, permission: 'logs' },
     ],
   },
   {
     title: 'System',
     items: [
       { to: '/company', label: 'Company', icon: Building2, permission: 'company' },
-      { to: '/cloudflare', label: 'Cloudflare Tunnel', icon: Cloud, permission: 'settings' },
       { to: '/settings', label: 'System Settings', icon: Settings, permission: 'settings' },
       { to: '/roles', label: 'Panel Roles', icon: ShieldCheck, permission: 'roles' },
-      { to: '/uptime', label: 'Uptime Monitor', icon: Activity, permission: 'uptime' },
-      { to: '/status-hub', label: 'Status Hub', icon: Satellite, permission: 'uptime' },
-      { to: '/outage-monitor', label: 'Outage Monitor', icon: RadioTower, permission: 'uptime' },
-      { to: '/logs', label: 'System Logs', icon: ScrollText, permission: 'logs' },
       { to: '/updater', label: 'Updater', icon: DownloadCloud, permission: 'updater' },
       { to: '/license', label: 'License', icon: KeyRound, permission: 'license' },
     ],
   },
 ];
 
-/** Primary Android bottom tabs; "More" opens the full menu sheet. */
 export type BottomTab = {
   to: string;
   label: string;
   icon: LucideIcon;
   end?: boolean;
   permission: string;
-  /** Paths that highlight this tab (includes `to`). */
   matchPaths: string[];
 };
 
@@ -110,8 +119,9 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     icon: Network,
     permission: 'network',
     matchPaths: [
-      '/network', '/map', '/noc', '/terminal', '/ai-scripting', '/files',
-      '/twingate', '/zerotier', '/super-router', '/routers', '/tech-tools', '/rogue-macs',
+      '/network', '/map', '/terminal', '/ai-scripting', '/files',
+      '/super-router', '/routers', '/tech-tools', '/rogue-macs',
+      '/twingate', '/zerotier', '/cloudflare',
     ],
   },
   {
@@ -119,7 +129,10 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     label: 'Billing',
     icon: BarChart3,
     permission: 'sales',
-    matchPaths: ['/sales', '/invoices', '/finance', '/pay-portal', '/inventory', '/notifications', '/job-orders'],
+    matchPaths: [
+      '/sales', '/invoices', '/finance', '/pay-portal',
+      '/notifications', '/job-orders', '/inventory',
+    ],
   },
 ];
 
@@ -139,7 +152,6 @@ export function buildNavSections(
   })).filter((s) => s.items.length > 0);
 }
 
-/** Map pathname → permission key for route guards */
 export function permissionForPath(pathname: string): string {
   if (pathname === '/' || pathname === '') return 'dashboard';
   const map: Record<string, string> = {
@@ -186,7 +198,6 @@ export function isBottomTabActive(pathname: string, tab: BottomTab): boolean {
   return tab.matchPaths.some((p) => p !== '/' && (pathname === p || pathname.startsWith(`${p}/`)));
 }
 
-/** True when current route is only reachable via the More sheet (not a primary tab). */
 export function isMoreMenuRoute(pathname: string): boolean {
   const onPrimary = BOTTOM_NAV_TABS.some((tab) => isBottomTabActive(pathname, tab));
   return !onPrimary;

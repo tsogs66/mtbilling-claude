@@ -176,18 +176,22 @@ export function StatTile({
   delay?: number;
 }) {
   return (
-    <div className="stat-tile animate-fade-in-up" style={{ animationDelay: `${delay}ms`, opacity: 0 }}>
-      <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${accent} rounded-bl-full pointer-events-none`} />
-      <div className="relative flex items-center justify-between">
-        <div>
-          <div className={`text-2xl sm:text-3xl font-bold tracking-tight ${tone}`}>{value}</div>
-          <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-1 font-medium">
-            {dot && <span className={`w-2 h-2 rounded-full ${dot} animate-pulse-soft`} />}
+    <div
+      className="snap-tile stat-tile animate-fade-in-up group"
+      style={{ animationDelay: `${delay}ms`, opacity: 0 }}
+    >
+      <div className="snap-tile-glow pointer-events-none" aria-hidden />
+      <div className={`absolute -top-8 -right-6 w-28 h-28 bg-gradient-to-bl ${accent} rounded-full blur-2xl opacity-80 pointer-events-none transition-opacity group-hover:opacity-100`} />
+      <div className="relative flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className={`font-display text-2xl sm:text-3xl font-bold tracking-tight tabular-nums ${tone}`}>{value}</div>
+          <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-1.5 font-medium uppercase tracking-wider">
+            {dot && <span className={`w-2 h-2 rounded-full ${dot} animate-pulse-soft shadow-[0_0_8px_currentColor]`} />}
             {label}
           </div>
         </div>
         {Icon && (
-          <span className="flex items-center justify-center w-10 h-10 rounded-xl bg-white/80 border border-slate-100 text-slate-400 shadow-sm">
+          <span className="snap-tile-icon flex items-center justify-center w-11 h-11 rounded-2xl text-cyan-200/90 shrink-0 transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3">
             <Icon size={18} />
           </span>
         )}

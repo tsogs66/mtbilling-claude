@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="isptech" style="color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -19,6 +19,18 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      try {
+        var migrated = localStorage.getItem('mt_theme_snapshot_v2');
+        if (!migrated) {
+          localStorage.setItem('mt_theme_snapshot_v2', '1');
+          localStorage.setItem('mt_theme', 'isptech');
+        }
+        var theme = localStorage.getItem('mt_theme') || 'isptech';
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+      } catch (e) {}
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
