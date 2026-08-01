@@ -66,6 +66,16 @@ function validateServiceKeyPaste(raw: string): { ok: true; cleaned: string } | {
   return { ok: true, cleaned: JSON.stringify(j) };
 }
 
+/** Network slug → cloud host (keys often already include .twingate.com). */
+function twingateCloudHost(network?: string | null) {
+  const n = String(network || 'yournet')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .replace(/\.twingate\.com$/i, '');
+  return `${n || 'yournet'}.twingate.com`;
+}
+
 /**
  * Twingate headless client — lets this panel reach OLTs / routers on remote
  * or different subnets through a Twingate Connector on that LAN.
@@ -128,10 +138,15 @@ export default function Twingate() {
       })
       .catch(() => {
         setApiDown(true);
+        // Preserve prior fields — a blip during apply used to wipe `installed`
+        // and show "Client not installed" next to authenticating.
         setData((prev: any) => ({
+          ...(prev || {}),
           configured: prev?.configured ?? false,
           online: false,
           status: prev?.status || 'stopped',
+          installed: prev?.installed,
+          connecting: prev?.connecting,
           network: prev?.network || '',
           nodeName: prev?.nodeName || 'panel-host',
           message: 'Could not load Twingate status from the panel API.',
@@ -263,7 +278,26 @@ export default function Twingate() {
         setJob((j) => (j ? { ...j, log: logText } : j));
         // Soft-update badge while apply is still running
         if (/status=authenticating|still authenticating|status: authenticating/i.test(logText)) {
-          setData((d: any) => (d ? { ...d, status: 'authenticating', connecting: true } : d));
+          setData((d: any) =>
+            d ? { ...d, status: 'authenticating', connecting: true, installed: true } : d
+          );
+        }
+        // End Working… as soon as apply soft-succeeds (even if job poll lags)
+        if (
+          r.data.running &&
+          /Apply finished with status=authenticating|Apply finished with status=online/i.test(logText)
+        ) {
+          stopJobPoll();
+          setJob((j) => (j ? { ...j, running: false, code: 0, log: logText } : j));
+          setFlash({
+            type: /authenticating/i.test(logText) ? 'error' : 'success',
+            msg: /authenticating/i.test(logText)
+              ? 'Apply finished but client is still authenticating — not stuck in Working. In Twingate Admin: Connector Online + grant this Service Account Resources (specific IPs) + Service Key Active. Then Refresh.'
+              : 'Twingate apply finished successfully.',
+          });
+          load({ live: true });
+          setBusy(false);
+          return;
         }
         if (!r.data.running) {
           stopJobPoll();
@@ -642,7 +676,10 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
                 <li>Remote Network <b>Connector</b> is Online (the one on Proxmox/that LAN).</li>
                 <li>This <b>Service Account</b> is granted <b>Resources</b> (specific OLT/router IPs — not broad LAN CIDRs).</li>
                 <li>Service Key is <b>Active</b> (not revoked). Re-paste a new key if unsure.</li>
-                <li>This host can reach the internet on HTTPS/443 (test: <code className="font-mono text-xs">curl -I https://{data.network || 'yournet'}.twingate.com/</code>).</li>
+                <li>
+                  This host can reach the internet on HTTPS/443 (test:{' '}
+                  <code className="font-mono text-xs">curl -I https://{twingateCloudHost(data.network)}/</code>).
+                </li>
               </ol>
               <p>
                 Then click <b>Refresh</b>. If the panel dies, use Emergency restore / LAN IP.

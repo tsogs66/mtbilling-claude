@@ -184,11 +184,26 @@ cloudflare_still_ok() {
 
 # Resolve Cloudflare edge + a public name — proves DNS coexistence
 coexist_dns_ok() {
+  # Bound getent — unbounded DNS lookups hang apply/coexist on broken Twingate DNS
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3 getent hosts api.cloudflare.com >/dev/null 2>&1 && return 0
+    timeout 3 getent hosts github.com >/dev/null 2>&1 && return 0
+    if command -v python3 >/dev/null 2>&1; then
+      timeout 3 python3 - <<'PY' >/dev/null 2>&1
+import socket
+socket.setdefaulttimeout(2)
+socket.getaddrinfo("api.cloudflare.com", 443, proto=socket.IPPROTO_TCP)
+PY
+      return $?
+    fi
+    return 1
+  fi
   getent hosts api.cloudflare.com >/dev/null 2>&1 && return 0
   getent hosts github.com >/dev/null 2>&1 && return 0
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY' >/dev/null 2>&1
 import socket
+socket.setdefaulttimeout(2)
 socket.getaddrinfo("api.cloudflare.com", 443, proto=socket.IPPROTO_TCP)
 PY
     return $?
