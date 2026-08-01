@@ -10,7 +10,11 @@ import type { LucideIcon } from 'lucide-react';
 export type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; permission: string };
 export type NavSection = { title: string; items: NavItem[] };
 
-/** Sidebar grouped by operator purpose (matches Snapshot product IA). */
+/**
+ * Sidebar grouped by operator purpose (matches Snapshot product IA).
+ * Overview → Subscribers & Access → Billing & Payments → Field Operations →
+ * Network & Infrastructure → Remote Access → Monitoring → System
+ */
 export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Overview',

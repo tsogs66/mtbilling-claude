@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
 import { api, peso } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
 
 const LINK_TTL_DAYS = 15;
+const RESEND_WITHIN_DAYS = 10;
 
 export default function PayPortal() {
   const [links, setLinks] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+  const [resendClients, setResendClients] = useState<any[]>([]);
   const [userId, setUserId] = useState('');
   const [months, setMonths] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -52,6 +54,13 @@ export default function PayPortal() {
       if (r.data.source) setSource(r.data.source);
     });
     api.get('/clients').then((r) => setClients(r.data || [])).catch(() => setClients([]));
+    api
+      .get('/payment-links/resend-candidates', { params: { withinDays: RESEND_WITHIN_DAYS } })
+      .then((r) => {
+        setResendClients(r.data.clients || []);
+        setResendIds(new Set());
+      })
+      .catch(() => setResendClients([]));
     loadConfig().catch(() => undefined);
   };
 
@@ -158,10 +167,18 @@ export default function PayPortal() {
     });
   };
 
-  const resendSelected = async () => {
+  const allResendSelected =
+    resendClients.length > 0 && resendIds.size === resendClients.length;
+
+  const toggleResendAll = () => {
+    if (allResendSelected) setResendIds(new Set());
+    else setResendIds(new Set(resendClients.map((c) => Number(c.id))));
+  };
+
+  const resendSelected = async (channels: ('email' | 'sms')[] | 'copy') => {
     const ids = [...resendIds];
     if (!ids.length) {
-      show('Select one or more subscribers to resend links.');
+      show('Select one or more near-expiry / expired subscribers.');
       return;
     }
     setResendBusy(true);
@@ -169,14 +186,24 @@ export default function PayPortal() {
       const r = await api.post('/payment-links/resend', {
         userIds: ids,
         months,
+        withinDays: RESEND_WITHIN_DAYS,
+        channels: channels === 'copy' ? [] : channels,
         fallbackOrigin: window.location.origin,
       });
       const list = r.data.links || [];
+      const skipped = r.data.skipped?.length || 0;
       const lines = list
         .map((l: any) => `${l.username || l.customer || l.account}: ${resolvePayUrl(l)}`)
         .join('\n');
-      if (lines) await copyTextOrPrompt(lines, 'Resent pay links — copy:');
-      show(`Resent ${list.length} link(s) · valid ${LINK_TTL_DAYS} days`);
+      if (channels === 'copy' && lines) await copyTextOrPrompt(lines, 'Resent pay links — copy:');
+      const via =
+        channels === 'copy'
+          ? 'copied'
+          : channels.join('+');
+      show(
+        `Resent ${list.length} link(s) (${via}) · valid ${LINK_TTL_DAYS} days` +
+          (skipped ? ` · skipped ${skipped} (not near expiry)` : '')
+      );
       setResendIds(new Set());
       load();
     } catch (e: any) {
@@ -185,6 +212,11 @@ export default function PayPortal() {
       setResendBusy(false);
     }
   };
+
+  const resendLabel = useMemo(() => {
+    if (!resendClients.length) return 'No near-expiry / expired clients';
+    return `${resendClients.length} eligible (expired or ≤${RESEND_WITHIN_DAYS} days)`;
+  }, [resendClients.length]);
 
   const copy = async (link: any) => {
     const full = resolvePayUrl(link);
@@ -388,25 +420,67 @@ export default function PayPortal() {
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 mb-6">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
             <div>
-              <div className="font-semibold text-slate-800 text-sm">Resend links</div>
-              <p className="text-xs text-slate-500">Select subscribers below, then resend fresh {LINK_TTL_DAYS}-day pay links (copied as a list).</p>
+              <div className="font-semibold text-slate-800 text-sm">Resend payment links</div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Only <b>expired</b> accounts or those due within <b>{RESEND_WITHIN_DAYS} days</b>. Fresh links last{' '}
+                {LINK_TTL_DAYS} days. Send by email and/or SMS, or copy.
+              </p>
+              <p className="text-xs text-brand-700 mt-1">{resendLabel}</p>
             </div>
-            <button
-              type="button"
-              className="btn-primary text-sm"
-              disabled={resendBusy || resendIds.size === 0}
-              onClick={resendSelected}
-            >
-              <Send size={14} /> {resendBusy ? 'Resending…' : `Resend selected (${resendIds.size})`}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                disabled={resendBusy || resendIds.size === 0}
+                onClick={() => resendSelected('copy')}
+              >
+                <Copy size={14} /> {resendBusy ? 'Working…' : 'Copy links'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                disabled={resendBusy || resendIds.size === 0}
+                onClick={() => resendSelected(['email'])}
+              >
+                <Mail size={14} /> Email
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                disabled={resendBusy || resendIds.size === 0}
+                onClick={() => resendSelected(['sms'])}
+              >
+                <MessageSquare size={14} /> SMS
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={resendBusy || resendIds.size === 0}
+                onClick={() => resendSelected(['email', 'sms'])}
+              >
+                <Send size={14} /> {resendBusy ? 'Sending…' : `Email + SMS (${resendIds.size})`}
+              </button>
+            </div>
           </div>
-          <div className="max-h-40 overflow-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
-            {clients.length === 0 ? (
-              <div className="text-xs text-slate-400 px-3 py-4 text-center">No subscribers loaded.</div>
+          <label className="flex items-center gap-2 px-1 pb-2 text-sm font-medium text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              className="rounded border-slate-300"
+              checked={allResendSelected}
+              disabled={!resendClients.length}
+              onChange={toggleResendAll}
+            />
+            Select all eligible clients
+          </label>
+          <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+            {resendClients.length === 0 ? (
+              <div className="text-xs text-slate-400 px-3 py-4 text-center">
+                No expired or near-expiry (≤{RESEND_WITHIN_DAYS} days) subscribers.
+              </div>
             ) : (
-              clients.map((c: any) => (
+              resendClients.map((c: any) => (
                 <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -415,7 +489,21 @@ export default function PayPortal() {
                     onChange={() => toggleResend(Number(c.id))}
                   />
                   <span className="font-medium text-slate-800 truncate">{c.username}</span>
-                  <span className="text-slate-400 truncate text-xs">{c.customer_name || c.customer || ''}</span>
+                  <span className="text-slate-400 truncate text-xs flex-1">{c.customer || ''}</span>
+                  <span
+                    className={`text-[11px] shrink-0 ${
+                      c.expired || (c.daysUntilDue != null && c.daysUntilDue < 0)
+                        ? 'text-rose-600'
+                        : 'text-amber-700'
+                    }`}
+                  >
+                    {c.expired || (c.daysUntilDue != null && c.daysUntilDue < 0)
+                      ? 'Expired'
+                      : c.daysUntilDue === 0
+                        ? 'Due today'
+                        : `${c.daysUntilDue}d left`}
+                    {c.subscriptionDue ? ` · ${String(c.subscriptionDue).slice(0, 10)}` : ''}
+                  </span>
                 </label>
               ))
             )}

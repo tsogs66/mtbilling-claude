@@ -1272,3 +1272,56 @@ export function resendPaymentLink(opts: {
     ttlHours: 15 * 24,
   });
 }
+
+/** Calendar days until subscription_due (negative = already expired). */
+export function daysUntilSubscriptionDue(due: string | null | undefined): number | null {
+  if (!due) return null;
+  const day = String(due).slice(0, 10);
+  const dueMs = Date.parse(`${day}T00:00:00`);
+  if (!Number.isFinite(dueMs)) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((dueMs - today.getTime()) / 86_400_000);
+}
+
+/**
+ * Pay-link resend is only for accounts expired or due within `withinDays` (default 10).
+ * Overdue / non-payment / expired statuses qualify even if due date is missing.
+ * Plain "disabled" alone does not qualify unless the due date is within the window (or past).
+ */
+export function isPayLinkResendEligible(
+  user: { subscription_due?: string | null; status?: string | null },
+  withinDays = 10
+): boolean {
+  const d = daysUntilSubscriptionDue(user.subscription_due);
+  if (d != null && d <= withinDays) return true;
+  const st = String(user.status || '')
+    .toLowerCase()
+    .trim();
+  return ['non-payment', 'expired', 'overdue'].includes(st);
+}
+
+/** Subscribers eligible for bulk pay-link resend (expired or ≤ withinDays). */
+export function listPayLinkResendCandidates(withinDays = 10) {
+  const rows = db
+    .prepare(
+      `SELECT id, username, customer_name AS customer, email, contact, service, status,
+              subscription_due AS subscriptionDue, account_number AS account
+       FROM pppoe_users
+       ORDER BY subscription_due ASC, customer_name ASC`
+    )
+    .all() as any[];
+  return rows
+    .filter((u) => isPayLinkResendEligible({ subscription_due: u.subscriptionDue, status: u.status }, withinDays))
+    .map((u) => {
+      const days = daysUntilSubscriptionDue(u.subscriptionDue);
+      return {
+        ...u,
+        daysUntilDue: days,
+        expired:
+          days != null
+            ? days < 0
+            : ['non-payment', 'expired', 'overdue'].includes(String(u.status || '').toLowerCase()),
+      };
+    });
+}

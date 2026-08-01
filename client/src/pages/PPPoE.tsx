@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -114,6 +114,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [payFor, setPayFor] = useState<PUser | null>(null);
+  const [resendFor, setResendFor] = useState<PUser | null>(null);
+  const [resendBusy, setResendBusy] = useState(false);
   const [editFor, setEditFor] = useState<PUser | null>(null);
   const [toast, setToast] = useState('');
   const [fetching, setFetching] = useState(false);
@@ -495,24 +497,49 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
-  const copyPayLink = async (u: PUser) => {
+  const resolvePayUrl = (data: { url?: string; path?: string; token?: string }) => {
+    if (typeof data.url === 'string' && /^https?:\/\//i.test(data.url)) return data.url;
+    const path = data.path || (data.token ? `/pay/${data.token}` : '');
+    if (!path) return '';
+    return `${window.location.origin}${path.startsWith('/') ? path : `/${path}`}`;
+  };
+
+  /** Open resend dialog — only expired / due within 10 days (enforced by API). */
+  const openResendPayLink = (u: PUser) => {
+    setResendFor(u);
+  };
+
+  const resendPayLink = async (channels: Array<'email' | 'sms'> | 'copy') => {
+    if (!resendFor) return;
+    setResendBusy(true);
     try {
-      // Server prefers configured public URL over the panel's LAN origin
-      const r = await api.post(`/payment-links/for-user/${u.id}`, { fallbackOrigin: window.location.origin });
-      const path = r.data.path || (r.data.token ? `/pay/${r.data.token}` : r.data.url);
-      const full =
-        typeof r.data.url === 'string' && /^https?:\/\//i.test(r.data.url)
-          ? r.data.url
-          : `${window.location.origin}${String(path || '').startsWith('/') ? path : `/${path || ''}`}`;
-      if (!full || full.endsWith('/pay/') || full.endsWith('/undefined')) {
-        showToast('Pay link was created but URL is empty.');
-        return;
-      }
+      const r = await api.post(`/payment-links/for-user/${resendFor.id}`, {
+        fallbackOrigin: window.location.origin,
+        withinDays: 10,
+        channels: channels === 'copy' ? [] : channels,
+      });
+      const full = resolvePayUrl(r.data);
       if (r.data.warning) showToast(r.data.warning);
-      const ok = await copyTextOrPrompt(full, `Pay link for ${u.username} — copy:`);
-      showToast(ok ? `Pay link copied for ${u.username}` : `Pay link ready — copy from the dialog`);
+      if (channels === 'copy') {
+        if (!full || full.endsWith('/pay/') || full.endsWith('/undefined')) {
+          showToast('Pay link was created but URL is empty.');
+          return;
+        }
+        const ok = await copyTextOrPrompt(full, `Pay link for ${resendFor.username} — copy:`);
+        showToast(ok ? `Pay link copied for ${resendFor.username}` : 'Pay link ready — copy from the dialog');
+      } else {
+        const sent = Array.isArray(r.data.notified) ? r.data.notified : [];
+        showToast(
+          sent.length
+            ? `Payment link sent to ${resendFor.username} via ${sent.join(' + ')}`
+            : `Link created for ${resendFor.username} (no email/SMS contact configured)`
+        );
+      }
+      setResendFor(null);
     } catch (e: any) {
-      showToast(e?.response?.data?.error || e?.response?.data?.message || 'Could not create pay link');
+      showToast(e?.response?.data?.error || e?.response?.data?.message || 'Could not resend pay link');
+    } finally {
+      setResendBusy(false);
     }
   };
 
@@ -885,7 +912,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           <UsagePair key="us" rxBytes={u.usage24hRx} txBytes={u.usage24hTx} />,
           <span key="due" className="text-slate-500">{u.subscriptionDue}</span>,
           <div key="a" className="flex items-center justify-end gap-1">
-            <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />
+            <IconAction icon={Send} title="Resend pay link" tone="sky" onClick={() => openResendPayLink(u)} />
             <IconAction icon={CurrencyPayIcon} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
             <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
             <IconAction
@@ -1352,6 +1379,55 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             loadUsers();
           }}
         />
+      )}
+
+      {resendFor && (
+        <Modal
+          title="Resend payment link"
+          subtitle={`${resendFor.customer || resendFor.username} · only expired or due within 10 days`}
+          onClose={() => !resendBusy && setResendFor(null)}
+          maxWidth="sm"
+          footer={
+            <button type="button" className="btn-secondary w-full sm:w-auto" disabled={resendBusy} onClick={() => setResendFor(null)}>
+              Cancel
+            </button>
+          }
+        >
+          <div className="space-y-2">
+            <button
+              type="button"
+              className="btn-secondary w-full justify-center"
+              disabled={resendBusy}
+              onClick={() => void resendPayLink(['email'])}
+            >
+              <Mail size={16} /> {resendBusy ? 'Sending…' : 'Send by email'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary w-full justify-center"
+              disabled={resendBusy}
+              onClick={() => void resendPayLink(['sms'])}
+            >
+              <MessageSquare size={16} /> {resendBusy ? 'Sending…' : 'Send by SMS'}
+            </button>
+            <button
+              type="button"
+              className="btn-primary w-full justify-center"
+              disabled={resendBusy}
+              onClick={() => void resendPayLink(['email', 'sms'])}
+            >
+              <Send size={16} /> {resendBusy ? 'Sending…' : 'Email + SMS'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary w-full justify-center border-dashed"
+              disabled={resendBusy}
+              onClick={() => void resendPayLink('copy')}
+            >
+              <Link2 size={16} /> Copy link only
+            </button>
+          </div>
+        </Modal>
       )}
 
       {(showProfileAdd || profileEdit) && (
