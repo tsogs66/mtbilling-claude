@@ -243,6 +243,8 @@ app.use('/api', (_req, res, next) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Vary', 'Authorization, Cookie');
+  // Allow browsers to read the sliding-session header when CORS is restricted.
+  res.setHeader('Access-Control-Expose-Headers', 'X-Mt-Token');
   next();
 });
 

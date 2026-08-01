@@ -73,8 +73,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api
       .get('/me')
       .then((r) => {
-        if (typeof r.data?.token === 'string' && r.data.token) {
-          localStorage.setItem('mt_token', r.data.token);
+        // /me may return a refreshed JWT in the body (or X-Mt-Token via interceptor).
+        const next = r.data?.token;
+        if (
+          typeof next === 'string' &&
+          next.length >= 40 &&
+          next.split('.').length === 3
+        ) {
+          localStorage.setItem('mt_token', next);
         }
         const u = normalizeUser(r.data.user);
         persistSessionFlags(u);
@@ -85,14 +91,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // and 5xx must not log the operator out while they are working.
         const status = err?.response?.status;
         const ct = String(err?.response?.headers?.['content-type'] || '');
-        const isJson401 = status === 401 && (!ct || /application\/json/i.test(ct));
+        const data = err?.response?.data;
+        const apiError =
+          data &&
+          typeof data === 'object' &&
+          (typeof data.error === 'string' || typeof data.message === 'string');
+        const isJson401 = status === 401 && (!ct || /application\/json/i.test(ct)) && apiError;
         if (isJson401) clearSessionFlags();
       })
       .finally(() => setLoading(false));
   }, []);
 
   const applySession = (data: any) => {
-    localStorage.setItem('mt_token', data.token);
+    if (typeof data?.token === 'string' && data.token) {
+      localStorage.setItem('mt_token', data.token);
+    }
     const u = normalizeUser(data.user);
     persistSessionFlags(u);
     setUser(u);
