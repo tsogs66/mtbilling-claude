@@ -2,13 +2,58 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCompany } from '../context/CompanyContext';
-import { Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft } from 'lucide-react';
+import {
+  Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft,
+  Network, Users, BarChart3, TerminalSquare, Wifi, Map, Bot, X, Menu, Sparkles,
+} from 'lucide-react';
 import { FormField } from '../components/ui';
 import Logo from '../components/Logo';
-import { BRAND_SHORT, PRODUCT_TITLE } from '../branding';
+import { BRAND_SHORT, PRODUCT_NAME, PRODUCT_TITLE } from '../branding';
 import { copyText } from '../lib/clipboard';
 import { publicApi } from '../api';
 import { isNativeApp, setStoredServerUrl, getStoredServerUrl } from '../config';
+
+const FEATURES = [
+  {
+    id: 'subscribers',
+    title: 'PPPoE & IPoE control',
+    blurb: 'Provision secrets, track expiry, resend pay links, and restore service the moment payment clears.',
+    icon: Users,
+    image: '/landing/landing-pppoe.png',
+    accent: 'from-orange-400/30 to-cyan-400/10',
+  },
+  {
+    id: 'network',
+    title: 'Live network & NOC',
+    blurb: 'Topology, router health, and NOC probes in one glass cockpit — built for field and NOC desks.',
+    icon: Network,
+    image: '/landing/landing-noc.png',
+    accent: 'from-cyan-400/25 to-sky-500/10',
+  },
+  {
+    id: 'billing',
+    title: 'Billing, AR & MRR',
+    blurb: 'Sales, invoices, finance, and public payment links that work over Cloudflare while staff stay on LAN.',
+    icon: BarChart3,
+    image: '/landing/landing-billing.png',
+    accent: 'from-amber-400/25 to-orange-500/10',
+  },
+  {
+    id: 'ops',
+    title: 'Terminal & AI scripting',
+    blurb: 'SSH-grade network terminal plus AI-assisted RouterOS scripts — ship changes with confidence.',
+    icon: TerminalSquare,
+    image: '/landing/landing-terminal.png',
+    accent: 'from-teal-400/25 to-cyan-500/10',
+  },
+];
+
+const PILLARS = [
+  { icon: Wifi, title: 'Hotspot & access', text: 'Vouchers, profiles, and guest Wi‑Fi without a second tool.' },
+  { icon: Map, title: 'Field maps', text: 'Pin clients, NAPs, and jobs so techs know where to go next.' },
+  { icon: Bot, title: 'Automation', text: 'Expiry protocols, fair-use alerts, and notify by email or SMS.' },
+  { icon: Shield, title: 'Roles that stick', text: 'Panel users and permissions that survive restarts and logins.' },
+];
 
 export default function Login() {
   const { login, completeTotpLogin } = useAuth();
@@ -20,11 +65,33 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [pendingToken, setPendingToken] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
   const businessName = company?.name?.trim() || BRAND_SHORT;
 
   useEffect(() => {
     document.title = PRODUCT_TITLE;
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('login') === '1' || params.get('signin') === '1') setLoginOpen(true);
+  }, []);
+
+  const openLogin = () => {
+    setLoginOpen(true);
+    setMobileNav(false);
+    setForgotOpen(false);
+    setError('');
+  };
+
+  const closeLogin = () => {
+    if (loading) return;
+    setLoginOpen(false);
+    setForgotOpen(false);
+    setPendingToken('');
+    setError('');
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,47 +136,261 @@ export default function Login() {
   };
 
   return (
-    <div className="h-full min-h-[100dvh] flex bg-slate-950 relative overflow-x-hidden overflow-y-auto theme-login">
-      <div className="absolute inset-0 bg-mesh-dark" />
-      <div className="absolute inset-0 bg-login-grid bg-grid opacity-40" />
-      <div className="absolute top-1/4 -left-32 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-float pointer-events-none" />
-      <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-sky-500/15 rounded-full blur-3xl animate-float pointer-events-none" style={{ animationDelay: '1.5s' }} />
+    <div className="landing-root h-full min-h-[100dvh] overflow-x-hidden overflow-y-auto bg-[#050a14] text-slate-100 font-landing">
+      <div className="pointer-events-none fixed inset-0 landing-aurora" aria-hidden />
+      <div className="pointer-events-none fixed inset-0 landing-grid opacity-40" aria-hidden />
+      <div className="pointer-events-none fixed -top-24 left-1/2 h-[28rem] w-[48rem] -translate-x-1/2 rounded-full bg-orange-500/15 blur-3xl animate-pulse-soft" aria-hidden />
+      <div className="pointer-events-none fixed bottom-0 right-0 h-80 w-80 rounded-full bg-cyan-400/10 blur-3xl animate-float" aria-hidden />
 
-      <div className="relative z-10 flex flex-1 flex-col lg:flex-row min-h-[100dvh]">
-        <div className="hidden lg:flex flex-1 flex-col justify-between p-12 xl:p-16">
-          <Logo size="hero" brandMode variant="dark" className="items-center gap-4" />
-          <div className="max-w-lg animate-fade-in-up">
-            <h1 className="text-4xl xl:text-5xl font-bold text-white tracking-tight leading-tight mb-4">
-              ISP Business,<br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-300 to-brand-500">reimagined.</span>
-            </h1>
-            <p className="text-slate-400 text-lg leading-relaxed">
-              Manage PPPoE &amp; IPoE subscribers, monitor routers, track sales, and automate your MikroTik network — all from one modern panel.
-            </p>
-            <div className="flex flex-wrap gap-4 mt-8">
-              {['PPPoE / IPoE', 'Live Terminal', 'AI Scripting', 'Sales & Maps'].map((tag) => (
-                <span key={tag} className="text-xs font-semibold text-slate-300 bg-slate-800/60 border border-slate-700/50 px-3 py-1.5 rounded-full">
-                  {tag}
+      {/* Top nav */}
+      <header className="sticky top-0 z-40 border-b border-white/5 bg-[#050a14]/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <a href="#top" className="flex items-center gap-3 min-w-0">
+            <Logo size="sm" brandMode variant="dark" className="items-center gap-2.5" />
+          </a>
+          <nav className="hidden md:flex items-center gap-1 text-sm text-slate-300">
+            {[
+              ['#features', 'Features'],
+              ['#snapshots', 'Snapshots'],
+              ['#purpose', 'Purpose'],
+            ].map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                className="rounded-full px-3 py-1.5 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                {label}
+              </a>
+            ))}
+            <button
+              type="button"
+              onClick={openLogin}
+              className="ml-2 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 font-semibold text-slate-950 shadow-[0_0_24px_-6px_rgba(249,115,22,0.65)] transition-transform hover:scale-[1.03] active:scale-[0.98]"
+            >
+              Login
+              <ArrowRight size={16} />
+            </button>
+          </nav>
+          <div className="flex md:hidden items-center gap-2">
+            <button
+              type="button"
+              onClick={openLogin}
+              className="rounded-full bg-gradient-to-r from-orange-500 to-amber-400 px-3.5 py-1.5 text-sm font-semibold text-slate-950"
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              aria-label="Menu"
+              onClick={() => setMobileNav((v) => !v)}
+              className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-200"
+            >
+              {mobileNav ? <X size={18} /> : <Menu size={18} />}
+            </button>
+          </div>
+        </div>
+        {mobileNav && (
+          <div className="md:hidden border-t border-white/5 px-4 py-3 space-y-1 animate-fade-in">
+            {[
+              ['#features', 'Features'],
+              ['#snapshots', 'Snapshots'],
+              ['#purpose', 'Purpose'],
+            ].map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                onClick={() => setMobileNav(false)}
+                className="block rounded-xl px-3 py-2.5 text-sm text-slate-200 hover:bg-white/5"
+              >
+                {label}
+              </a>
+            ))}
+          </div>
+        )}
+      </header>
+
+      <main id="top">
+        {/* Hero — one composition */}
+        <section className="relative mx-auto max-w-6xl px-4 sm:px-6 pt-10 sm:pt-16 pb-16 sm:pb-24">
+          <div className="relative grid lg:grid-cols-[1.05fr_0.95fr] gap-10 lg:gap-12 items-center">
+            <div className="relative z-10 animate-fade-in-up">
+              <p className="font-display text-xs sm:text-sm uppercase tracking-[0.22em] text-cyan-300/90 mb-4 flex items-center gap-2">
+                <Sparkles size={14} className="text-orange-400" />
+                {businessName}
+              </p>
+              <h1 className="font-display text-[clamp(2.1rem,5vw,3.6rem)] font-bold leading-[1.05] tracking-tight text-white">
+                {BRAND_SHORT}
+                <span className="block mt-2 text-transparent bg-clip-text bg-[linear-gradient(110deg,#fb923c_0%,#f8fafc_45%,#22d3ee_100%)] bg-[length:200%_auto] animate-shine">
+                  ISP ops, reimagined.
                 </span>
+              </h1>
+              <p className="mt-5 max-w-xl text-base sm:text-lg text-slate-400 leading-relaxed">
+                One panel for MikroTik subscribers, live network monitoring, billing, and field work —
+                built for operators who need speed on LAN and clean public pay links.
+              </p>
+              <div className="mt-8 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={openLogin}
+                  className="group inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-orange-500 via-amber-400 to-orange-500 bg-[length:200%_auto] px-5 py-3 text-sm font-bold text-slate-950 shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] transition-all hover:bg-right hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Open staff login
+                  <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
+                </button>
+                <a
+                  href="#snapshots"
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-slate-100 backdrop-blur transition-colors hover:bg-white/10"
+                >
+                  See feature snapshots
+                </a>
+              </div>
+            </div>
+
+            {/* 3D hero stage */}
+            <div className="relative h-[320px] sm:h-[400px] lg:h-[440px] perspective-[1400px] animate-tilt-in">
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="landing-orbit h-56 w-56 sm:h-72 sm:w-72 rounded-full border border-cyan-400/20 animate-orbit" />
+                <div
+                  className="landing-orbit absolute h-40 w-40 sm:h-52 sm:w-52 rounded-full border border-orange-400/25 animate-orbit"
+                  style={{ animationDuration: '12s', animationDirection: 'reverse' }}
+                />
+              </div>
+              <div className="absolute inset-6 sm:inset-10 landing-panel rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/[0.04] to-cyan-400/5 p-3 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] backdrop-blur-md transform-gpu [transform:perspective(1200px)_rotateY(-8deg)_rotateX(6deg)] hover:[transform:perspective(1200px)_rotateY(0deg)_rotateX(0deg)] transition-transform duration-700">
+                <img
+                  src="/landing/landing-noc.png"
+                  alt="NOC and network overview"
+                  className="h-full w-full rounded-2xl object-cover object-top shadow-inner"
+                />
+                <div className="pointer-events-none absolute inset-0 rounded-3xl ring-1 ring-inset ring-white/20" />
+              </div>
+              <div className="absolute -bottom-2 left-4 sm:left-8 landing-float-card animate-float rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 backdrop-blur">
+                Live topology · MikroTik ready
+              </div>
+              <div
+                className="absolute top-4 right-2 sm:right-6 landing-float-card animate-float rounded-2xl border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-xs text-orange-100 backdrop-blur"
+                style={{ animationDelay: '1.2s' }}
+              >
+                Billing + pay links
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Features */}
+        <section id="features" className="relative border-t border-white/5 py-16 sm:py-20">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="max-w-2xl mb-10">
+              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Built for ISP operators</h2>
+              <p className="mt-3 text-slate-400">
+                Everything from subscriber access to cash collection — without bolting five products together.
+              </p>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-4 sm:gap-5">
+              {PILLARS.map((p, i) => (
+                <div
+                  key={p.title}
+                  className="group rounded-3xl border border-white/10 bg-white/[0.03] p-5 sm:p-6 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-white/[0.06] hover:shadow-[0_20px_50px_-24px_rgba(34,211,238,0.35)]"
+                  style={{ animationDelay: `${i * 80}ms` }}
+                >
+                  <div className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500/20 to-cyan-400/10 text-cyan-200 ring-1 ring-white/10 transition-transform group-hover:scale-110">
+                    <p.icon size={20} />
+                  </div>
+                  <h3 className="font-display text-lg font-semibold text-white">{p.title}</h3>
+                  <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{p.text}</p>
+                </div>
               ))}
             </div>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-slate-500 text-sm">
-              <Shield size={14} />
-              <span>Secured with JWT authentication</span>
+        </section>
+
+        {/* Snapshots */}
+        <section id="snapshots" className="relative border-t border-white/5 py-16 sm:py-24">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="max-w-2xl mb-12">
+              <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Feature snapshots</h2>
+              <p className="mt-3 text-slate-400">
+                Peek inside the panel — subscribers, NOC, finance, and the ops terminal.
+              </p>
             </div>
-            <p className="text-[11px] text-slate-600 max-w-md leading-snug">{PRODUCT_TITLE}</p>
+            <div className="space-y-14 sm:space-y-20">
+              {FEATURES.map((f, i) => {
+                const reverse = i % 2 === 1;
+                return (
+                  <article
+                    key={f.id}
+                    className={`grid lg:grid-cols-2 gap-8 lg:gap-12 items-center ${reverse ? 'lg:[&>*:first-child]:order-2' : ''}`}
+                  >
+                    <div>
+                      <div className={`inline-flex items-center gap-2 rounded-full bg-gradient-to-r ${f.accent} px-3 py-1 text-xs font-semibold text-cyan-100 ring-1 ring-white/10 mb-4`}>
+                        <f.icon size={14} />
+                        {f.title}
+                      </div>
+                      <h3 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">{f.title}</h3>
+                      <p className="mt-3 text-slate-400 leading-relaxed">{f.blurb}</p>
+                    </div>
+                    <div className="relative group">
+                      <div className={`absolute -inset-3 rounded-[1.6rem] bg-gradient-to-br ${f.accent} blur-2xl opacity-60 transition-opacity group-hover:opacity-90`} />
+                      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-slate-950/60 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)] transition-transform duration-500 group-hover:-translate-y-1 group-hover:scale-[1.015]">
+                        <img src={f.image} alt={f.title} className="w-full aspect-[16/10] object-cover object-top" loading="lazy" />
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050a14]/50 via-transparent to-transparent" />
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div className="flex flex-1 items-center justify-center p-4 sm:p-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))]">
-          <div className="w-full max-w-md animate-scale-in">
-            <div className="lg:hidden mb-6 sm:mb-8 flex justify-center px-2">
-              <Logo size="hero" brandMode variant="dark" className="items-center gap-3 max-w-full" />
+        {/* Purpose */}
+        <section id="purpose" className="relative border-t border-white/5 py-16 sm:py-20">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-white/[0.07] via-white/[0.02] to-cyan-500/10 p-8 sm:p-12">
+              <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-orange-500/20 blur-3xl" />
+              <div className="relative max-w-2xl">
+                <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Why this panel exists</h2>
+                <p className="mt-4 text-slate-300 leading-relaxed">
+                  {PRODUCT_NAME} brings billing, MikroTik access, monitoring, and field tools into a single
+                  operator cockpit — so your team spends less time switching apps and more time keeping
+                  subscribers online.
+                </p>
+                <button
+                  type="button"
+                  onClick={openLogin}
+                  className="mt-8 inline-flex items-center gap-2 rounded-2xl bg-white text-slate-950 px-5 py-3 text-sm font-bold transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Sign in to your panel
+                  <ArrowRight size={16} />
+                </button>
+              </div>
             </div>
+          </div>
+        </section>
+      </main>
 
-            <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-5 sm:p-8 md:p-10">
+      <footer className="border-t border-white/5 py-8 px-4 text-center text-xs text-slate-500">
+        <p>{PRODUCT_TITLE}</p>
+      </footer>
+
+      {/* Login modal */}
+      {loginOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-950/70 backdrop-blur-md p-0 sm:p-4 animate-fade-in"
+          onClick={closeLogin}
+        >
+          <div
+            className="theme-modal relative w-full max-w-md max-h-[min(92dvh,720px)] overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/15 bg-white text-slate-900 shadow-2xl animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={closeLogin}
+              className="absolute right-3 top-3 z-10 rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+            <div className="p-5 sm:p-8 md:p-9">
               {pendingToken ? (
                 <TotpStepForm
                   pendingToken={pendingToken}
@@ -124,14 +405,14 @@ export default function Login() {
                 />
               ) : !forgotOpen ? (
                 <>
-                  <div className="mb-6 sm:mb-8 min-w-0">
+                  <div className="mb-6 sm:mb-8 min-w-0 pr-8">
                     <h2
-                      className="font-bold text-slate-900 tracking-tight leading-tight break-words [overflow-wrap:anywhere] text-[clamp(1.15rem,0.85rem+2.2vw,1.75rem)]"
+                      className="font-display font-bold text-slate-900 tracking-tight leading-tight break-words [overflow-wrap:anywhere] text-[clamp(1.15rem,0.85rem+2.2vw,1.75rem)]"
                       title={businessName}
                     >
                       {businessName}
                     </h2>
-                    <p className="text-slate-500 text-sm mt-1">Sign in to continue</p>
+                    <p className="text-slate-500 text-sm mt-1">Staff sign-in · use LAN IP when possible</p>
                   </div>
 
                   <form onSubmit={submit} className="space-y-5" autoComplete="on">
@@ -231,7 +512,7 @@ export default function Login() {
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

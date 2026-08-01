@@ -29,7 +29,9 @@ function resolveSecret(): string {
   }
   const generated = crypto.randomBytes(48).toString('hex');
   try {
-    fs.writeFileSync(secretPath, generated, { mode: 0o600 });
+    const tmp = `${secretPath}.tmp`;
+    fs.writeFileSync(tmp, generated, { mode: 0o600 });
+    fs.renameSync(tmp, secretPath);
   } catch (e) {
     console.warn('[auth] could not persist generated JWT secret, tokens will invalidate on restart:', e);
   }

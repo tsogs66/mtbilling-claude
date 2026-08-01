@@ -13,8 +13,6 @@ import {
   Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
   ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
-import { isNativeApp } from '../config';
-
 /** Prefer pinning username / customer / name columns on mobile (not checkbox/# columns). */
 const FREEZE_COLUMN_KEYS = [
   'user',
@@ -443,7 +441,8 @@ export function DataTable({
   emptyMessage = 'No records found.',
   stickyHeader,
   sortable = true,
-  freezeFirstColumn = true,
+  /** @deprecated Frozen columns freeze mobile scroll — kept off site-wide. */
+  freezeFirstColumn = false,
 }: {
   columns: {
     key: string;
@@ -463,8 +462,8 @@ export function DataTable({
   /** Enable click-to-sort on headers (default true). Per-column override via columns[].sortable */
   sortable?: boolean;
   /**
-   * On mobile, pin username / customer / name (and any columns before it, e.g. checkbox)
-   * while scrolling horizontally.
+   * Disabled by default — sticky freeze columns freeze/jitter mobile scroll.
+   * Kept as a no-op prop for backwards compatibility.
    */
   freezeFirstColumn?: boolean;
 }) {
@@ -473,13 +472,9 @@ export function DataTable({
   const tableRef = useRef<HTMLTableElement>(null);
   const [freezeLefts, setFreezeLefts] = useState<number[]>([]);
 
-  // Column freezing relies on horizontal scroll + sticky positioning, which
-  // fights the Android WebView's own scroll/fling handling (stuck/juddery
-  // columns). Skip it entirely in the native app.
-  const freezeIdx = useMemo(
-    () => findFreezeColumnIndex(columns, freezeFirstColumn && !isNativeApp()),
-    [columns, freezeFirstColumn]
-  );
+  // Never freeze columns — sticky cells + nested scrollers freeze mobile scrolling.
+  void freezeFirstColumn;
+  const freezeIdx = useMemo(() => findFreezeColumnIndex(columns, false), [columns]);
 
   const sortedRows = useMemo(() => {
     if (!sortKey) return rows;

@@ -75,7 +75,8 @@ body {
 /* ── Mobile / native WebView (Capacitor Android) ── */
 .table-scroll-touch {
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
+  overscroll-behavior-x: auto;
+  touch-action: pan-x pan-y;
 }
 .native-app .theme-topbar-icon-btn,
 .native-app .theme-sidebar-link,
@@ -89,65 +90,14 @@ body {
 }
 @media (max-width: 639px) {
   .data-table {
-    min-width: 560px;
+    min-width: 480px;
   }
   .data-table th,
   .data-table td {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
-  /* Pin username / customer / name (and leading cols like checkbox) while scrolling sideways */
-  .data-table--freeze-first .data-table-freeze-cell {
-    position: sticky;
-    z-index: 2;
-    background-color: #fff;
-  }
-  .data-table--freeze-first th.data-table-freeze-cell {
-    z-index: 3;
-    background-color: rgb(248 250 252); /* slate-50 — matches thead */
-  }
-  .data-table--freeze-first .data-table-freeze-edge {
-    box-shadow: 6px 0 10px -6px rgba(15, 23, 42, 0.22);
-  }
-  .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
-    background-color: color-mix(in srgb, #fff 55%, rgb(255 247 237));
-  }
-  [data-theme='dark'] .data-table--freeze-first th.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--card-bg, #0f172a) 92%, #fff 8%);
-  }
-  [data-theme='dark'] .data-table--freeze-first td.data-table-freeze-cell {
-    background-color: var(--card-bg, #0f172a);
-  }
-  [data-theme='dark'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, var(--card-bg, #0f172a));
-  }
-  [data-theme='onepiece'] .data-table--freeze-first th.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--card-bg, #1e1b4b) 90%, #fff 10%);
-  }
-  [data-theme='onepiece'] .data-table--freeze-first td.data-table-freeze-cell {
-    background-color: var(--card-bg, #1e1b4b);
-  }
-  [data-theme='onepiece'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, var(--card-bg, #1e1b4b));
-  }
-  [data-theme='steampunk'] .data-table--freeze-first th.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--card-bg, #2b1e14) 90%, #fff 10%);
-  }
-  [data-theme='steampunk'] .data-table--freeze-first td.data-table-freeze-cell {
-    background-color: var(--card-bg, #2b1e14);
-  }
-  [data-theme='steampunk'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--brand, #c9812a) 10%, var(--card-bg, #2b1e14));
-  }
-  [data-theme='isptech'] .data-table--freeze-first th.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--card-bg, #081420) 90%, #fff 10%);
-  }
-  [data-theme='isptech'] .data-table--freeze-first td.data-table-freeze-cell {
-    background-color: var(--card-bg, #081420);
-  }
-  [data-theme='isptech'] .data-table--freeze-first tbody tr:hover td.data-table-freeze-cell {
-    background-color: color-mix(in srgb, var(--brand, #2dd4bf) 10%, var(--card-bg, #081420));
-  }
+  /* Frozen/sticky table columns removed — they freeze mobile scrolling */
   .card-header {
     flex-direction: column;
     align-items: flex-start;
@@ -1835,4 +1785,31 @@ body {
   .data-table tbody tr:last-child td {
     @apply border-b-0;
   }
+}
+
+/* ── Public landing / login marketing page ── */
+.landing-root {
+  font-family: Manrope, 'Space Grotesk', system-ui, sans-serif;
+  -webkit-overflow-scrolling: touch;
+}
+.landing-aurora {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(249, 115, 22, 0.22), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 90% 10%, rgba(34, 211, 238, 0.16), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 50% 100%, rgba(14, 165, 233, 0.1), transparent 55%);
+}
+.landing-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 20%, transparent 75%);
+}
+.landing-orbit {
+  border-style: dashed;
+  transform-style: preserve-3d;
+}
+.landing-panel,
+.landing-float-card {
+  transform-style: preserve-3d;
 }

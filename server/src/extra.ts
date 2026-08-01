@@ -871,7 +871,7 @@ extraRouter.get('/zerotier', (_req, res) => {
   });
 });
 
-// ---------------- Updater (GitHub: tsogs66/mtbilling-claude) ----------------
+// ---------------- Updater (GitHub: tsogs66/MT-Billing) ----------------
 extraRouter.get('/updater', async (_req, res) => {
   try {
     const status = await getUpdaterStatus();
@@ -950,16 +950,44 @@ extraRouter.put('/roles/:id', (req, res) => {
   const ex = db.prepare('SELECT * FROM roles WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-  db.prepare('UPDATE roles SET name=?, description=?, permissions=? WHERE id=?').run(
-    b.name ?? ex.name,
-    b.description ?? ex.description,
-    JSON.stringify(b.permissions != null ? b.permissions : JSON.parse(ex.permissions || '[]')),
-    id
-  );
-  res.json({ ok: true });
+  const nextName = String(b.name ?? ex.name).trim();
+  if (!nextName) return res.status(400).json({ error: 'name is required' });
+  try {
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE roles SET name=?, description=?, permissions=? WHERE id=?').run(
+        nextName,
+        b.description ?? ex.description,
+        JSON.stringify(b.permissions != null ? b.permissions : JSON.parse(ex.permissions || '[]')),
+        id
+      );
+      // Keep panel users bound when a role is renamed — otherwise logins keep a
+      // stale role string and permissions collapse / sessions look broken.
+      if (nextName !== ex.name) {
+        db.prepare('UPDATE users SET role = ? WHERE role = ?').run(nextName, ex.name);
+      }
+    });
+    tx();
+    try {
+      db.pragma('wal_checkpoint(PASSIVE)');
+    } catch {
+      /* ignore */
+    }
+    res.json({ ok: true, name: nextName });
+  } catch {
+    res.status(409).json({ error: 'Role name already exists.' });
+  }
 });
 extraRouter.delete('/roles/:id', (req, res) => {
-  db.prepare('DELETE FROM roles WHERE id = ?').run(Number(req.params.id));
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM roles WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const assigned = (db.prepare('SELECT COUNT(*) AS c FROM users WHERE role = ?').get(ex.name) as { c: number }).c;
+  if (assigned > 0) {
+    return res.status(400).json({
+      error: `Cannot delete role "${ex.name}" — ${assigned} panel user(s) still use it. Reassign them first.`,
+    });
+  }
+  db.prepare('DELETE FROM roles WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
@@ -970,6 +998,15 @@ extraRouter.get('/panel-users', (_req, res) => {
     .all();
   res.json(rows);
 });
+
+/** Flush WAL so panel-user writes survive abrupt restarts / updater copies. */
+function persistUsersDurable() {
+  try {
+    db.pragma('wal_checkpoint(PASSIVE)');
+  } catch {
+    /* ignore */
+  }
+}
 
 extraRouter.post('/panel-users', (req, res) => {
   const b = req.body || {};
@@ -985,10 +1022,24 @@ extraRouter.post('/panel-users', (req, res) => {
     const info = db
       .prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
       .run(username, bcrypt.hashSync(password, 10), roleRow.name);
+    const id = Number(info.lastInsertRowid);
+    // Verify the row is readable from the same connection (guards against silent failures).
+    const row = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(id) as
+      | { id: number; username: string; role: string }
+      | undefined;
+    if (!row) {
+      return res.status(500).json({ error: 'User was not persisted. Check disk space and try again.' });
+    }
+    persistUsersDurable();
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'info',
+      'auth',
+      `Panel user created: ${row.username} (${row.role})`
+    );
     res.status(201).json({
-      id: info.lastInsertRowid,
-      username,
-      role: roleRow.name,
+      id: row.id,
+      username: row.username,
+      role: row.role,
     });
   } catch {
     res.status(409).json({ error: 'Username already exists.' });
@@ -1017,6 +1068,7 @@ extraRouter.put('/panel-users/:id', (req, res) => {
     } else {
       db.prepare('UPDATE users SET username=?, role=? WHERE id=?').run(username, role, id);
     }
+    persistUsersDurable();
     res.json({ id, username, role });
   } catch {
     res.status(409).json({ error: 'Username already exists.' });
@@ -1029,6 +1081,7 @@ extraRouter.delete('/panel-users/:id', (req: any, res) => {
   const count = (db.prepare('SELECT COUNT(*) AS c FROM users').get() as any).c;
   if (count <= 1) return res.status(400).json({ error: 'Cannot delete the last panel user.' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  persistUsersDurable();
   res.json({ ok: true });
 });
 
