@@ -398,12 +398,47 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 
 /** Desktop browser: popup print window. Returns false if blocked (caller should show modal). */
 export function printReceiptInBrowser(receipt: PaymentReceipt): boolean {
-  const html = buildReceiptHtml(receipt, { autoPrint: true });
-  const popup = window.open('', '_blank', `width=${RECEIPT_OUTER_PX + 32},height=760,left=0,top=0`);
-  if (!popup) return false;
-  popup.document.open();
-  popup.document.write(html);
-  popup.document.close();
+  // autoPrint false: we trigger print() ourselves after the iframe loads.
+  const html = buildReceiptHtml(receipt, { autoPrint: false });
+  // Hidden iframe avoids Chrome pop-up blocking / blank about:blank windows.
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.cssText =
+    'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(iframe);
+
+  const cleanup = () => {
+    window.setTimeout(() => {
+      try {
+        iframe.remove();
+      } catch {
+        /* ignore */
+      }
+    }, 1000);
+  };
+
+  const win = iframe.contentWindow;
+  const doc = iframe.contentDocument || win?.document;
+  if (!win || !doc) {
+    cleanup();
+    return false;
+  }
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  window.setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      /* modal fallback via openReceiptForPrint when this returns false only on setup failure */
+    } finally {
+      cleanup();
+    }
+  }, 250);
+
   return true;
 }
 
