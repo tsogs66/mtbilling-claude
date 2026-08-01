@@ -49,8 +49,22 @@ export interface AuthedRequest extends Request {
   user?: { id: number; username: string; role: string };
 }
 
+/** Session lifetime — long enough for a full ops day without surprise logouts. */
+export const SESSION_TTL = '7d';
+
 export function signToken(payload: { id: number; username: string; role: string }) {
-  return jwt.sign(payload, SECRET, { expiresIn: '12h' });
+  return jwt.sign(payload, SECRET, { expiresIn: SESSION_TTL });
+}
+
+/** True when the token expires within `withinMs` (default 24h) — used for sliding refresh. */
+export function tokenNeedsRefresh(token: string, withinMs = 24 * 60 * 60 * 1000): boolean {
+  try {
+    const payload = jwt.decode(token) as { exp?: number } | null;
+    if (!payload?.exp) return false;
+    return payload.exp * 1000 - Date.now() < withinMs;
+  } catch {
+    return false;
+  }
 }
 
 /** Short-lived token issued after password check when 2FA is enabled — proves

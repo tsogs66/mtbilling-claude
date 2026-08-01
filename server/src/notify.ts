@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { buildBrandedEmail, buildReceiptEmailBody, getCompanyBrand, parseLogoDataUrl } from './emailTemplate.js';
+import { buildBrandedEmail, buildReceiptEmailBody, parseLogoDataUrl } from './emailTemplate.js';
 import { formatCurrency } from './currency.js';
 
 export interface NotifySettings {
@@ -100,16 +100,9 @@ async function getMailer(): Promise<any> {
   }
 }
 
-/** Append company name as an SMS footer signature (Company settings → name). */
+/** SMS body as typed — no company-name signature footer. */
 export function formatSmsMessage(message: string): string {
-  const body = String(message ?? '').replace(/\s+$/, '');
-  if (!body) return body;
-  const name = getCompanyBrand().name.trim();
-  if (!name) return body;
-  const signature = `— ${name}`;
-  const lower = body.toLowerCase();
-  if (lower.endsWith(signature.toLowerCase()) || lower.endsWith(name.toLowerCase())) return body;
-  return `${body}\n\n${signature}`;
+  return String(message ?? '').replace(/\s+$/, '');
 }
 
 // Normalize a PH mobile number to international format for the SMS gateway.
@@ -639,7 +632,7 @@ export async function sendManual(opts: {
       skipped++;
       continue;
     }
-    await notifyClient(c, channels, opts.subject || 'Notice from Pa-North', opts.message, 'manual');
+    await notifyClient(c, channels, opts.subject || 'Notice', opts.message, 'manual');
     sent++;
   }
   return { recipients: clients.length, sent, skipped };

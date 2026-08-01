@@ -60,6 +60,14 @@ full_locations() {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 86400;
+        # Same machine via LAN IP or Cloudflare hostname must see live DB data
+        add_header Cache-Control "private, no-store, no-cache, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
+    }
+    location = /index.html {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        try_files /index.html =404;
     }
     location = /pay {
         try_files /index.html =404;

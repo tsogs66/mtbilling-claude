@@ -16,43 +16,79 @@ import { copyText } from '../lib/clipboard';
 import { publicApi } from '../api';
 import { isNativeApp, setStoredServerUrl, getStoredServerUrl } from '../config';
 
-/** Real-panel snapshots (generated from the live Snapshot UI look). */
+/** Feature preview snapshots from the live panel (Dashboard, PPPoE, Finance, Topology, …). */
 const SNAPSHOTS = [
   {
     id: 'dashboard',
-    title: 'Dashboard & account health',
+    title: 'Dashboard & live traffic',
     blurb:
-      'Live Online / Offline / Active / Expired counts, projected MRR, host panel vitals (CPU, RAM, SD), and router reachability — your morning ops board.',
+      'Interface graphs, sales overview, queue ranking, and host vitals — your morning ops board in one Snapshot view.',
     icon: LayoutDashboard,
-    image: '/landing/landing-dashboard.png',
+    image: '/landing/feat-dashboard.png',
     accent: 'from-orange-400/30 to-cyan-400/10',
   },
   {
     id: 'pppoe',
     title: 'PPPoE management',
     blurb:
-      'Create and edit secrets, sync MikroTik profiles, process payments, disable for non-payment, and resend pay links by email or SMS for near-expiry accounts.',
+      'Create and edit secrets, sync MikroTik profiles, process payments, disable for non-payment, and resend pay links for near-expiry accounts.',
     icon: Users,
-    image: '/landing/landing-pppoe-real.png',
+    image: '/landing/feat-pppoe.png',
     accent: 'from-cyan-400/25 to-sky-500/10',
   },
   {
-    id: 'billing',
-    title: 'Billing & payment links',
+    id: 'finance',
+    title: 'Finance & MRR',
     blurb:
-      'Sales reports, invoices & AR, finance/MRR, and public payment links with proof upload — subscribers pay on Cloudflare while staff collect on LAN.',
-    icon: BarChart3,
-    image: '/landing/landing-billing-real.png',
+      'Projected MRR, cashflow, income/expenses, and printable finance snapshots for owners and cashiers.',
+    icon: TrendingUp,
+    image: '/landing/feat-finance.png',
     accent: 'from-amber-400/25 to-orange-500/10',
   },
   {
-    id: 'network',
-    title: 'Network, topology & NOC',
+    id: 'paylinks',
+    title: 'Payment links',
     blurb:
-      'Router inventory, live topology map, NOC probes, Twingate / ZeroTier / Cloudflare tunnels, and interface traffic graphs in one place.',
-    icon: Network,
-    image: '/landing/landing-network-real.png',
+      'Public Cloudflare pay portal, proof review, and bulk resend of near-expiry links by email or SMS.',
+    icon: Link2,
+    image: '/landing/feat-paylinks.png',
+    accent: 'from-rose-400/25 to-orange-500/10',
+  },
+  {
+    id: 'usage',
+    title: 'Usage statistics',
+    blurb:
+      'Per-subscriber download/upload and peak rates from live MikroTik byte counters.',
+    icon: PieChart,
+    image: '/landing/feat-usage.png',
+    accent: 'from-sky-400/25 to-cyan-500/10',
+  },
+  {
+    id: 'topology',
+    title: 'Topology map',
+    blurb:
+      'OLT → NAP → ONU map with online/offline cable colors and weather overlays for field planning.',
+    icon: Map,
+    image: '/landing/feat-topology.png',
     accent: 'from-teal-400/25 to-cyan-500/10',
+  },
+  {
+    id: 'noc',
+    title: 'NOC & uptime',
+    blurb:
+      'Probe routers, OLTs, and custom hosts — up/down state and latency in one NOC suite.',
+    icon: Activity,
+    image: '/landing/feat-noc.png',
+    accent: 'from-emerald-400/25 to-cyan-500/10',
+  },
+  {
+    id: 'terminal',
+    title: 'Network terminal',
+    blurb:
+      'In-browser SSH/API terminal to routers and NOC devices for quick diagnostics.',
+    icon: TerminalSquare,
+    image: '/landing/feat-terminal.png',
+    accent: 'from-violet-400/25 to-cyan-500/10',
   },
 ];
 
@@ -297,7 +333,7 @@ export default function Login() {
               </div>
               <div className="absolute inset-6 sm:inset-10 landing-panel rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/[0.04] to-cyan-400/5 p-3 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] backdrop-blur-md transform-gpu [transform:perspective(1200px)_rotateY(-8deg)_rotateX(6deg)] hover:[transform:perspective(1200px)_rotateY(0deg)_rotateX(0deg)] transition-transform duration-700">
                 <img
-                  src="/landing/landing-dashboard.png"
+                  src="/landing/feat-dashboard.png"
                   alt="Live Dashboard snapshot"
                   className="h-full w-full rounded-2xl object-cover object-top shadow-inner"
                 />
@@ -322,7 +358,7 @@ export default function Login() {
             <div className="max-w-2xl mb-12">
               <h2 className="font-display text-3xl sm:text-4xl font-bold text-white tracking-tight">Inside the real panel</h2>
               <p className="mt-3 text-slate-300">
-                Snapshots styled after the live Snapshot UI — Dashboard, PPPoE, billing, and network/NOC.
+                Real feature previews — Dashboard, PPPoE, Finance, Payment Links, Usage, Topology, NOC, and Terminal.
               </p>
             </div>
             <div className="space-y-14 sm:space-y-20">
