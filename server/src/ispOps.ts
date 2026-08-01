@@ -12,7 +12,55 @@ import {
   recordSubscriberOutageReport,
   resolveOutageServiceSlugs,
 } from './outageMonitor.js';
-import { absolutePayUrl, ensureFreshPayLink } from './billing.js';
+import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
+
+const PLAN_CYCLE_DAYS = 30;
+
+/** Mid-cycle plan change: consumed days at old rate + remaining days at new rate (30-day month). */
+export function computePlanChangeProration(opts: {
+  oldPrice: number;
+  newPrice: number;
+  subscriptionDue: string | null | undefined;
+  asOf?: string | null;
+}) {
+  const asOf = String(opts.asOf || new Date().toISOString()).slice(0, 10);
+  const due = opts.subscriptionDue ? String(opts.subscriptionDue).slice(0, 10) : null;
+  let remainingDays = PLAN_CYCLE_DAYS;
+  if (due) {
+    const rem = Math.round(
+      (Date.parse(`${due}T00:00:00Z`) - Date.parse(`${asOf}T00:00:00Z`)) / 864e5
+    );
+    remainingDays = Math.max(0, Math.min(PLAN_CYCLE_DAYS, rem));
+  }
+  const consumedDays = PLAN_CYCLE_DAYS - remainingDays;
+  const oldPrice = Number(opts.oldPrice) || 0;
+  const newPrice = Number(opts.newPrice) || 0;
+  const oldPortion = Math.round((oldPrice / PLAN_CYCLE_DAYS) * consumedDays);
+  const newPortion = Math.round((newPrice / PLAN_CYCLE_DAYS) * remainingDays);
+  return {
+    cycleDays: PLAN_CYCLE_DAYS,
+    consumedDays,
+    remainingDays,
+    oldPrice,
+    newPrice,
+    oldPortion,
+    newPortion,
+    proratedBalance: oldPortion + newPortion,
+    asOf,
+    due,
+  };
+}
+
+function listBillingPlansPublic() {
+  return db
+    .prepare(
+      `SELECT id, name, rate_limit AS rateLimit, price, ppp_profile AS pppProfile
+       FROM profiles
+       WHERE coalesce(type, '') = 'plan'
+       ORDER BY price ASC, name ASC`
+    )
+    .all() as { id: number; name: string; rateLimit: string; price: number; pppProfile: string }[];
+}
 
 function portalPaymentLinkForUser(userId: number) {
   const row = db
@@ -143,6 +191,26 @@ export function initIspOps() {
       first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
       last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(router_id, mac)
+    );
+
+    CREATE TABLE IF NOT EXISTS plan_change_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER NOT NULL,
+      from_plan TEXT,
+      to_plan TEXT NOT NULL,
+      from_price REAL DEFAULT 0,
+      to_price REAL DEFAULT 0,
+      subscription_due TEXT,
+      consumed_days INTEGER DEFAULT 0,
+      remaining_days INTEGER DEFAULT 0,
+      old_portion REAL DEFAULT 0,
+      new_portion REAL DEFAULT 0,
+      prorated_balance REAL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      note TEXT,
+      review_note TEXT,
+      reviewed_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
@@ -675,6 +743,121 @@ ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
   res.json(updated);
 });
 
+// ─── Portal plan-change requests (staff) ────────────────────────────────────
+
+ispOpsRouter.get('/client-portal/plan-changes', (req, res) => {
+  const status = String(req.query.status || 'pending');
+  let sql = `
+    SELECT r.*, u.customer_name, u.username, u.account_number, u.status AS user_status
+    FROM plan_change_requests r
+    LEFT JOIN pppoe_users u ON u.id = r.pppoe_user_id
+    WHERE 1=1`;
+  const params: any[] = [];
+  if (status && status !== 'all') {
+    sql += ' AND r.status = ?';
+    params.push(status);
+  }
+  sql += ' ORDER BY CASE r.status WHEN \'pending\' THEN 0 ELSE 1 END, r.id DESC LIMIT 200';
+  res.json({ requests: db.prepare(sql).all(...params) });
+});
+
+ispOpsRouter.post('/client-portal/plan-changes/:id/accept', async (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) as any;
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.status !== 'pending') return res.status(400).json({ error: 'Request is not pending' });
+
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(row.pppoe_user_id) as any;
+  if (!user) return res.status(404).json({ error: 'subscriber not found' });
+
+  // Recompute proration at acceptance time (days remaining may have shifted).
+  const plan = listBillingPlansPublic().find((p) => p.name === row.to_plan);
+  if (!plan) return res.status(400).json({ error: 'Target plan no longer exists' });
+  const proration = computePlanChangeProration({
+    oldPrice: Number(user.price) || Number(row.from_price) || 0,
+    newPrice: Number(plan.price) || 0,
+    subscriptionDue: user.subscription_due,
+  });
+
+  const change = await changePppoeUserPlan(user.id, plan.name, { bounce: true });
+  if (!change.ok) {
+    return res.status(400).json({ error: change.error || 'Could not change plan' });
+  }
+
+  // Replace open AR with a single prorated invoice for the remaining cycle.
+  db.prepare(
+    `UPDATE invoices SET status = 'void'
+     WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
+  ).run(user.id);
+
+  const number = nextNumber('INV', 'invoices', 'number');
+  const due = user.subscription_due || todayISO();
+  const invInfo = db
+    .prepare(
+      `INSERT INTO invoices
+       (number, pppoe_user_id, customer_name, account_number, period_start, period_end, due_date, amount, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`
+    )
+    .run(
+      number,
+      user.id,
+      user.customer_name || user.username,
+      user.account_number || null,
+      proration.asOf,
+      due,
+      due,
+      proration.proratedBalance,
+      `Plan change ${row.from_plan || '—'} → ${plan.name}: ${proration.consumedDays}d @ ${proration.oldPrice} + ${proration.remainingDays}d @ ${proration.newPrice}`
+    );
+
+  try {
+    db.prepare(
+      `UPDATE payment_links SET amount = ? WHERE pppoe_user_id = ? AND status = 'pending'`
+    ).run(proration.proratedBalance, user.id);
+  } catch {
+    /* payment_links may be absent on older DBs */
+  }
+
+  db.prepare(
+    `UPDATE plan_change_requests SET
+       status = 'accepted',
+       from_price = ?, to_price = ?,
+       consumed_days = ?, remaining_days = ?,
+       old_portion = ?, new_portion = ?, prorated_balance = ?,
+       review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(
+    proration.oldPrice,
+    proration.newPrice,
+    proration.consumedDays,
+    proration.remainingDays,
+    proration.oldPortion,
+    proration.newPortion,
+    proration.proratedBalance,
+    String(req.body?.note || '').trim() || null,
+    id
+  );
+
+  res.json({
+    ok: true,
+    request: db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id),
+    proration,
+    planChange: change,
+    invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invInfo.lastInsertRowid),
+  });
+});
+
+ispOpsRouter.post('/client-portal/plan-changes/:id/reject', (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) as any;
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.status !== 'pending') return res.status(400).json({ error: 'Request is not pending' });
+  db.prepare(
+    `UPDATE plan_change_requests SET status = 'rejected', review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(String(req.body?.note || '').trim() || null, id);
+  res.json({ ok: true, request: db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) });
+});
+
 // ─── Rogue MAC ──────────────────────────────────────────────────────────────
 
 function routerConn(id: number | null): (RouterConn & { id: number; name: string }) | null {
@@ -886,6 +1069,17 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
     openJobs,
     company,
     paymentLink: portalPaymentLinkForUser(sess.uid),
+    planChangeRequest: db
+      .prepare(
+        `SELECT id, from_plan AS fromPlan, to_plan AS toPlan, from_price AS fromPrice, to_price AS toPrice,
+                consumed_days AS consumedDays, remaining_days AS remainingDays,
+                old_portion AS oldPortion, new_portion AS newPortion, prorated_balance AS proratedBalance,
+                status, created_at AS createdAt, review_note AS reviewNote
+         FROM plan_change_requests
+         WHERE pppoe_user_id = ? AND status = 'pending'
+         ORDER BY id DESC LIMIT 1`
+      )
+      .get(sess.uid) || null,
     settings: portalSettingsRow(),
   });
 });
@@ -937,6 +1131,81 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
 
 publicPortalRouter.get('/public/portal/outage-services', (_req, res) => {
   res.json({ services: listOutageServiceCatalog() });
+});
+
+publicPortalRouter.get('/public/portal/plans', (_req, res) => {
+  res.json({
+    plans: listBillingPlansPublic().map((p) => ({
+      id: p.id,
+      name: p.name,
+      rateLimit: p.rateLimit || '',
+      price: Number(p.price) || 0,
+    })),
+    cycleDays: PLAN_CYCLE_DAYS,
+  });
+});
+
+publicPortalRouter.post('/public/portal/plan-change', (req, res) => {
+  const token = String(req.headers['x-portal-token'] || req.body?.token || '');
+  const sess = portalUserFromToken(token);
+  if (!sess) return res.status(401).json({ error: 'Session expired' });
+
+  const toPlan = String(req.body?.plan || req.body?.toPlan || '').trim();
+  if (!toPlan) return res.status(400).json({ error: 'Select a plan' });
+  if (toPlan === String(sess.profile || '')) {
+    return res.status(400).json({ error: 'You are already on this plan' });
+  }
+
+  const plan = listBillingPlansPublic().find((p) => p.name === toPlan);
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+  const pending = db
+    .prepare(`SELECT id FROM plan_change_requests WHERE pppoe_user_id = ? AND status = 'pending'`)
+    .get(sess.uid);
+  if (pending) {
+    return res.status(409).json({ error: 'You already have a pending plan change request' });
+  }
+
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(sess.uid) as any;
+  const proration = computePlanChangeProration({
+    oldPrice: Number(user?.price) || 0,
+    newPrice: Number(plan.price) || 0,
+    subscriptionDue: user?.subscription_due,
+  });
+  const note = String(req.body?.note || '').trim() || null;
+
+  const info = db
+    .prepare(
+      `INSERT INTO plan_change_requests
+       (pppoe_user_id, from_plan, to_plan, from_price, to_price, subscription_due,
+        consumed_days, remaining_days, old_portion, new_portion, prorated_balance, status, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+    )
+    .run(
+      sess.uid,
+      user?.profile || null,
+      plan.name,
+      proration.oldPrice,
+      proration.newPrice,
+      proration.due,
+      proration.consumedDays,
+      proration.remainingDays,
+      proration.oldPortion,
+      proration.newPortion,
+      proration.proratedBalance,
+      note
+    );
+
+  const row = db
+    .prepare(
+      `SELECT id, from_plan AS fromPlan, to_plan AS toPlan, from_price AS fromPrice, to_price AS toPrice,
+              consumed_days AS consumedDays, remaining_days AS remainingDays,
+              old_portion AS oldPortion, new_portion AS newPortion, prorated_balance AS proratedBalance,
+              status, created_at AS createdAt, note
+       FROM plan_change_requests WHERE id = ?`
+    )
+    .get(info.lastInsertRowid);
+  res.status(201).json({ request: row, proration });
 });
 
 publicPortalRouter.post('/public/portal/ticket', (req, res) => {
