@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Guest reinstall script — run inside the MT-Billing LXC/VM (or via Proxmox pct exec).
 # Use after a large GitHub update when a normal pull/build is not enough: wipes the
@@ -27,7 +27,7 @@
 #
 # Environment:
 #   var_install_dir / INSTALL_DIR   default /opt/mt-billing
-#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/mtbilling-claude.git
+#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/MT-Billing.git
 #   var_repo_branch / REPO_BRANCH   default main
 #   var_service_user / SERVICE_USER default mtbilling
 #   var_api_port / API_PORT         default 4000
@@ -39,7 +39,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
 SERVICE_USER="${var_service_user:-${SERVICE_USER:-mtbilling}}"
 API_PORT="${var_api_port:-${API_PORT:-4000}}"
@@ -238,14 +238,13 @@ User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_DIR}/server
 EnvironmentFile=${INSTALL_DIR}/server/.env
-# V8 auto-sizes its heap ceiling from detected RAM, which is too
-# conservative on small boards (Pi/OPi with ~1GB) and can self-abort
-# with "JavaScript heap out of memory" while swap sits unused. Raise the
-# ceiling so it can actually use the memory (incl. swap) that's there.
-Environment=NODE_OPTIONS=--max-old-space-size=768
+# Heap from MemTotal — keep headroom for nginx/cloudflared on RPi/thin PC
+Environment=NODE_OPTIONS=--max-old-space-size=$(awk '/MemTotal/ {m=int(\$2/1024); if(m<=1024)print 256; else if(m<=2048)print 384; else if(m<=3072)print 512; else print 768}' /proc/meminfo 2>/dev/null || echo 512)
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
+MemoryHigh=70%
+MemoryMax=90%
 
 [Install]
 WantedBy=multi-user.target

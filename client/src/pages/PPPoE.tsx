@@ -163,7 +163,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     const includeTraffic = opts?.traffic === true;
     const q = `/pppoe/users?service=${service}${routerQ}&traffic=${includeTraffic ? 1 : 0}`;
     return api
-      .get(q)
+      .get(q, { timeout: includeTraffic ? 25000 : 15000 })
       .then((r) => {
         const next = Array.isArray(r.data) ? r.data : [];
         const apply = () => {
@@ -572,8 +572,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
     let cancelled = false;
     let timer: number | null = null;
-    // Active needs ~2s for live rates; Users/Offline only need occasional status.
-    const POLL_MS = tab === 'active' ? 2000 : 12_000;
+    // Active needs frequent rates; Users/Offline only need occasional status.
+    // On RPi/thin PC, /api/health poll hints stretch these to keep Cloudflare alive.
+    const pollMsRef = { current: tab === 'active' ? 2000 : 12_000 };
+    void import('../lib/appliance').then(async ({ pollHints, refreshApplianceHints }) => {
+      await refreshApplianceHints();
+      const h = pollHints();
+      pollMsRef.current = tab === 'active' ? h.pppoeActive : h.pppoeUsers;
+    });
 
     const clearTimer = () => {
       if (timer != null) {
@@ -593,6 +599,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     const tick = async () => {
       if (cancelled) return;
       if (document.visibilityState !== 'visible') return;
+      const POLL_MS = pollMsRef.current;
       if (pausePollRef.current) {
         schedule(POLL_MS);
         return;
@@ -612,7 +619,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       } finally {
         usersPollInFlight.current = false;
         if (!cancelled && document.visibilityState === 'visible') {
-          const wait = Math.max(400, POLL_MS - (Date.now() - started));
+          const wait = Math.max(400, pollMsRef.current - (Date.now() - started));
           schedule(wait);
         }
       }

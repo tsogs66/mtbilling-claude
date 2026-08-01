@@ -342,13 +342,18 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   echo "$AFTER" >"$BUILD_MARKER"
 fi
 
-# V8 auto-sizes its heap ceiling from detected RAM, which is too
-# conservative on small boards (Pi/OPi with ~1GB) and can self-abort with
-# "JavaScript heap out of memory" while swap sits unused — patch existing
-# installs whose unit predates this, same as new installs already get.
-if [[ -f "$SERVICE_UNIT" ]] && ! grep -q 'NODE_OPTIONS.*max-old-space-size' "$SERVICE_UNIT"; then
-  log_info "Raising Node heap ceiling (NODE_OPTIONS=--max-old-space-size=768)"
-  sed -i '/^EnvironmentFile=/a Environment=NODE_OPTIONS=--max-old-space-size=768' "$SERVICE_UNIT" || true
+# Size Node heap from MemTotal — 768MB on 1GB RPi thrashs nginx/cloudflared.
+HEAP_MB="$(awk '/MemTotal/ {m=int($2/1024); if(m<=1024)print 256; else if(m<=2048)print 384; else if(m<=3072)print 512; else print 768}' /proc/meminfo 2>/dev/null || echo 512)"
+if [[ -f "$SERVICE_UNIT" ]]; then
+  log_info "Setting Node heap ceiling to ${HEAP_MB}MB (from host RAM)"
+  if grep -q 'NODE_OPTIONS=.*max-old-space-size' "$SERVICE_UNIT"; then
+    sed -i -E "s|NODE_OPTIONS=--max-old-space-size=[0-9]+|NODE_OPTIONS=--max-old-space-size=${HEAP_MB}|g" "$SERVICE_UNIT" || true
+  else
+    sed -i "/^EnvironmentFile=/a Environment=NODE_OPTIONS=--max-old-space-size=${HEAP_MB}" "$SERVICE_UNIT" || true
+  fi
+  if ! grep -q 'MemoryHigh=' "$SERVICE_UNIT"; then
+    sed -i '/^RestartSec=/a MemoryHigh=70%\nMemoryMax=90%' "$SERVICE_UNIT" || true
+  fi
   run systemctl daemon-reload
 fi
 
@@ -379,6 +384,10 @@ if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
     bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
   fi
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" ]]; then
+    bash "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" install || true
+  fi
+  ln -sf "${INSTALL_DIR}/install/mt-billing-net-rescue.sh" /usr/local/sbin/mt-billing-rescue 2>/dev/null || true
 fi
 
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"
