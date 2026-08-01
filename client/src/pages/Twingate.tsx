@@ -259,18 +259,26 @@ export default function Twingate() {
       try {
         const r = await api.get('/twingate/job', { timeout: 5000 });
         setElapsed(Math.round((Date.now() - startedAt) / 1000));
-        setJob((j) => (j ? { ...j, log: r.data.log || '' } : j));
+        const logText = r.data.log || '';
+        setJob((j) => (j ? { ...j, log: logText } : j));
+        // Soft-update badge while apply is still running
+        if (/status=authenticating|still authenticating|status: authenticating/i.test(logText)) {
+          setData((d: any) => (d ? { ...d, status: 'authenticating', connecting: true } : d));
+        }
         if (!r.data.running) {
           stopJobPoll();
           const code = r.data.code;
           setJob((j) => (j ? { ...j, running: false, code } : j));
+          const authStuck = /authenticating/i.test(logText) && code === 0;
           setFlash({
-            type: code === 0 ? 'success' : 'error',
+            type: code === 0 ? (authStuck ? 'error' : 'success') : 'error',
             msg:
               code === 0
                 ? action === 'stop' || action === 'emergency-restore'
                   ? 'Twingate stopped and host DNS restored.'
-                  : 'Twingate apply finished. If status is authenticating, wait for the Connector / Resources in Twingate Admin.'
+                  : authStuck
+                    ? 'Apply finished but client is still authenticating — not stuck in Working. In Twingate Admin: Connector Online + grant this Service Account Resources (specific IPs) + Service Key Active. Then Refresh.'
+                    : 'Twingate apply finished successfully.'
                 : `${action} failed (exit ${code}). If the panel lost internet, run Emergency restore (or SSH: sudo bash /opt/mt-billing/install/mt-billing-twingate.sh emergency-restore).`,
           });
           load({ live: true });
@@ -619,6 +627,30 @@ echo tun | sudo tee /etc/modules-load.d/tun.conf
         {data.message && <p className="text-sm text-amber-700 mt-3">{data.message}</p>}
         {data.warning && <p className="text-sm text-rose-600 mt-2">{data.warning}</p>}
       </Card>
+
+      {(data.status === 'authenticating' || data.connecting) && (
+        <Card className="max-w-4xl mb-5 border-amber-300 bg-amber-50/80" interactive>
+          <div className="flex gap-3 text-sm text-amber-950">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
+            <div className="space-y-2">
+              <p className="font-semibold">Stuck on authenticating?</p>
+              <p>
+                The daemon is up — Install &amp; connect will no longer spin forever. Headless Service Keys have{' '}
+                <b>no Accept button</b>. Fix these in Twingate Admin for network <code className="font-mono text-xs">{data.network || '…'}</code>:
+              </p>
+              <ol className="list-decimal ml-5 space-y-1">
+                <li>Remote Network <b>Connector</b> is Online (the one on Proxmox/that LAN).</li>
+                <li>This <b>Service Account</b> is granted <b>Resources</b> (specific OLT/router IPs — not broad LAN CIDRs).</li>
+                <li>Service Key is <b>Active</b> (not revoked). Re-paste a new key if unsure.</li>
+                <li>This host can reach the internet on HTTPS/443 (test: <code className="font-mono text-xs">curl -I https://{data.network || 'yournet'}.twingate.com/</code>).</li>
+              </ol>
+              <p>
+                Then click <b>Refresh</b>. If the panel dies, use Emergency restore / LAN IP.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {job && (
         <Card title={`Job: ${job.action}${job.running ? ' (running)' : ''}`} className="max-w-4xl mb-5" interactive>
