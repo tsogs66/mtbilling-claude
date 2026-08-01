@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { db } from './db.js';
 import { probeOlt } from './olt.js';
 import { probeRouter } from './mikrotik.js';
+import { getApplianceProfile } from './appliance.js';
 
 export const nocRouter = express.Router();
 const execFileAsync = promisify(execFile);
@@ -397,7 +398,7 @@ export async function runNocProbePass(): Promise<{
     return { custom: 0, linked: 0, online: 0, offline: 0, skipped: true };
   }
   nocProbeRunning = true;
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + getApplianceProfile().nocPassDeadlineMs;
   let truncated = false;
   try {
     const devices = db.prepare('SELECT * FROM noc_devices WHERE enabled = 1').all() as any[];
@@ -912,10 +913,11 @@ let nocTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startNocMonitor(intervalMs = 60_000) {
   if (nocTimer) clearInterval(nocTimer);
-  // Defer first pass so boot isn't slammed alongside StatusHub / notify (same 5‑min cadence)
+  // Defer first pass so boot isn't slammed alongside StatusHub / notify
+  const firstDelay = intervalMs >= 8 * 60_000 ? 120_000 : 75_000;
   setTimeout(() => {
     runNocProbePass().catch((e) => console.error('[noc] probe pass failed:', e));
-  }, 75_000);
+  }, firstDelay);
   nocTimer = setInterval(() => {
     runNocProbePass().catch((e) => console.error('[noc] probe pass failed:', e));
   }, intervalMs);

@@ -6,12 +6,15 @@
 import { db } from './db.js';
 import type { RouterConn } from './mikrotik.js';
 import { probeHttpUrlsFromRouter } from './mikrotik.js';
+import { getApplianceProfile } from './appliance.js';
 
 const HEARTBEAT_KEEP = 120;
 const DEFAULT_INTERVAL_SEC = 90;
 const FEED_TIMEOUT_MS = 10_000;
-const CONCURRENCY = 8;
 const UA = 'MT-Billing-StatusHub/2.0';
+function statusConcurrency() {
+  return getApplianceProfile().statusHubConcurrency;
+}
 
 export type MonitorType = 'feed' | 'statuspage';
 export type HeartbeatStatus = 'up' | 'down' | 'degraded' | 'pending';
@@ -696,7 +699,7 @@ export async function runStatusChecks(
         );
       }
     } else {
-      await mapPool(rows, CONCURRENCY, async (m) => {
+      await mapPool(rows, statusConcurrency(), async (m) => {
         const r = await resolveFeedStatus(m.feedSlug || null, m.statusPage || null);
         recordHeartbeat(m.id, r.status, r.error || r.detail, 0);
       });
@@ -776,7 +779,7 @@ export async function runUplinkChecks(
         pruneUplinkResults(t.id);
       }
     } else {
-      await mapPool(targets, CONCURRENCY, async (t) => {
+      await mapPool(targets, statusConcurrency(), async (t) => {
         const r = await resolveFeedStatus(t.feedSlug || null, t.statusPage || null);
         db.prepare(`
           INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)

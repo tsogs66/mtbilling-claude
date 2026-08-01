@@ -43,10 +43,12 @@ import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
 import { PRODUCT_TITLE } from './branding';
+import { refreshApplianceHints } from './lib/appliance';
 
 function DocumentTitle() {
   useEffect(() => {
     document.title = PRODUCT_TITLE;
+    void refreshApplianceHints();
   }, []);
   return null;
 }

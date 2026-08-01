@@ -717,7 +717,7 @@ export default function ClientsMap() {
 
   const load = useCallback(() => {
     const q = current?.id ? `?routerId=${current.id}` : '';
-    return api.get(`/map${q}`).then((r) => {
+    return api.get(`/map${q}`, { timeout: 15000 }).then((r) => {
       setServers(r.data.servers || []);
       setNaps(r.data.naps);
       setClients(r.data.clients);
@@ -730,9 +730,25 @@ export default function ClientsMap() {
   }, [current?.id]);
 
   useEffect(() => {
-    load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
+    let cancelled = false;
+    let timer: number | null = null;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        await load();
+      } catch {
+        /* ignore — next poll retries */
+      }
+      if (cancelled) return;
+      const { pollHints, refreshApplianceHints } = await import('../lib/appliance');
+      void refreshApplianceHints();
+      timer = window.setTimeout(tick, pollHints().map);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+    };
   }, [load]);
 
   const olt = useMemo(() => naps.find((n) => n.kind === 'olt'), [naps]);

@@ -52,6 +52,7 @@ import {
   fetchHotspotUsers,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
+import { getApplianceProfile, logApplianceProfile } from './appliance.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, setActiveRouterId, type UptimeScope } from './uptime.js';
 import {
   startStatusHub,
@@ -429,7 +430,23 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 });
 
 /** Public liveness probe — Updater UI polls this without an Authorization header. */
-app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/api/health', (_req, res) => {
+  const a = getApplianceProfile();
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    appliance: a.appliance,
+    reason: a.reason,
+    totalMemMb: a.totalMemMb,
+    freeMemMb: a.freeMemMb,
+    cpus: a.cpus,
+    arch: a.arch,
+    intervals: a.intervals,
+    pollHintMs: a.appliance
+      ? { map: 45_000, hotspot: 30_000, pppoeUsers: 20_000, pppoeActive: 4_000 }
+      : { map: 15_000, hotspot: 15_000, pppoeUsers: 12_000, pppoeActive: 2_000 },
+  });
+});
 
 /** Public subscriber self-service portal (no JWT). */
 app.use('/api', publicPortalRouter);
@@ -4371,6 +4388,8 @@ process.on('mt-billing-restart' as any, () => {
 
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
+  logApplianceProfile();
+  const ap = getApplianceProfile();
   // startUptime/startNotifyScheduler/startUsageScheduler/startRouterSyncScheduler
   // each run a full-table-scanning pass immediately on call (unlike
   // startStatusHub/startOutageMonitor, which already defer their first run a
@@ -4378,11 +4397,12 @@ server.listen(PORT, () => {
   // and CPU right at boot — worst possible timing right after a DB restore
   // restart, when the box is already under pressure and the dataset just got
   // bigger. Stagger them instead of firing the whole burst at once.
-  startStatusHub(5 * 60_000);
-  startOutageMonitor(3 * 60_000);
-  startUptime(90000);
-  startNocMonitor(5 * 60 * 1000);
-  setTimeout(() => startUsageScheduler(60_000), 15_000);
-  setTimeout(() => startRouterSyncScheduler(3 * 60 * 1000), 30_000);
-  setTimeout(() => startNotifyScheduler(5 * 60 * 1000), 45_000);
+  // On RPi/thin PC, intervals stretch so Cloudflare + panel API stay responsive.
+  startStatusHub(ap.intervals.statusHub);
+  startOutageMonitor(ap.intervals.outage);
+  startUptime(ap.intervals.uptime);
+  startNocMonitor(ap.intervals.noc);
+  setTimeout(() => startUsageScheduler(ap.intervals.usage), ap.appliance ? 45_000 : 15_000);
+  setTimeout(() => startRouterSyncScheduler(ap.intervals.routerSync), ap.appliance ? 60_000 : 30_000);
+  setTimeout(() => startNotifyScheduler(ap.intervals.notify), ap.appliance ? 90_000 : 45_000);
 });

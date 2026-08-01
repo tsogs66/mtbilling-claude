@@ -21,14 +21,30 @@ export default function Hotspot() {
   const loadVouchers = () => api.get('/hotspot/vouchers').then((r) => setVouchers(r.data));
   const loadHotspot = () => {
     const q = current?.id ? `?routerId=${current.id}` : '';
-    api.get(`/hotspot${q}`).then((r) => setData(r.data));
+    return api.get(`/hotspot${q}`, { timeout: 15000 }).then((r) => setData(r.data));
   };
 
   useEffect(() => {
-    loadHotspot();
+    let cancelled = false;
+    let timer: number | null = null;
     loadVouchers();
-    const t = setInterval(loadHotspot, 15000);
-    return () => clearInterval(t);
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        await loadHotspot();
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      const { pollHints, refreshApplianceHints } = await import('../lib/appliance');
+      void refreshApplianceHints();
+      timer = window.setTimeout(tick, pollHints().hotspot);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+    };
   }, [current?.id]);
 
   const generate = async () => {

@@ -103,7 +103,22 @@ const overCapSince = new Map<string, number>();
  * Absolute interface counters are snapshotted; only the increase since the last
  * sample is added to today's usage (handles router reboot / counter reset).
  */
+let usagePollRunning = false;
+
 export async function pollUsageAndFairUse(opts?: { routerId?: number | null }) {
+  // Overlap guard — on RPi a 60s timer used to stack MikroTik polls and freeze /api
+  if (usagePollRunning) {
+    return { skipped: true, samples: 0, alerts: 0, services: 0, bytesDelta: 0 };
+  }
+  usagePollRunning = true;
+  try {
+    return await pollUsageAndFairUseInner(opts);
+  } finally {
+    usagePollRunning = false;
+  }
+}
+
+async function pollUsageAndFairUseInner(opts?: { routerId?: number | null }) {
   ensureUsageTables();
   const settings = getFairUseSettings();
   const onlyId = opts?.routerId != null && Number(opts.routerId) > 0 ? Number(opts.routerId) : null;
