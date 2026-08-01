@@ -12,6 +12,34 @@ import {
   recordSubscriberOutageReport,
   resolveOutageServiceSlugs,
 } from './outageMonitor.js';
+import { absolutePayUrl, ensureFreshPayLink } from './billing.js';
+
+function portalPaymentLinkForUser(userId: number) {
+  const row = db
+    .prepare(
+      `SELECT id, token, amount, months, status, expires_at, pay_channel, submitted_at, external_ref
+       FROM payment_links
+       WHERE pppoe_user_id = ?
+         AND status IN ('pending', 'submitted', 'rejected')
+         AND (status != 'pending' OR datetime(expires_at) > datetime('now'))
+       ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END, id DESC
+       LIMIT 1`
+    )
+    .get(userId) as any;
+  if (!row) return null;
+  const path = `/pay/${row.token}`;
+  return {
+    path,
+    url: absolutePayUrl(path),
+    amount: Number(row.amount) || 0,
+    months: Number(row.months) || 1,
+    status: row.status as string,
+    expiresAt: row.expires_at as string,
+    payChannel: row.pay_channel || null,
+    submittedAt: row.submitted_at || null,
+    externalRef: row.external_ref || null,
+  };
+}
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -835,7 +863,12 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
   const balance = (invoices as any[])
     .filter((i) => ['unpaid', 'partial', 'overdue'].includes(i.status))
     .reduce((s, i) => s + (Number(i.amount) - Number(i.amount_paid)), 0);
-  const company = db.prepare('SELECT name, phone, email, address, gcash_number, maya_number FROM company WHERE id = 1').get();
+  const company = db
+    .prepare(
+      `SELECT name, phone, email, address, gcash_number, maya_number, payment_instructions
+       FROM company WHERE id = 1`
+    )
+    .get();
   res.json({
     customer: {
       name: sess.customer_name || sess.username,
@@ -852,8 +885,54 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
     invoices,
     openJobs,
     company,
+    paymentLink: portalPaymentLinkForUser(sess.uid),
     settings: portalSettingsRow(),
   });
+});
+
+/** Return existing active pay link, or create one when the subscriber has a balance due. */
+publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
+  const token = String(req.headers['x-portal-token'] || req.body?.token || '');
+  const sess = portalUserFromToken(token);
+  if (!sess) return res.status(401).json({ error: 'Session expired' });
+
+  const existing = portalPaymentLinkForUser(sess.uid);
+  if (existing && existing.status === 'pending') {
+    return res.json({ paymentLink: existing, created: false });
+  }
+  if (existing && existing.status === 'submitted') {
+    return res.json({ paymentLink: existing, created: false });
+  }
+
+  markOverdueInvoices();
+  const balanceRow = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount - amount_paid), 0) AS bal FROM invoices
+       WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
+    )
+    .get(sess.uid) as { bal: number };
+  const price = Number(sess.price) || 0;
+  if ((Number(balanceRow?.bal) || 0) <= 0 && price <= 0 && !existing) {
+    return res.status(400).json({ error: 'No balance due — ask your ISP if you need a payment link' });
+  }
+
+  try {
+    const created = ensureFreshPayLink(sess.uid);
+    const paymentLink = portalPaymentLinkForUser(sess.uid) || {
+      path: created.path,
+      url: created.url,
+      amount: Number(created.amount) || 0,
+      months: Number(created.months) || 1,
+      status: 'pending',
+      expiresAt: null,
+      payChannel: null,
+      submittedAt: null,
+      externalRef: null,
+    };
+    res.json({ paymentLink, created: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Could not create payment link' });
+  }
 });
 
 publicPortalRouter.get('/public/portal/outage-services', (_req, res) => {

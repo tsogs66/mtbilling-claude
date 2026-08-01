@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Wallet, FileText, LifeBuoy, LogOut } from 'lucide-react';
+import {
+  Wallet, FileText, LifeBuoy, LogOut, CreditCard, ExternalLink, Copy, Check,
+  Phone, Building2, ChevronRight, Sparkles,
+} from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
 import Logo from '../components/Logo';
@@ -25,6 +28,16 @@ type OutageServiceOpt = {
   region: string;
 };
 
+type PaymentLink = {
+  path: string;
+  url: string;
+  amount: number;
+  months: number;
+  status: string;
+  expiresAt?: string | null;
+  payChannel?: string | null;
+};
+
 async function portalFetch(path: string, opts: RequestInit = {}) {
   const token = localStorage.getItem(TOKEN_KEY) || '';
   const headers: Record<string, string> = {
@@ -36,6 +49,18 @@ async function portalFetch(path: string, opts: RequestInit = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
+}
+
+function copyText(text: string) {
+  return navigator.clipboard?.writeText(text).catch(() => undefined);
+}
+
+function statusTone(status?: string) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'active' || s === 'paid') return 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30';
+  if (s === 'overdue' || s === 'suspended') return 'bg-rose-500/15 text-rose-300 ring-rose-400/30';
+  if (s === 'partial' || s === 'pending' || s === 'submitted') return 'bg-amber-500/15 text-amber-200 ring-amber-400/30';
+  return 'bg-white/10 text-slate-300 ring-white/15';
 }
 
 export default function ClientPortal() {
@@ -51,9 +76,12 @@ export default function ClientPortal() {
   const [outageServices, setOutageServices] = useState<OutageServiceOpt[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [serviceFilter, setServiceFilter] = useState('');
+  const [payBusy, setPayBusy] = useState(false);
+  const [payMsg, setPayMsg] = useState('');
+  const [copied, setCopied] = useState('');
 
-  const loadMe = async (t = token) => {
-    if (!t) return;
+  const loadMe = async () => {
+    if (!localStorage.getItem(TOKEN_KEY)) return;
     const data = await portalFetch('/public/portal/me');
     setMe(data);
     if (data.settings) setPageSettings(data.settings);
@@ -95,6 +123,12 @@ export default function ClientPortal() {
     );
   };
 
+  const onCopy = async (label: string, value: string) => {
+    await copyText(value);
+    setCopied(label);
+    setTimeout(() => setCopied(''), 1800);
+  };
+
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -123,6 +157,31 @@ export default function ClientPortal() {
     setToken('');
     setMe(null);
     setSelectedServices([]);
+    setPayMsg('');
+  };
+
+  const openPayment = async () => {
+    setPayMsg('');
+    const existing: PaymentLink | null = me?.paymentLink || null;
+    if (existing?.path) {
+      window.location.href = existing.path;
+      return;
+    }
+    setPayBusy(true);
+    try {
+      const data = await portalFetch('/public/portal/payment-link', {
+        method: 'POST',
+        body: '{}',
+      });
+      const link: PaymentLink | null = data.paymentLink || null;
+      setMe((prev: any) => (prev ? { ...prev, paymentLink: link } : prev));
+      if (link?.path) window.location.href = link.path;
+      else setPayMsg('Payment page is not available yet. Contact your ISP.');
+    } catch (err: any) {
+      setPayMsg(err.message || 'Could not open payment page');
+    } finally {
+      setPayBusy(false);
+    }
   };
 
   const submitTicket = async () => {
@@ -160,26 +219,81 @@ export default function ClientPortal() {
 
   if (!token || !me) {
     return (
-      <div className="min-h-screen bg-slate-950 bg-mesh-dark flex items-center justify-center p-4">
-        <form onSubmit={login} className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 space-y-4">
-          <div className="flex flex-col items-center gap-3 mb-2">
-            <Logo size="md" variant="light" />
+      <div
+        className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+        style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif" }}
+      >
+        <div className="absolute inset-0 bg-slate-950" />
+        <div
+          className="absolute inset-0 opacity-90"
+          style={{
+            backgroundImage:
+              'radial-gradient(ellipse 80% 60% at 15% 10%, rgba(249,115,22,0.28), transparent 55%), radial-gradient(ellipse 70% 50% at 90% 20%, rgba(14,165,233,0.18), transparent 50%), radial-gradient(ellipse 60% 40% at 50% 100%, rgba(16,185,129,0.12), transparent 45%)',
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.07]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)',
+            backgroundSize: '48px 48px',
+          }}
+        />
+
+        <form
+          onSubmit={login}
+          className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+        >
+          <div className="flex flex-col items-center gap-4 mb-1">
+            <div>
+              <Logo size="md" variant="dark" />
+            </div>
             <div className="text-center">
-              <h1 className="text-xl font-bold text-slate-800">{title}</h1>
-              <p className="text-sm text-slate-500">{subtitle}</p>
+              <h1
+                className="text-2xl font-bold text-white tracking-tight"
+                style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+              >
+                {title}
+              </h1>
+              <p className="text-sm text-slate-400 mt-1">{subtitle}</p>
             </div>
           </div>
-          {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
-          <label className="block text-sm font-medium text-slate-700">
+          {error && (
+            <div className="text-sm text-rose-200 bg-rose-500/15 border border-rose-400/20 rounded-xl px-3 py-2">
+              {error}
+            </div>
+          )}
+          <label className="block text-sm font-medium text-slate-300">
             Account number
-            <input className="input mt-1" value={account} onChange={(e) => setAccount(e.target.value)} required autoComplete="username" />
+            <input
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+              required
+              autoComplete="username"
+              placeholder="e.g. ACC-00123"
+            />
           </label>
-          <label className="block text-sm font-medium text-slate-700">
+          <label className="block text-sm font-medium text-slate-300">
             PIN
-            <input className="input mt-1" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} required autoComplete="current-password" />
+            <input
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              type="password"
+              inputMode="numeric"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              required
+              autoComplete="current-password"
+              placeholder="4–8 digits"
+            />
           </label>
-          <button className="btn-primary w-full justify-center" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-          <p className="text-xs text-slate-400 text-center">{helpText}</p>
+          <button
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
+            disabled={busy}
+          >
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+          <p className="text-xs text-slate-500 text-center leading-relaxed">{helpText}</p>
         </form>
       </div>
     );
@@ -191,76 +305,248 @@ export default function ClientPortal() {
   const showInvoices = s.showInvoices !== false;
   const showTickets = s.showTickets !== false;
   const showCompany = s.showCompany !== false;
+  const paymentLink: PaymentLink | null = me.paymentLink || null;
+  const balance = Number(me.balance) || 0;
+  const company = me.company || {};
+  const payAmount = paymentLink?.amount || balance || Number(c.price) || 0;
+  const canPay = balance > 0 || !!paymentLink || Number(c.price) > 0;
+
+  const payCtaLabel = (() => {
+    if (paymentLink?.status === 'submitted') return 'View payment status';
+    if (paymentLink?.status === 'rejected') return 'Resubmit payment';
+    if (paymentLink?.status === 'pending') return 'Pay now';
+    if (balance > 0) return 'Open payment page';
+    return 'Get payment link';
+  })();
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-slate-900 text-white px-4 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Logo size="sm" variant="dark" />
-          <div>
-            <div className="font-semibold">{c.name}</div>
-            <div className="text-xs text-slate-400">{c.accountNumber || '—'} · {c.status}</div>
-          </div>
-        </div>
-        <button onClick={logout} className="inline-flex items-center gap-2 text-sm text-slate-300 hover:text-white">
-          <LogOut size={16} /> Sign out
-        </button>
-      </header>
-
-      <main className="max-w-3xl mx-auto p-4 space-y-4">
-        {s.welcomeText && (
-          <div className="bg-brand-50 border border-brand-100 text-brand-900 rounded-xl px-4 py-3 text-sm">
-            {s.welcomeText}
-          </div>
-        )}
-
-        <div className={`grid gap-3 ${showBalance ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {showBalance && (
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center gap-2 text-slate-500 text-xs uppercase tracking-wide mb-1"><Wallet size={14} /> Balance due</div>
-              <div className="text-2xl font-bold text-rose-600">{peso(me.balance || 0)}</div>
+    <div
+      className="min-h-screen text-slate-900"
+      style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif" }}
+    >
+      <div className="relative overflow-hidden bg-slate-950 text-white">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              'radial-gradient(ellipse 70% 80% at 0% 0%, rgba(249,115,22,0.35), transparent 55%), radial-gradient(ellipse 50% 60% at 100% 30%, rgba(14,165,233,0.2), transparent 50%)',
+          }}
+        />
+        <header className="relative max-w-3xl mx-auto px-4 pt-5 pb-8">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <Logo size="sm" variant="dark" />
+              <div className="min-w-0">
+                <div
+                  className="text-[11px] uppercase tracking-[0.22em] text-orange-300/90 font-semibold"
+                >
+                  {title}
+                </div>
+                <h1
+                  className="text-xl sm:text-2xl font-bold tracking-tight truncate"
+                  style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                >
+                  {c.name}
+                </h1>
+                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-slate-400">
+                  <span className="font-mono">{c.accountNumber || '—'}</span>
+                  <span className={`inline-flex px-2 py-0.5 rounded-full ring-1 capitalize ${statusTone(c.status)}`}>
+                    {c.status || '—'}
+                  </span>
+                </div>
+              </div>
             </div>
-          )}
-          <div className="bg-white rounded-xl border border-slate-200 p-4">
-            <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Plan</div>
-            <div className="font-semibold text-slate-800">{c.plan || '—'}</div>
-            <div className="text-sm text-slate-500">{peso(c.price)} · due {c.due || '—'}</div>
+            <button
+              onClick={logout}
+              className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 hover:bg-white/5 transition"
+            >
+              <LogOut size={16} /> Sign out
+            </button>
           </div>
-        </div>
 
-        {showCompany && me.company && (
-          <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-600">
-            <div className="font-semibold text-slate-800 mb-1">{me.company.name}</div>
-            {me.company.phone && <div>Tel: {me.company.phone}</div>}
-            {me.company.gcash_number && <div>GCash: {me.company.gcash_number}</div>}
-            {me.company.maya_number && <div>Maya: {me.company.maya_number}</div>}
+          {s.welcomeText && (
+            <p className="relative mt-5 text-sm text-slate-300/95 leading-relaxed border-l-2 border-orange-400/50 pl-3">
+              {s.welcomeText}
+            </p>
+          )}
+
+          <div className="relative mt-6 grid grid-cols-2 gap-3">
+            {showBalance && (
+              <div className="rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider mb-1">
+                  <Wallet size={13} /> Balance due
+                </div>
+                <div
+                  className={`text-2xl sm:text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
+                  style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                >
+                  {peso(balance)}
+                </div>
+              </div>
+            )}
+            <div className={`rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm ${showBalance ? '' : 'col-span-2'}`}>
+              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Plan</div>
+              <div className="font-semibold text-white truncate">{c.plan || '—'}</div>
+              <div className="text-sm text-slate-400 mt-0.5">
+                {peso(c.price)} · due {c.due || '—'}
+              </div>
+            </div>
           </div>
+        </header>
+      </div>
+
+      <main className="relative max-w-3xl mx-auto px-4 -mt-4 pb-10 space-y-4">
+        {/* Payment — deep-link to dedicated /pay page (proof upload lives there) */}
+        <section className="rounded-2xl border border-orange-200/80 bg-gradient-to-br from-orange-50 via-white to-sky-50 shadow-lg shadow-orange-500/5 overflow-hidden">
+          <div className="p-5 sm:p-6">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-500 text-white shadow-md shadow-orange-500/30">
+                <CreditCard size={20} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2
+                    className="text-lg font-bold text-slate-900"
+                    style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                  >
+                    Pay your bill
+                  </h2>
+                  {paymentLink?.status && (
+                    <span className="text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-900/5 text-slate-600 capitalize">
+                      {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                  {paymentLink
+                    ? 'Open the secure payment page to send GCash or Maya with a screenshot proof.'
+                    : 'Pay via GCash or Maya on the payment portal — upload your receipt there for faster posting.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Amount</div>
+                <div
+                  className="text-3xl font-bold text-slate-900 tabular-nums"
+                  style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                >
+                  {peso(payAmount)}
+                </div>
+                {paymentLink?.months ? (
+                  <div className="text-xs text-slate-500 mt-0.5">{paymentLink.months} month{paymentLink.months === 1 ? '' : 's'}</div>
+                ) : null}
+              </div>
+              {canPay && (
+                <button
+                  type="button"
+                  onClick={openPayment}
+                  disabled={payBusy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold px-5 py-3 text-sm shadow-lg shadow-slate-900/20 disabled:opacity-60 transition"
+                >
+                  {payBusy ? 'Opening…' : payCtaLabel}
+                  <ExternalLink size={16} />
+                </button>
+              )}
+            </div>
+
+            {(company.gcash_number || company.maya_number) && (
+              <div className="mt-4 grid sm:grid-cols-2 gap-2">
+                {company.gcash_number && (
+                  <button
+                    type="button"
+                    onClick={() => onCopy('gcash', company.gcash_number)}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2.5 text-left hover:border-orange-300 transition"
+                  >
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase">GCash</div>
+                      <div className="font-mono text-sm text-slate-800">{company.gcash_number}</div>
+                    </div>
+                    {copied === 'gcash' ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-slate-400" />}
+                  </button>
+                )}
+                {company.maya_number && (
+                  <button
+                    type="button"
+                    onClick={() => onCopy('maya', company.maya_number)}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2.5 text-left hover:border-sky-300 transition"
+                  >
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase">Maya</div>
+                      <div className="font-mono text-sm text-slate-800">{company.maya_number}</div>
+                    </div>
+                    {copied === 'maya' ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} className="text-slate-400" />}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {company.payment_instructions && (
+              <p className="mt-3 text-xs text-slate-500 leading-relaxed flex gap-1.5">
+                <Sparkles size={12} className="mt-0.5 shrink-0 text-orange-500" />
+                {company.payment_instructions}
+              </p>
+            )}
+            {payMsg && <p className="mt-2 text-sm text-rose-600">{payMsg}</p>}
+            {paymentLink?.expiresAt && paymentLink.status === 'pending' && (
+              <p className="mt-2 text-[11px] text-slate-400">
+                Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {showCompany && company.name && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-2">
+              <Building2 size={16} className="text-slate-500" /> {company.name}
+            </h2>
+            <div className="text-sm text-slate-600 space-y-1">
+              {company.phone && (
+                <div className="flex items-center gap-2">
+                  <Phone size={14} className="text-slate-400" />
+                  <a href={`tel:${company.phone}`} className="hover:text-orange-600">{company.phone}</a>
+                </div>
+              )}
+              {company.email && <div className="text-slate-500">{company.email}</div>}
+              {company.address && <div className="text-slate-500">{company.address}</div>}
+            </div>
+          </section>
         )}
 
         {showInvoices && (
-          <section className="bg-white rounded-xl border border-slate-200 p-4">
-            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3"><FileText size={16} /> Statement of account</h2>
-            <div className="overflow-x-auto">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3">
+              <FileText size={16} className="text-slate-500" /> Statement of account
+            </h2>
+            <div className="overflow-x-auto -mx-1">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-slate-400 border-b">
-                    <th className="py-2">Invoice</th>
-                    <th>Due</th>
-                    <th className="text-right">Amount</th>
-                    <th>Status</th>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                    <th className="py-2 px-1 font-semibold">Invoice</th>
+                    <th className="py-2 px-1 font-semibold">Due</th>
+                    <th className="py-2 px-1 font-semibold text-right">Amount</th>
+                    <th className="py-2 px-1 font-semibold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(me.invoices || []).map((inv: any) => (
-                    <tr key={inv.id} className="border-b border-slate-50">
-                      <td className="py-2 font-mono text-xs">{inv.number}</td>
-                      <td>{inv.due_date}</td>
-                      <td className="text-right">{peso(inv.amount - inv.amount_paid)}</td>
-                      <td className="capitalize">{inv.status}</td>
+                    <tr key={inv.id} className="border-b border-slate-50 last:border-0">
+                      <td className="py-2.5 px-1 font-mono text-xs text-slate-700">{inv.number}</td>
+                      <td className="py-2.5 px-1 text-slate-600">{inv.due_date || '—'}</td>
+                      <td className="py-2.5 px-1 text-right tabular-nums font-medium">
+                        {peso(inv.amount - inv.amount_paid)}
+                      </td>
+                      <td className="py-2.5 px-1">
+                        <span className="capitalize text-xs font-medium text-slate-600">{inv.status}</span>
+                      </td>
                     </tr>
                   ))}
                   {!me.invoices?.length && (
-                    <tr><td colSpan={4} className="py-6 text-center text-slate-400">No invoices yet.</td></tr>
+                    <tr>
+                      <td colSpan={4} className="py-8 text-center text-slate-400">No invoices yet.</td>
+                    </tr>
                   )}
                 </tbody>
               </table>
@@ -269,18 +555,20 @@ export default function ClientPortal() {
         )}
 
         {showTickets && (
-          <section className="bg-white rounded-xl border border-slate-200 p-4">
-            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3"><LifeBuoy size={16} /> Request support</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Select any apps or services that are down (optional), then describe the issue. Service outage reports also appear on the ISP Outage Monitor.
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-1">
+              <LifeBuoy size={16} className="text-slate-500" /> Request support
+            </h2>
+            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+              Select apps or services that are down (optional), then describe the issue. Service outages also appear on the ISP Outage Monitor.
             </p>
             {outageServices.length > 0 && (
-              <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+              <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/90 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Affected services
                     {selectedServices.length > 0 && (
-                      <span className="ml-1 normal-case font-medium text-brand-600">
+                      <span className="ml-1 normal-case font-medium text-orange-600">
                         ({selectedServices.length} selected)
                       </span>
                     )}
@@ -296,7 +584,7 @@ export default function ClientPortal() {
                   )}
                 </div>
                 <input
-                  className="input mb-2 text-sm"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
                   placeholder="Filter services (GCash, Facebook…)"
                   value={serviceFilter}
                   onChange={(e) => setServiceFilter(e.target.value)}
@@ -333,24 +621,24 @@ export default function ClientPortal() {
               </div>
             )}
             <textarea
-              className="input min-h-[90px] mb-2"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm min-h-[90px] mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
               placeholder="Describe the issue (no signal, slow, relocation…)"
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
             />
             <button
-              className="btn-primary"
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-2.5 text-sm disabled:opacity-50 transition"
               disabled={!ticket.trim() && !selectedServices.length}
               onClick={submitTicket}
             >
-              Submit report
+              Submit report <ChevronRight size={16} />
             </button>
             {ticketMsg && <p className="text-sm text-slate-600 mt-2">{ticketMsg}</p>}
             {(me.openJobs || []).length > 0 && (
               <ul className="mt-4 space-y-2 text-sm">
                 {me.openJobs.map((j: any) => (
                   <li key={j.id} className="flex justify-between border-t border-slate-50 pt-2">
-                    <span className="font-mono text-xs">{j.number}</span>
+                    <span className="font-mono text-xs text-slate-700">{j.number}</span>
                     <span className="capitalize text-slate-500">{j.status}</span>
                   </li>
                 ))}
@@ -358,6 +646,8 @@ export default function ClientPortal() {
             )}
           </section>
         )}
+
+        <p className="text-center text-[11px] text-slate-400 pt-2">{PRODUCT_TITLE}</p>
       </main>
     </div>
   );
