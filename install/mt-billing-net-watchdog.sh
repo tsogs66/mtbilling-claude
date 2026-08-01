@@ -148,21 +148,26 @@ run_once() {
     authenticating)
       if [[ ! -f "$AUTH_STAMP" ]]; then
         date +%s >"$AUTH_STAMP"
+        log "WATCHDOG: authenticating grace started — will NOT kill Twingate while DNS/LAN stay healthy"
       fi
       local since now age
       since="$(cat "$AUTH_STAMP" 2>/dev/null || echo 0)"
       now="$(date +%s)"
       age=$((now - since))
-      # Keep safe DNS while authenticating
+      # Keep safe DNS while authenticating (panel/SSH must stay up)
       rewrite_safe_dns
-      if [[ "$age" -gt 120 ]] && ! dns_ok; then
-        log "WATCHDOG: authenticating >2m and DNS broken — emergency restore"
+      # Only emergency-stop if the host is actually broken. Killing a healthy
+      # authenticating client after 3m made Install & connect look "always stuck"
+      # on RPi/PC (daemon never got time / Admin fixes never stuck).
+      if [[ "$age" -gt 90 ]] && ! dns_ok; then
+        log "WATCHDOG: authenticating >90s and DNS broken — emergency restore"
         emergency_stop_twingate
-      elif [[ "$age" -gt 180 ]]; then
-        # Even if DNS looks OK briefly, stuck authenticating on PC/RPi usually
-        # means Twingate will rewrite resolv.conf again and kill SSH/panel.
-        log "WATCHDOG: authenticating >3m — emergency restore (prevent disconnect loop)"
+      elif [[ "$age" -gt 900 ]]; then
+        # 15 minutes still authenticating with healthy DNS → Admin/config problem
+        log "WATCHDOG: authenticating >15m with healthy DNS — stopping (fix Connector/Resources/Service Key in Admin)"
         emergency_stop_twingate
+      elif [[ $((age % 60)) -lt 35 ]]; then
+        log "WATCHDOG: still authenticating (${age}s) — DNS/LAN OK; leaving client running"
       fi
       ;;
     not-running|offline|error|not-installed|not-configured|"")

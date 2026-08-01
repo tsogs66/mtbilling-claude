@@ -302,7 +302,8 @@ function startTwingateJob(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const jobTimeoutMs = /apply|start/.test(actionLabel) ? 90000 : 180000;
+    // Apply should finish in ~30–45s after authenticating short-circuit; keep headroom.
+    const jobTimeoutMs = /apply|start/.test(actionLabel) ? 75000 : 180000;
     const killJob = (reason: string) => {
       if (settled) return;
       settled = true;

@@ -418,8 +418,38 @@ configure_headless() {
     exit 1
   fi
   log_info "Configuring Twingate headless client"
-  twingate setup --headless "$KEY_FILE"
+  # Bare `twingate setup` can hang on flash images — always bound it
+  if ! run_timeout 45 twingate setup --headless "$KEY_FILE"; then
+    log_err "twingate setup --headless timed out or failed"
+    dump_twingate_logs
+    exit 1
+  fi
   log_ok "Headless setup complete"
+}
+
+# Reach Twingate cloud controllers before starting (stuck "authenticating" is often no outbound HTTPS).
+preflight_twingate_cloud() {
+  local net
+  net="$(network_from_key)"
+  net="${net%.twingate.com}"
+  if [[ -z "$net" ]]; then
+    log_warn "No network slug in Service Key — skipping cloud preflight"
+    return 0
+  fi
+  log_info "Preflight: checking HTTPS to ${net}.twingate.com …"
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --connect-timeout 5 --max-time 8 -o /dev/null "https://${net}.twingate.com/" 2>/dev/null \
+      || curl -fsS --connect-timeout 5 --max-time 8 -o /dev/null "https://api.twingate.com/" 2>/dev/null; then
+      log_ok "Outbound HTTPS to Twingate cloud OK"
+      return 0
+    fi
+  elif timeout 5 bash -c "echo >/dev/tcp/${net}.twingate.com/443" 2>/dev/null; then
+    log_ok "TCP/443 to ${net}.twingate.com OK"
+    return 0
+  fi
+  log_err "Cannot reach Twingate cloud (HTTPS). Client will stay 'authenticating' forever."
+  log_err "  Fix DNS/firewall/outbound 443, then retry. Test: curl -I https://${net}.twingate.com/"
+  return 1
 }
 
 network_from_key() {
@@ -539,9 +569,10 @@ tg_client_status() {
     echo "not-installed"
     return 0
   fi
-  # twingate status can hang like "Waiting for status…" — never block the panel
+  # twingate status can hang like "Waiting for status…" — never block the panel.
+  # Keep this short: apply polls often; a 5s timeout made "30s wait" feel like 90s+.
   if command -v timeout >/dev/null 2>&1; then
-    timeout --signal=KILL 5s twingate status 2>/dev/null || echo offline
+    timeout --signal=KILL 2s twingate status 2>/dev/null || echo offline
   else
     twingate status 2>/dev/null || echo offline
   fi
@@ -664,15 +695,21 @@ ensure_client_started() {
   [[ "$st" != "not-running" && "$st" != "not-installed" ]]
 }
 
-# Wait until `twingate status` reports online.
-# Note: Service Account / headless mode has NO interactive "Accept auth" in Twingate Admin.
+# Wait until online — but do NOT park the panel UI for a long authenticating loop.
+# Service Key auth is automatic (no Accept click). If we are already authenticating,
+# finish apply quickly and let the user fix Admin (Connector / Resources) while the
+# daemon keeps trying in the background.
 wait_for_client_online() {
-  local timeout="${1:-30}"
+  local timeout="${1:-20}"
   local i=0
   local st
+  local auth_hits=0
   log_info "Waiting for Twingate client to reach online (up to ${timeout}s)…"
   while [[ $i -lt $timeout ]]; do
     st="$(tg_client_status)"
+    # Strip CR / extra words — some builds print "status=authenticating"
+    st="${st%%$'\r'}"
+    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
     if [[ "$st" == "online" ]]; then
       log_ok "Twingate client status: online"
       return 0
@@ -681,22 +718,30 @@ wait_for_client_online() {
       log_warn "Client is not-running — giving up wait (will not call twingate start)"
       return 1
     fi
-    if [[ $((i % 10)) -eq 0 ]]; then
-      case "$st" in
-        authenticating)
-          log_info "Client status: authenticating (Service Key auth is automatic — check Connector Online + Resource grants)"
-          ;;
-        *)
-          log_info "Client status: ${st}"
-          ;;
-      esac
+    if [[ "$st" == "authenticating" ]]; then
+      auth_hits=$((auth_hits + 1))
+      # After ~6s of stable authenticating, stop blocking Install & connect
+      if [[ "$auth_hits" -ge 3 ]]; then
+        log_warn "Client is authenticating — ending wait so the panel is not stuck."
+        log_warn "  Daemon keeps running. In Twingate Admin check:"
+        log_warn "    1) Connector for the remote network is Online"
+        log_warn "    2) This Service Account is granted Resources (specific remote IPs)"
+        log_warn "    3) Service Key is Active (not revoked / expired)"
+        log_warn "  Then click Refresh here. There is no Accept button for Service Keys."
+        return 0
+      fi
+      log_info "Client status: authenticating (${i}s) — Service Key auth is automatic"
+    elif [[ $((i % 4)) -eq 0 ]]; then
+      log_info "Client status: ${st} (${i}s)"
     fi
     sleep 2
     i=$((i + 2))
   done
   st="$(tg_client_status)"
+  st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
   log_warn "Timed out waiting for online — current status: ${st}"
-  [[ "$st" == "online" ]]
+  # authenticating is a soft-success for apply (daemon up; Admin config may be incomplete)
+  [[ "$st" == "online" || "$st" == "authenticating" ]]
 }
 
 do_start() {
@@ -751,13 +796,24 @@ do_start() {
     fi
 
     # Short wait only — do not re-call twingate start on not-running
-    if wait_for_client_online 30; then
-      set_db_status online "$(network_from_key)"
-      log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
+    if wait_for_client_online 16; then
+      st="$(tg_client_status)"
+      st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
+      if [[ "$st" == "online" ]]; then
+        set_db_status online "$(network_from_key)"
+        log_ok "Twingate is online (Cloudflare + local LAN coexistence applied)"
+        return 0
+      fi
+      # Soft success: authenticating — leave daemon up for Admin fixes
+      set_db_status authenticating "$(network_from_key)"
+      log_warn "Apply finished with status=authenticating (panel will not keep spinning)."
+      log_warn "  Fix in Twingate Admin, then Refresh. Host DNS/LAN coexistence is already applied."
+      dump_twingate_logs
       return 0
     fi
 
     st="$(tg_client_status)"
+    st="$(echo "$st" | tr '[:upper:]' '[:lower:]' | awk '{print $NF}')"
     if [[ "$st" == "not-running" ]]; then
       log_err "Client stayed not-running — daemon crashed or never started"
       dump_twingate_logs
@@ -773,6 +829,7 @@ do_start() {
       log_warn "Client is still authenticating — no Admin 'Accept' click for Service Keys."
       log_warn "  Twingate Admin: Connector Online + grant this Service Account Resources (specific remote IPs)."
       log_warn "Host network is OK (coexistence kept). Re-check status in a minute."
+      dump_twingate_logs
       return 0
     fi
 
@@ -947,6 +1004,11 @@ do_apply() {
     set_db_status configured "$(network_from_key)"
     log_ok "Configured (not started)"
     return 0
+  fi
+  if ! preflight_twingate_cloud; then
+    set_db_status error "$(network_from_key)"
+    log_err "Skipping start until this host can reach Twingate cloud on HTTPS/443."
+    exit 1
   fi
   do_start
 }
