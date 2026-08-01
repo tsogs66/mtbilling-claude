@@ -381,7 +381,7 @@ export default function IPoE() {
                 </div>
               )}
               {error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</div>}
-              <DataTable columns={leaseColumns} rows={leaseRows} emptyMessage="No DHCP leases found." stickyHeader />
+              <DataTable columns={leaseColumns} rows={leaseRows} emptyMessage="No DHCP leases found." />
             </div>
           </>
         )}

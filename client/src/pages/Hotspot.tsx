@@ -166,7 +166,6 @@ export default function Hotspot() {
                 { key: 'actions', label: 'Actions', align: 'right' },
               ]}
               rows={voucherRows}
-              stickyHeader
               emptyMessage="No vouchers yet. Generate a batch above."
             />
           </div>

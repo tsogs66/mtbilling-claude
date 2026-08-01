@@ -76,7 +76,12 @@ publicApi.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err?.response?.status === 401 && localStorage.getItem('mt_token')) {
+    const url = String(err?.config?.url || '');
+    // Never wipe an existing session because a login/auth attempt returned 401
+    // (wrong password, expired 2FA pending token, etc.).
+    const isAuthAttempt =
+      /(^|\/)login(\/|$|\?)/i.test(url) || /\/auth\//i.test(url) || /\/login\/totp\b/i.test(url);
+    if (err?.response?.status === 401 && localStorage.getItem('mt_token') && !isAuthAttempt) {
       localStorage.removeItem('mt_token');
       localStorage.removeItem('mt_licensed');
       localStorage.removeItem('mt_can_write');

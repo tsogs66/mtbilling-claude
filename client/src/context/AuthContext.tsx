@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api } from '../api';
+import { api, publicApi } from '../api';
 
 export interface User {
   id: number;
@@ -91,7 +91,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const login = async (username: string, password: string) => {
-    const r = await api.post('/login', { username, password });
+    // Use publicApi so a failed login 401 never clears another active session
+    // via the authenticated client's interceptor.
+    const r = await publicApi.post('/login', { username, password });
     if (r.data.requiresTotp) {
       return { requiresTotp: true as const, pendingToken: r.data.pendingToken as string };
     }
@@ -100,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const completeTotpLogin = async (pendingToken: string, code: string) => {
-    const r = await api.post('/login/totp', { pendingToken, code });
+    const r = await publicApi.post('/login/totp', { pendingToken, code });
     applySession(r.data);
   };
 

@@ -27,7 +27,8 @@ export default {
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'],
-        display: ['Inter', 'system-ui', 'sans-serif'],
+        display: ['"Space Grotesk"', 'Manrope', 'system-ui', 'sans-serif'],
+        landing: ['Manrope', '"Space Grotesk"', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
         glow: '0 0 24px -4px rgba(249, 115, 22, 0.35)',
@@ -57,6 +58,9 @@ export default {
         'float': 'float 6s ease-in-out infinite',
         'glow-pulse': 'glow-pulse 2s ease-in-out infinite',
         'spin-slow': 'spin 8s linear infinite',
+        'orbit': 'orbit 18s linear infinite',
+        'tilt-in': 'tilt-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards',
+        'shine': 'shine 2.8s ease-in-out infinite',
       },
       keyframes: {
         'fade-in': {
@@ -90,6 +94,18 @@ export default {
         'glow-pulse': {
           '0%, 100%': { boxShadow: '0 0 20px -4px rgba(249, 115, 22, 0.3)' },
           '50%': { boxShadow: '0 0 28px -2px rgba(249, 115, 22, 0.5)' },
+        },
+        orbit: {
+          '0%': { transform: 'rotateX(62deg) rotateZ(0deg)' },
+          '100%': { transform: 'rotateX(62deg) rotateZ(360deg)' },
+        },
+        'tilt-in': {
+          '0%': { opacity: '0', transform: 'perspective(1200px) rotateX(8deg) translateY(28px)' },
+          '100%': { opacity: '1', transform: 'perspective(1200px) rotateX(0deg) translateY(0)' },
+        },
+        shine: {
+          '0%, 100%': { backgroundPosition: '0% 50%' },
+          '50%': { backgroundPosition: '100% 50%' },
         },
       },
     },

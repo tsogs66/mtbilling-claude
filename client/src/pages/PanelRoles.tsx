@@ -27,8 +27,12 @@ export default function PanelRoles() {
 
   const del = async (id: number) => {
     if (!confirm('Delete this role?')) return;
-    await api.delete(`/roles/${id}`);
-    load();
+    try {
+      await api.delete(`/roles/${id}`);
+      load();
+    } catch (e: any) {
+      alert(e?.response?.data?.error || 'Could not delete role');
+    }
   };
 
   const delUser = async (id: number) => {
