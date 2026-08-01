@@ -79,6 +79,9 @@ import {
   getTransactionReceipt,
   createPaymentLink,
   resendPaymentLink,
+  listPayLinkResendCandidates,
+  isPayLinkResendEligible,
+  daysUntilSubscriptionDue,
   submitPaymentProof,
   rejectPaymentProof,
   getPaymentLinkPublic,
@@ -140,6 +143,7 @@ import {
   isBillingActiveAccount,
   sendPaymentReceiptEmail,
   sendPaymentConfirmationSms,
+  notifyClientChannels,
 } from './notify.js';
 
 /**
@@ -1903,32 +1907,121 @@ app.post('/api/payment-links', (req, res) => {
   }
 });
 
-app.post('/api/payment-links/for-user/:id', (req, res) => {
+app.post('/api/payment-links/for-user/:id', async (req, res) => {
   try {
-    const link = ensureFreshPayLink(
-      Number(req.params.id),
-      req.body?.baseUrl || req.body?.fallbackOrigin || undefined
-    );
-    res.json(link);
+    const userId = Number(req.params.id);
+    const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+    if (!user) return res.status(404).json({ error: 'Subscriber not found' });
+    const withinDays = Math.max(0, Math.floor(Number(req.body?.withinDays) || 10));
+    if (!isPayLinkResendEligible(user, withinDays)) {
+      return res.status(400).json({
+        error: `Pay links can only be resent for expired accounts or those due within ${withinDays} days.`,
+        daysUntilDue: daysUntilSubscriptionDue(user.subscription_due),
+        subscriptionDue: user.subscription_due || null,
+      });
+    }
+    const baseUrl = req.body?.baseUrl || req.body?.fallbackOrigin || undefined;
+    const link = resendPaymentLink({ pppoeUserId: userId, months: Number(req.body?.months) || 1, baseUrl });
+    const channelsRaw = req.body?.channels ?? req.body?.channel;
+    const channels: ('email' | 'sms')[] = [];
+    if (channelsRaw === 'email' || channelsRaw === 'sms') channels.push(channelsRaw);
+    else if (Array.isArray(channelsRaw)) {
+      for (const c of channelsRaw) {
+        if (c === 'email' || c === 'sms') channels.push(c);
+      }
+    }
+    let notified: string[] = [];
+    if (channels.length) {
+      const url = link.url?.startsWith('http')
+        ? link.url
+        : link.baseUrl
+          ? `${String(link.baseUrl).replace(/\/$/, '')}${link.path}`
+          : link.path;
+      const due = user.subscription_due || 'soon';
+      const subject = 'Payment link for your internet plan';
+      const msg = `Hi ${user.customer_name || user.username}, please renew your ${user.profile || 'plan'} (due ${due}). Pay online: ${url}`;
+      notified = await notifyClientChannels(user, channels, subject, msg, 'pay_link_resend');
+    }
+    res.json({
+      ...link,
+      notified,
+      daysUntilDue: daysUntilSubscriptionDue(user.subscription_due),
+      username: user.username,
+      customer: user.customer_name,
+    });
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not create link' });
   }
 });
 
-/** Resend (create fresh 15-day) pay links for one or many subscribers. */
-app.post('/api/payment-links/resend', (req, res) => {
+/** Candidates for bulk resend: expired or due within N days (default 10). */
+app.get('/api/payment-links/resend-candidates', (req, res) => {
+  const withinDays = Math.max(0, Math.floor(Number(req.query.withinDays) || 10));
+  res.json({ withinDays, clients: listPayLinkResendCandidates(withinDays) });
+});
+
+/** Resend (create fresh 15-day) pay links for eligible subscribers; optionally email/SMS. */
+app.post('/api/payment-links/resend', async (req, res) => {
   try {
     const b = req.body || {};
+    const withinDays = Math.max(0, Math.floor(Number(b.withinDays) || 10));
     const ids = (Array.isArray(b.userIds) ? b.userIds : b.userId != null ? [b.userId] : [])
       .map((id: unknown) => Number(id))
       .filter((id: number) => Number.isFinite(id) && id > 0);
     if (!ids.length) return res.status(400).json({ error: 'Select at least one subscriber.' });
     const months = Math.max(1, Math.floor(Number(b.months) || 1));
     const baseUrl = b.baseUrl || b.fallbackOrigin || undefined;
-    const links = ids.map((userId: number) =>
-      resendPaymentLink({ pppoeUserId: userId, months, baseUrl })
-    );
-    res.status(201).json({ count: links.length, links, ttlDays: 15 });
+    const channelsRaw = b.channels ?? b.channel;
+    const channels: ('email' | 'sms')[] = [];
+    if (channelsRaw === 'email' || channelsRaw === 'sms') channels.push(channelsRaw);
+    else if (Array.isArray(channelsRaw)) {
+      for (const c of channelsRaw) {
+        if (c === 'email' || c === 'sms') channels.push(c);
+      }
+    }
+
+    const links: any[] = [];
+    const skipped: { id: number; reason: string }[] = [];
+    for (const userId of ids) {
+      const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+      if (!user) {
+        skipped.push({ id: userId, reason: 'not found' });
+        continue;
+      }
+      if (!isPayLinkResendEligible(user, withinDays)) {
+        skipped.push({ id: userId, reason: `not expired and due in more than ${withinDays} days` });
+        continue;
+      }
+      const link = resendPaymentLink({ pppoeUserId: userId, months, baseUrl });
+      let notified: string[] = [];
+      if (channels.length) {
+        const url = link.url?.startsWith('http')
+          ? link.url
+          : link.baseUrl
+            ? `${String(link.baseUrl).replace(/\/$/, '')}${link.path}`
+            : link.path;
+        const due = user.subscription_due || 'soon';
+        const subject = 'Payment link for your internet plan';
+        const msg = `Hi ${user.customer_name || user.username}, please renew your ${user.profile || 'plan'} (due ${due}). Pay online: ${url}`;
+        notified = await notifyClientChannels(user, channels, subject, msg, 'pay_link_resend');
+      }
+      links.push({
+        ...link,
+        username: user.username,
+        customer: user.customer_name,
+        account: user.account_number,
+        notified,
+        daysUntilDue: daysUntilSubscriptionDue(user.subscription_due),
+      });
+    }
+    res.status(201).json({
+      count: links.length,
+      skipped,
+      links,
+      ttlDays: 15,
+      withinDays,
+      channels,
+    });
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not resend links' });
   }
