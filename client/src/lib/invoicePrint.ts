@@ -66,11 +66,13 @@ function printStyles(): string {
   .logo {
     width: 56px; height: 56px; object-fit: contain; border-radius: 10px;
     border: 1px solid #e2e8f0; background: #f8fafc; flex-shrink: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .logo-fallback {
     width: 56px; height: 56px; border-radius: 10px; background: linear-gradient(135deg,#0d9488,#0ea5e9);
     color: #fff; font-weight: 800; font-size: 18px; display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .brand-name { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; color: #0f172a; margin: 0; }
   .brand-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #0d9488; font-weight: 700; margin-top: 2px; }
@@ -104,6 +106,18 @@ function printStyles(): string {
 `;
 }
 
+/** Make logo URLs work inside about:blank print iframes. */
+function resolveLogoSrc(logo: string | null | undefined): string | null {
+  const raw = String(logo || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('data:') || raw.startsWith('blob:') || /^https?:\/\//i.test(raw)) return raw;
+  try {
+    return new URL(raw, window.location.origin).href;
+  } catch {
+    return raw;
+  }
+}
+
 function businessHeader(company: CompanyPrint | null | undefined, docTitle: string, docSub?: string): string {
   const c = company || {};
   const initials = String(c.name || 'ISP')
@@ -112,8 +126,9 @@ function businessHeader(company: CompanyPrint | null | undefined, docTitle: stri
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() || '')
     .join('');
-  const logo = c.logo
-    ? `<img class="logo" src="${esc(c.logo)}" alt=""/>`
+  const logoSrc = resolveLogoSrc(c.logo);
+  const logo = logoSrc
+    ? `<img class="logo" src="${esc(logoSrc)}" alt=""/>`
     : `<div class="logo-fallback">${esc(initials || 'ISP')}</div>`;
   return `
   <div class="accent-strip"></div>
@@ -166,8 +181,15 @@ function openPrintWindow(html: string, _title: string) {
     return;
   }
 
+  // Inject <base> so relative assets (/logo.png) resolve against the app origin
+  // inside this about:blank iframe document.
+  const baseHref = `${window.location.origin}/`;
+  const htmlWithBase = /<head[^>]*>/i.test(bodyHtml)
+    ? bodyHtml.replace(/<head([^>]*)>/i, `<head$1><base href="${esc(baseHref)}">`)
+    : `<!DOCTYPE html><html><head><base href="${esc(baseHref)}"></head><body>${bodyHtml}</body></html>`;
+
   doc.open();
-  doc.write(bodyHtml);
+  doc.write(htmlWithBase);
   doc.close();
 
   const doPrint = () => {
