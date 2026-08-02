@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
-  Palette,
+  Palette, Binary,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -89,6 +89,7 @@ function PanelSettings({ app, setA, save }: any) {
     { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
     { key: 'isptech', label: 'Snapshot', Icon: Network, hint: 'Landing navy glass · orange + cyan' },
     { key: 'blueglass', label: 'Blue Glass', Icon: Palette, hint: 'Elegant sapphire glass · sky accents' },
+    { key: 'matrix', label: 'Matrix Glass', Icon: Binary, hint: 'Futuristic matrix rain · orange glass' },
   ];
   const selectTheme = (key: ThemeId) => {
     setA({ theme: key });

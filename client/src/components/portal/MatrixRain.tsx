@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Subtle matrix rain backdrop for the subscriber portal.
+ * Subtle matrix rain backdrop (portal + panel Matrix Glass theme).
  * Uses brand orange + matrix green glyphs on a dark void.
  */
-export function MatrixRain() {
+export function MatrixRain({ className = "matrix-rain-canvas" }: { className?: string } = {}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export function MatrixRain() {
   return (
     <canvas
       ref={canvasRef}
-      className="portal-matrix-canvas"
+      className={className}
       aria-hidden="true"
     />
   );

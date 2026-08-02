@@ -1,13 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech' | 'blueglass';
+export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech' | 'blueglass' | 'matrix';
 
-export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass'];
+export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass', 'matrix'];
 
 const STORAGE_KEY = 'mt_theme';
-/** Bump to re-apply Snapshot default when the panel look changes again. */
-const MIGRATION_KEY = 'mt_theme_snapshot_v2';
-const DEFAULT_THEME: ThemeId = 'isptech';
+/** Bump to re-apply Matrix Glass default when the panel look changes again. */
+const MIGRATION_KEY = 'mt_theme_matrix_v1';
+const DEFAULT_THEME: ThemeId = 'matrix';
 
 interface ThemeCtx {
   theme: ThemeId;
