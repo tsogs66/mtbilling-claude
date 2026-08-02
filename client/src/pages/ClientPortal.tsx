@@ -87,6 +87,12 @@ export default function ClientPortal() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState('');
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotAccount, setForgotAccount] = useState('');
+  const [forgotPhone, setForgotPhone] = useState('');
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState('');
+  const [forgotOk, setForgotOk] = useState(false);
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
 
   const loadMe = async () => {
@@ -175,6 +181,27 @@ export default function ClientPortal() {
       setError(err.message || 'Login failed');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const submitForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotMsg('');
+    setForgotOk(false);
+    setForgotBusy(true);
+    try {
+      const data = await portalFetch('/public/portal/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ account: forgotAccount, contact: forgotPhone }),
+      });
+      setForgotOk(true);
+      setForgotMsg(data.message || 'Temporary password sent to your mobile number.');
+      setAccount(forgotAccount.trim());
+      setPassword('');
+    } catch (err: any) {
+      setForgotMsg(err.message || 'Could not reset password');
+    } finally {
+      setForgotBusy(false);
     }
   };
 
@@ -337,7 +364,9 @@ export default function ClientPortal() {
 
   const title = pageSettings.title || 'Subscriber Portal';
   const subtitle = pageSettings.subtitle || PRODUCT_TITLE;
-  const helpText = pageSettings.helpText || 'Ask your ISP for portal access (account + PIN).';
+  const helpText =
+    pageSettings.helpText ||
+    'Sign in with your account number and password. First time: use your phone number, then set a new password.';
 
   if (!token || !me) {
     return (
@@ -362,78 +391,167 @@ export default function ClientPortal() {
           }}
         />
 
-        <form
-          onSubmit={login}
-          className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
-        >
-          <div className="flex flex-col items-center gap-4 mb-1">
-            <div>
+        {forgotOpen ? (
+          <form
+            onSubmit={submitForgotPassword}
+            className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+          >
+            <div className="text-center space-y-2">
               <Logo size="md" variant="dark" />
-            </div>
-            <div className="text-center">
               <h1
                 className="text-2xl font-bold text-white tracking-tight"
                 style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
               >
-                {title}
+                Reset password
               </h1>
-              <p className="text-sm text-slate-400 mt-1">{subtitle}</p>
+              <p className="text-sm text-slate-400 leading-relaxed">
+                Enter your account number and the mobile number on your account. We will SMS a temporary password.
+              </p>
             </div>
-          </div>
-          {error && (
-            <div className="text-sm text-rose-200 bg-rose-500/15 border border-rose-400/20 rounded-xl px-3 py-2">
-              {error}
-            </div>
-          )}
-          <label className="block text-sm font-medium text-slate-300">
-            Account number
-            <input
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
-              name="portal-account"
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              required
-              autoComplete="username"
-              placeholder="e.g. ACC-00123"
-            />
-          </label>
-          <label className="block text-sm font-medium text-slate-300">
-            Password
-            <input
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
-              name="portal-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              placeholder="Your portal password"
-            />
-          </label>
-          <p className="text-[11px] text-slate-500 -mt-2">
-            First time? Use your phone number, then you will set a new password.
-          </p>
-          <button
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
-            disabled={busy}
-          >
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          {showInstallButton && (
+            {forgotMsg && (
+              <div
+                className={`text-sm rounded-xl px-3 py-2 border ${
+                  forgotOk
+                    ? 'text-emerald-200 bg-emerald-500/15 border-emerald-400/20'
+                    : 'text-rose-200 bg-rose-500/15 border-rose-400/20'
+                }`}
+              >
+                {forgotMsg}
+              </div>
+            )}
+            <label className="block text-sm font-medium text-slate-300">
+              Account number
+              <input
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+                value={forgotAccount}
+                onChange={(e) => setForgotAccount(e.target.value)}
+                required
+                autoComplete="username"
+                placeholder="e.g. ACC-00123"
+              />
+            </label>
+            <label className="block text-sm font-medium text-slate-300">
+              Mobile number
+              <input
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+                value={forgotPhone}
+                onChange={(e) => setForgotPhone(e.target.value)}
+                required
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="Same number on your account"
+              />
+            </label>
+            <button
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition disabled:opacity-60"
+              disabled={forgotBusy}
+            >
+              {forgotBusy ? 'Sending…' : 'Send temporary password'}
+            </button>
             <button
               type="button"
-              onClick={() => void install()}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-semibold py-3 transition"
+              onClick={() => {
+                setForgotOpen(false);
+                setForgotMsg('');
+                setForgotOk(false);
+              }}
+              className="w-full text-sm text-slate-400 hover:text-white py-1"
             >
-              <Download size={18} /> Install app
+              Back to sign in
             </button>
-          )}
-          {installed && (
-            <p className="text-xs text-emerald-300/90 text-center">Installed on this device</p>
-          )}
-          <p className="text-xs text-slate-500 text-center leading-relaxed">{helpText}</p>
-          {iosHint && <IosInstallHint onClose={dismissIosHint} />}
-        </form>
+          </form>
+        ) : (
+          <form
+            onSubmit={login}
+            className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+          >
+            <div className="flex flex-col items-center gap-4 mb-1">
+              <div>
+                <Logo size="md" variant="dark" />
+              </div>
+              <div className="text-center">
+                <h1
+                  className="text-2xl font-bold text-white tracking-tight"
+                  style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+                >
+                  {title}
+                </h1>
+                <p className="text-sm text-slate-400 mt-1">{subtitle}</p>
+              </div>
+            </div>
+            {error && (
+              <div className="text-sm text-rose-200 bg-rose-500/15 border border-rose-400/20 rounded-xl px-3 py-2">
+                {error}
+              </div>
+            )}
+            <label className="block text-sm font-medium text-slate-300">
+              Account number
+              <input
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+                name="portal-account"
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                required
+                autoComplete="username"
+                placeholder="e.g. ACC-00123"
+              />
+            </label>
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label className="text-sm font-medium text-slate-300" htmlFor="portal-password">
+                  Password
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotAccount(account);
+                    setForgotPhone('');
+                    setForgotMsg('');
+                    setForgotOk(false);
+                    setForgotOpen(true);
+                  }}
+                  className="text-xs font-medium text-orange-300 hover:text-orange-200 shrink-0 py-1"
+                >
+                  Forgot password?
+                </button>
+              </div>
+              <input
+                id="portal-password"
+                className="w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+                name="portal-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+                placeholder="Your portal password"
+              />
+            </div>
+            <p className="text-[11px] text-slate-500 -mt-2">
+              First time? Use your phone number, then you will set a new password.
+            </p>
+            <button
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
+              disabled={busy}
+            >
+              {busy ? 'Signing in…' : 'Sign in'}
+            </button>
+            {showInstallButton && (
+              <button
+                type="button"
+                onClick={() => void install()}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-semibold py-3 transition"
+              >
+                <Download size={18} /> Install app
+              </button>
+            )}
+            {installed && (
+              <p className="text-xs text-emerald-300/90 text-center">Installed on this device</p>
+            )}
+            <p className="text-xs text-slate-500 text-center leading-relaxed">{helpText}</p>
+            {iosHint && <IosInstallHint onClose={dismissIosHint} />}
+          </form>
+        )}
       </div>
     );
   }
@@ -503,7 +621,7 @@ export default function ClientPortal() {
               Set your password
             </h1>
             <p className="text-sm text-slate-400 leading-relaxed">
-              You signed in with the default password (your phone number). Choose a new password to continue.
+              You signed in with a temporary or default password. Choose a new password to continue.
             </p>
             {c?.accountNumber && (
               <p className="text-xs text-slate-500 font-mono">Account {c.accountNumber}</p>

@@ -14,6 +14,7 @@ import {
 } from './outageMonitor.js';
 import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
 import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
+import { notifyClientChannels, phonesMatch } from './notify.js';
 
 const PLAN_CYCLE_DAYS = 30;
 
@@ -159,6 +160,49 @@ function portalPasswordMatches(plain: string, hash: string | null | undefined): 
   } catch {
     return false;
   }
+}
+
+/** Readable temporary portal password (SMS-friendly). */
+function generateTempPortalPassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  let out = '';
+  for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+/** Simple per-account rate limit for forgot-password SMS. */
+const portalForgotRate = new Map<string, number>();
+function portalForgotAllowed(key: string, minIntervalMs = 60_000): boolean {
+  const now = Date.now();
+  const prev = portalForgotRate.get(key) || 0;
+  if (now - prev < minIntervalMs) return false;
+  portalForgotRate.set(key, now);
+  // Opportunistic cleanup
+  if (portalForgotRate.size > 2000) {
+    for (const [k, t] of portalForgotRate) {
+      if (now - t > 3600_000) portalForgotRate.delete(k);
+    }
+  }
+  return true;
+}
+
+function findPortalUserByAccount(account: string) {
+  const acct = String(account || '').trim();
+  if (!acct) return null;
+  return db
+    .prepare(
+      `SELECT * FROM pppoe_users
+       WHERE portal_enabled = 1
+         AND (
+           TRIM(COALESCE(account_number, '')) = ?
+           OR TRIM(COALESCE(username, '')) = ?
+           OR LOWER(TRIM(COALESCE(account_number, ''))) = LOWER(?)
+           OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
+         )
+       LIMIT 1`
+    )
+    .get(acct, acct, acct, acct) as any;
 }
 
 function backfillDefaultPortalCredentials() {
@@ -699,7 +743,7 @@ function portalSettingsRow() {
     subtitle: row?.portal_subtitle || '',
     helpText:
       row?.portal_help_text ||
-      'Sign in with your account number and phone number (default password). You will set your own password after the first login.',
+      'Sign in with your account number and password. First time: use your phone number, then set a new password. Forgot it? Request a temporary password by SMS.',
     welcomeText: row?.portal_welcome_text || '',
     showBalance: row?.portal_show_balance !== 0,
     showInvoices: row?.portal_show_invoices !== 0,
@@ -1201,19 +1245,7 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
   if (!account || !password) {
     return res.status(400).json({ error: 'Account number and password required' });
   }
-  const user = db
-    .prepare(
-      `SELECT * FROM pppoe_users
-       WHERE portal_enabled = 1
-         AND (
-           TRIM(COALESCE(account_number, '')) = ?
-           OR TRIM(COALESCE(username, '')) = ?
-           OR LOWER(TRIM(COALESCE(account_number, ''))) = LOWER(?)
-           OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
-         )
-       LIMIT 1`
-    )
-    .get(account, account, account, account) as any;
+  const user = findPortalUserByAccount(account);
   if (!user?.portal_pin_hash || !portalPasswordMatches(password, user.portal_pin_hash)) {
     return res.status(401).json({ error: 'Invalid account or password' });
   }
@@ -1239,6 +1271,89 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
       price: user.price,
     },
   });
+});
+
+/**
+ * Forgot password — SMS a temporary password to the mobile number on the account.
+ * Requires account number + matching contact/phone. Forces password change after login.
+ */
+publicPortalRouter.post('/public/portal/forgot-password', async (req, res) => {
+  const account = String(req.body?.account || '').trim();
+  const contact = String(req.body?.contact || req.body?.phone || req.body?.mobile || '').trim();
+  if (!account || !contact) {
+    return res.status(400).json({ error: 'Account number and mobile number are required' });
+  }
+
+  const rateKey = `${account.toLowerCase()}|${contact.replace(/\D/g, '')}`;
+  if (!portalForgotAllowed(rateKey)) {
+    return res.status(429).json({ error: 'Please wait a minute before requesting another reset SMS' });
+  }
+
+  const user = findPortalUserByAccount(account);
+  // Generic failures avoid account enumeration where possible.
+  if (!user || !phonesMatch(user.contact, contact)) {
+    return res.status(400).json({
+      error: 'No portal account matched that account number and mobile number',
+    });
+  }
+  if (!String(user.contact || '').trim()) {
+    return res.status(400).json({ error: 'No mobile number on file — contact your ISP' });
+  }
+
+  const prevHash = user.portal_pin_hash;
+  const prevMust = Number(user.portal_must_change_password) === 1 ? 1 : 0;
+  const tempPassword = generateTempPortalPassword();
+  const hash = bcrypt.hashSync(tempPassword, 10);
+  db.prepare(
+    `UPDATE pppoe_users
+     SET portal_pin_hash = ?, portal_must_change_password = 1, portal_enabled = 1
+     WHERE id = ?`
+  ).run(hash, user.id);
+
+  const name = user.customer_name || user.username || 'subscriber';
+  const acct = user.account_number || account;
+  const subject = 'Portal temporary password';
+  const message =
+    `Hi ${name}, your temporary subscriber portal password is: ${tempPassword}. ` +
+    `Account: ${acct}. Sign in at /portal and set a new password right away.`;
+
+  const revert = () => {
+    db.prepare(
+      `UPDATE pppoe_users SET portal_pin_hash = ?, portal_must_change_password = ? WHERE id = ?`
+    ).run(prevHash, prevMust, user.id);
+  };
+
+  try {
+    const results = await notifyClientChannels(user, ['sms'], subject, message, 'portal_password_reset');
+    const smsResult = results.find((r) => r.startsWith('sms:')) || '';
+    const status = smsResult.split(':')[1] || '';
+    if (status === 'sent') {
+      db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(user.id);
+      return res.json({
+        ok: true,
+        sent: true,
+        message: 'A temporary password was sent to your mobile number. Sign in and set a new password.',
+      });
+    }
+    revert();
+    if (status === 'simulated') {
+      return res.status(503).json({
+        error:
+          'SMS is not configured on this panel. Ask your ISP to enable SMS notifications, or request a reset from support.',
+        sent: false,
+      });
+    }
+    return res.status(502).json({
+      error: 'Could not send the SMS. Try again later or contact your ISP.',
+      sent: false,
+    });
+  } catch (e: any) {
+    revert();
+    return res.status(502).json({
+      error: e?.message || 'Could not send the SMS. Try again later or contact your ISP.',
+      sent: false,
+    });
+  }
 });
 
 /** First login / forced password change — overwrites the default phone password. */

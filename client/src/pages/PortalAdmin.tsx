@@ -39,7 +39,7 @@ const DEFAULT_SETTINGS: PortalSettings = {
   title: 'Subscriber Portal',
   subtitle: '',
   helpText:
-    'Sign in with your account number and phone number (default password). You will set your own password after the first login.',
+    'Sign in with your account number and password. First time: use your phone number, then set a new password. Forgot it? Request a temporary password by SMS.',
   welcomeText: '',
   showBalance: true,
   showInvoices: true,
