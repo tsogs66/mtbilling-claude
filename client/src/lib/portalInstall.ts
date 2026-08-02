@@ -27,8 +27,8 @@ export function usePortalManifest() {
     const html = document.documentElement;
     html.classList.add('portal-route');
 
-    // Suspend panel themes (dark/isptech/blueglass…) so their slate/white remaps
-    // cannot wash out portal light sections on mobile.
+    // Suspend panel themes (dark/isptech/blueglass…) so their remaps
+    // cannot override the portal matrix glass theme.
     const prevDataTheme = html.getAttribute('data-theme');
     html.removeAttribute('data-theme');
 
@@ -43,10 +43,10 @@ export function usePortalManifest() {
     const prev = link.getAttribute('href');
     link.setAttribute('href', '/portal-manifest.webmanifest');
     const prevScheme = html.style.getPropertyValue('color-scheme');
-    html.style.setProperty('color-scheme', 'light');
+    html.style.setProperty('color-scheme', 'dark');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     const prevTheme = metaTheme?.getAttribute('content') || '';
-    metaTheme?.setAttribute('content', '#020617');
+    metaTheme?.setAttribute('content', '#020806');
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/portal-sw.js').catch(() => undefined);
