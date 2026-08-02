@@ -1564,7 +1564,7 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
     .reduce((s, i) => s + (Number(i.amount) - Number(i.amount_paid)), 0);
   const company = db
     .prepare(
-      `SELECT name, phone, email, address, gcash_number, maya_number, payment_instructions
+      `SELECT name, phone, email, address, logo, gcash_number, maya_number, payment_instructions
        FROM company WHERE id = 1`
     )
     .get();

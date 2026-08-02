@@ -9,7 +9,8 @@ import { getApiBase } from '../config';
 import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
-import { PRODUCT_TITLE } from '../branding';
+import { DEFAULT_LOGO, PRODUCT_TITLE } from '../branding';
+import { useCompany } from '../context/CompanyContext';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
 import { subscribePortalLive } from '../lib/portalLive';
 import { openInvoicePrint } from '../lib/invoicePrint';
@@ -84,6 +85,7 @@ function statusTone(status?: string) {
 }
 
 export default function ClientPortal() {
+  const { company: brandCompany } = useCompany();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
@@ -568,6 +570,7 @@ export default function ClientPortal() {
   const paymentLink: PaymentLink | null = me.paymentLink || null;
   const balance = Number(me.balance) || 0;
   const company = me.company || {};
+  const portalLogo = company.logo || brandCompany?.logo || DEFAULT_LOGO;
   // Always allow sending payment details — creates a Payment Links entry if none exists (reverse of admin create).
   const canPay = showBalance;
   const pendingPlan = me.planChangeRequest || null;
@@ -681,8 +684,8 @@ export default function ClientPortal() {
       <div className="subscriber-portal-hero relative z-[1]">
         <header className="max-w-3xl mx-auto px-4 pt-4 sm:pt-5 pb-6">
           <div className="portal-glass portal-glass-strong rounded-2xl p-4 sm:p-5">
-            {/* Top row: account (left) · brand (right) — no action buttons here to avoid mobile overlap */}
-            <div className="flex items-start justify-between gap-3 sm:gap-4">
+            {/* Top row: account (left) · logo + brand (right). Logo height matches left column. */}
+            <div className="flex items-stretch justify-between gap-3 sm:gap-4">
               <div className="min-w-0 flex-1 pr-1">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-orange-300 font-semibold">
                   Subscriber portal
@@ -697,13 +700,24 @@ export default function ClientPortal() {
                   </span>
                 </div>
               </div>
-              <div className="portal-brand-glow shrink-0 flex flex-col items-end text-right max-w-[46%] sm:max-w-none">
-                <Logo size="sm" variant="dark" showText={false} />
-                <div className="mt-1.5 text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
-                  {brandTitle}
+              <div className="portal-brand-glow shrink-0 flex items-center gap-2 sm:gap-2.5 self-stretch max-w-[52%] sm:max-w-[50%]">
+                <div
+                  className="h-full aspect-square max-h-[6.5rem] sm:max-h-[7.5rem] rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
+                  title={brandTitle}
+                >
+                  <img
+                    src={portalLogo}
+                    alt={company.name || brandCompany?.name || brandTitle}
+                    className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
+                  />
                 </div>
-                <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
-                  {brandSubtitle}
+                <div className="min-w-0 text-left">
+                  <div className="text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
+                    {brandTitle}
+                  </div>
+                  <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
+                    {brandSubtitle}
+                  </div>
                 </div>
               </div>
             </div>
