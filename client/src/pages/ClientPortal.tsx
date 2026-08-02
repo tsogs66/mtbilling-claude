@@ -815,56 +815,60 @@ export default function ClientPortal() {
             )}
           </div>
 
-          <div className="mt-3 sm:mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {showBalance && (
-              <div className="portal-glass rounded-2xl p-4 flex flex-col">
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="flex items-center gap-2 text-portal-muted text-[11px] uppercase tracking-wider font-semibold">
-                    <Wallet size={13} className="text-orange-300" /> Balance due
-                  </div>
-                  {paymentLink?.status && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-white capitalize ring-1 ring-white/15">
-                      {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
-                    </span>
-                  )}
+          {showBalance && (
+            <div className="mt-3 sm:mt-4 portal-glass rounded-2xl p-4 flex flex-col">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="flex items-center gap-2 text-portal-muted text-[11px] uppercase tracking-wider font-semibold">
+                  <Wallet size={13} className="text-orange-300" /> Balance due
                 </div>
-                <div
-                  className={`text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
-                >
-                  {peso(paymentLink?.amount || balance)}
-                </div>
-                {paymentLink?.expiresAt && paymentLink.status === 'pending' && (
-                  <div className="text-xs text-portal-dim mt-1">
+                {paymentLink?.status && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-white capitalize ring-1 ring-white/15">
+                    {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
+                  </span>
+                )}
+              </div>
+              <div
+                className={`text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
+              >
+                {peso(paymentLink?.amount || balance)}
+              </div>
+              <div className="text-sm text-portal-muted mt-0.5">
+                {peso(c.price)} · due {c.due || '—'}
+              </div>
+              {canPay && paymentLink?.expiresAt && paymentLink.status === 'pending' ? (
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug">
                     Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
                   </div>
-                )}
-                {canPay && (
                   <button
                     type="button"
                     onClick={openPayment}
                     disabled={payBusy}
-                    className="portal-cta mt-3 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 min-h-[48px] text-sm w-full"
+                    className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 min-h-[44px] text-sm shrink-0"
                   >
                     {payBusy ? 'Opening…' : payCtaLabel}
                     <ExternalLink size={15} />
                   </button>
-                )}
-                {canPay && !paymentLink && (
-                  <p className="mt-2 text-xs text-portal-dim leading-relaxed">
-                    Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
-                  </p>
-                )}
-                {payMsg && <p className="mt-2 text-sm text-rose-300 font-medium">{payMsg}</p>}
-              </div>
-            )}
-            <div className={`portal-glass rounded-2xl p-4 ${showBalance ? '' : 'sm:col-span-2'}`}>
-              <div className="text-[11px] text-portal-muted uppercase tracking-wider mb-1 font-semibold">Current plan</div>
-              <div className="font-semibold text-white text-base truncate">{c.plan || '—'}</div>
-              <div className="text-sm text-portal-muted mt-0.5">
-                {peso(c.price)} · due {c.due || '—'}
-              </div>
+                </div>
+              ) : canPay ? (
+                <button
+                  type="button"
+                  onClick={openPayment}
+                  disabled={payBusy}
+                  className="portal-cta mt-3 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 min-h-[48px] text-sm w-full"
+                >
+                  {payBusy ? 'Opening…' : payCtaLabel}
+                  <ExternalLink size={15} />
+                </button>
+              ) : null}
+              {canPay && !paymentLink && (
+                <p className="mt-2 text-xs text-portal-dim leading-relaxed">
+                  Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
+                </p>
+              )}
+              {payMsg && <p className="mt-2 text-sm text-rose-300 font-medium">{payMsg}</p>}
             </div>
-          </div>
+          )}
         </header>
       </div>
 
