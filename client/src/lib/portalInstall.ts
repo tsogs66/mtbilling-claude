@@ -43,10 +43,10 @@ export function usePortalManifest() {
     const prev = link.getAttribute('href');
     link.setAttribute('href', '/portal-manifest.webmanifest');
     const prevScheme = html.style.getPropertyValue('color-scheme');
-    html.style.setProperty('color-scheme', 'light');
+    html.style.setProperty('color-scheme', 'dark');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     const prevTheme = metaTheme?.getAttribute('content') || '';
-    metaTheme?.setAttribute('content', '#020617');
+    metaTheme?.setAttribute('content', '#020806');
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/portal-sw.js').catch(() => undefined);
