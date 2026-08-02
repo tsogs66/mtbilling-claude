@@ -395,7 +395,7 @@ export default function ClientPortal() {
         {forgotOpen ? (
           <form
             onSubmit={submitForgotPassword}
-            className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+            className="relative w-full max-w-md rounded-3xl border border-white/15 bg-white/[0.08] backdrop-blur-xl shadow-2xl p-5 sm:p-8 space-y-4 sm:space-y-5"
           >
             <div className="text-center space-y-2">
               <Logo size="md" variant="dark" />
@@ -405,7 +405,7 @@ export default function ClientPortal() {
               >
                 Reset password
               </h1>
-              <p className="text-sm text-slate-400 leading-relaxed">
+              <p className="text-sm text-slate-300 leading-relaxed">
                 Enter your account number and the mobile number on your account. We will SMS a temporary password.
               </p>
             </div>
@@ -464,9 +464,9 @@ export default function ClientPortal() {
         ) : (
           <form
             onSubmit={login}
-            className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+            className="relative w-full max-w-md rounded-3xl border border-white/15 bg-white/[0.08] backdrop-blur-xl shadow-2xl p-5 sm:p-8 space-y-4 sm:space-y-5"
           >
-            <div className="flex flex-col items-center gap-4 mb-1">
+            <div className="flex flex-col items-center gap-3 sm:gap-4 mb-1">
               <div>
                 <Logo size="md" variant="dark" />
               </div>
@@ -477,7 +477,7 @@ export default function ClientPortal() {
                 >
                   {title}
                 </h1>
-                <p className="text-sm text-slate-400 mt-1">{subtitle}</p>
+                <p className="text-sm text-slate-300 mt-1">{subtitle}</p>
               </div>
             </div>
             {error && (
@@ -528,11 +528,11 @@ export default function ClientPortal() {
                 placeholder="Your portal password"
               />
             </div>
-            <p className="text-[11px] text-slate-500 -mt-2">
+            <p className="text-xs text-slate-300 -mt-1 leading-relaxed">
               First time? Use your phone number, then you will set a new password.
             </p>
             <button
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3.5 min-h-[48px] transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
               disabled={busy}
             >
               {busy ? 'Signing in…' : 'Sign in'}
@@ -541,15 +541,15 @@ export default function ClientPortal() {
               <button
                 type="button"
                 onClick={() => void install()}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-semibold py-3 transition"
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 hover:bg-white/15 text-white font-semibold py-3.5 min-h-[48px] transition"
               >
                 <Download size={18} /> Install app
               </button>
             )}
             {installed && (
-              <p className="text-xs text-emerald-300/90 text-center">Installed on this device</p>
+              <p className="text-xs text-emerald-300 text-center">Installed on this device</p>
             )}
-            <p className="text-xs text-slate-500 text-center leading-relaxed">{helpText}</p>
+            <p className="text-xs text-slate-300 text-center leading-relaxed">{helpText}</p>
             {iosHint && <IosInstallHint onClose={dismissIosHint} />}
           </form>
         )}
@@ -698,23 +698,23 @@ export default function ClientPortal() {
               'radial-gradient(ellipse 70% 80% at 0% 0%, rgba(249,115,22,0.35), transparent 55%), radial-gradient(ellipse 50% 60% at 100% 30%, rgba(14,165,233,0.2), transparent 50%)',
           }}
         />
-        <header className="relative max-w-3xl mx-auto px-4 pt-5 pb-8">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+        <header className="relative max-w-3xl mx-auto px-4 pt-4 sm:pt-5 pb-8">
+          <div className="flex items-start justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <Logo size="sm" variant="dark" />
               <div className="min-w-0">
                 <div
-                  className="text-[11px] uppercase tracking-[0.22em] text-orange-300/90 font-semibold"
+                  className="text-[11px] uppercase tracking-[0.18em] sm:tracking-[0.22em] text-orange-300 font-semibold"
                 >
                   {title}
                 </div>
                 <h1
-                  className="text-xl sm:text-2xl font-bold tracking-tight truncate"
+                  className="text-lg sm:text-2xl font-bold tracking-tight truncate text-white"
                   style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
                 >
                   {c.name}
                 </h1>
-                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-slate-400">
+                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-slate-300">
                   <span className="font-mono">{c.accountNumber || '—'}</span>
                   <span className={`inline-flex px-2 py-0.5 rounded-full ring-1 capitalize ${statusTone(c.status)}`}>
                     {c.status || '—'}
@@ -722,22 +722,24 @@ export default function ClientPortal() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 shrink-0">
               {showInstallButton && (
                 <button
                   type="button"
                   onClick={() => void install()}
-                  className="inline-flex items-center gap-1.5 text-sm text-orange-200 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 bg-orange-500/15 hover:bg-orange-500/25 ring-1 ring-orange-400/30 transition"
+                  className="inline-flex items-center justify-center gap-1.5 text-sm text-orange-200 hover:text-white shrink-0 rounded-lg px-2.5 py-2 min-h-[40px] bg-orange-500/20 hover:bg-orange-500/30 ring-1 ring-orange-400/40 transition"
                   title="Install Subscriber Portal on this device"
                 >
-                  <Download size={16} /> Install
+                  <Download size={16} />
+                  <span className="hidden xs:inline sm:inline">Install</span>
                 </button>
               )}
               <button
                 onClick={logout}
-                className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white shrink-0 rounded-lg px-2.5 py-1.5 hover:bg-white/5 transition"
+                className="inline-flex items-center justify-center gap-1.5 text-sm text-slate-200 hover:text-white shrink-0 rounded-lg px-2.5 py-2 min-h-[40px] bg-white/10 hover:bg-white/15 ring-1 ring-white/15 transition"
               >
-                <LogOut size={16} /> Sign out
+                <LogOut size={16} />
+                <span>Sign out</span>
               </button>
             </div>
           </div>
@@ -762,32 +764,32 @@ export default function ClientPortal() {
           )}
 
           {s.welcomeText && (
-            <p className="relative mt-5 text-sm text-slate-300/95 leading-relaxed border-l-2 border-orange-400/50 pl-3">
+            <p className="relative mt-5 text-sm text-slate-300 leading-relaxed border-l-2 border-orange-400/60 pl-3">
               {s.welcomeText}
             </p>
           )}
 
-          <div className="relative mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="relative mt-5 sm:mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {showBalance && (
-              <div className="rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm flex flex-col">
+              <div className="rounded-2xl bg-white/10 border border-white/15 p-4 backdrop-blur-sm flex flex-col">
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="flex items-center gap-2 text-slate-400 text-[11px] uppercase tracking-wider">
+                  <div className="flex items-center gap-2 text-slate-300 text-[11px] uppercase tracking-wider font-semibold">
                     <Wallet size={13} /> Balance due
                   </div>
                   {paymentLink?.status && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-slate-300 capitalize">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/15 text-white capitalize">
                       {paymentLink.status === 'submitted' ? 'Awaiting review' : paymentLink.status}
                     </span>
                   )}
                 </div>
                 <div
-                  className={`text-2xl sm:text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
+                  className={`text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
                   style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
                 >
                   {peso(paymentLink?.amount || balance)}
                 </div>
                 {paymentLink?.expiresAt && paymentLink.status === 'pending' && (
-                  <div className="text-[11px] text-slate-500 mt-1">
+                  <div className="text-xs text-slate-300 mt-1">
                     Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
                   </div>
                 )}
@@ -796,24 +798,24 @@ export default function ClientPortal() {
                     type="button"
                     onClick={openPayment}
                     disabled={payBusy}
-                    className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold px-4 py-2.5 text-sm shadow-lg shadow-orange-500/25 disabled:opacity-60 transition w-full"
+                    className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold px-4 py-3 min-h-[48px] text-sm shadow-lg shadow-orange-500/25 disabled:opacity-60 transition w-full"
                   >
                     {payBusy ? 'Opening…' : payCtaLabel}
                     <ExternalLink size={15} />
                   </button>
                 )}
                 {canPay && !paymentLink && (
-                  <p className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+                  <p className="mt-2 text-xs text-slate-300 leading-relaxed">
                     Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
                   </p>
                 )}
-                {payMsg && <p className="mt-2 text-xs text-rose-300">{payMsg}</p>}
+                {payMsg && <p className="mt-2 text-sm text-rose-300 font-medium">{payMsg}</p>}
               </div>
             )}
-            <div className={`rounded-2xl bg-white/5 border border-white/10 p-4 backdrop-blur-sm ${showBalance ? '' : 'sm:col-span-2'}`}>
-              <div className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">Current plan</div>
-              <div className="font-semibold text-white truncate">{c.plan || '—'}</div>
-              <div className="text-sm text-slate-400 mt-0.5">
+            <div className={`rounded-2xl bg-white/10 border border-white/15 p-4 backdrop-blur-sm ${showBalance ? '' : 'sm:col-span-2'}`}>
+              <div className="text-[11px] text-slate-300 uppercase tracking-wider mb-1 font-semibold">Current plan</div>
+              <div className="font-semibold text-white text-base truncate">{c.plan || '—'}</div>
+              <div className="text-sm text-slate-300 mt-0.5">
                 {peso(c.price)} · due {c.due || '—'}
               </div>
             </div>
@@ -821,7 +823,7 @@ export default function ClientPortal() {
         </header>
       </div>
 
-      <main className="portal-light relative max-w-3xl mx-auto px-4 -mt-4 pb-10 space-y-4">
+      <main className="portal-light relative max-w-3xl mx-auto px-3 sm:px-4 -mt-4 pb-12 space-y-3 sm:space-y-4 flex-1 w-full">
         {plans.length > 0 && (
           <section className="rounded-2xl border border-slate-200/80 bg-white/70 backdrop-blur-md p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3 mb-1">
@@ -829,7 +831,7 @@ export default function ClientPortal() {
                 <h2 className="font-semibold text-slate-900 flex items-center gap-2" style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}>
                   <Zap size={16} className="text-orange-500" /> Change plan
                 </h2>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
                   Request a new plan — your ISP must accept it. Mid-cycle changes are prorated (30-day month).
                 </p>
               </div>
@@ -896,14 +898,63 @@ export default function ClientPortal() {
         )}
 
         {showInvoices && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-3">
-              <FileText size={16} className="text-slate-500" /> Statement of account
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-900 flex items-center gap-2 mb-3 text-base">
+              <FileText size={16} className="text-slate-600" /> Statement of account
             </h2>
-            <div className="overflow-x-auto -mx-1">
+            {/* Mobile: stacked cards (table is hard to read on phones) */}
+            <div className="sm:hidden space-y-2.5">
+              {(me.invoices || [])
+                .filter((inv: any) => String(inv.status || '') !== 'void')
+                .map((inv: any) => (
+                  <div
+                    key={inv.id}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-mono text-sm font-semibold text-slate-900 truncate">
+                          {inv.number}
+                        </div>
+                        <div className="text-xs text-slate-600 mt-0.5">
+                          Due {inv.due_date || '—'} ·{' '}
+                          <span className="capitalize font-medium text-slate-700">{inv.status}</span>
+                        </div>
+                      </div>
+                      <div className="text-base font-bold tabular-nums text-slate-900 shrink-0">
+                        {peso(inv.amount - inv.amount_paid)}
+                      </div>
+                    </div>
+                    <div className="mt-2.5 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center gap-1.5 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg py-2.5 min-h-[44px] hover:border-orange-300 hover:text-orange-700 transition disabled:opacity-50"
+                        disabled={invoiceBusy === inv.id}
+                        onClick={() => void viewInvoiceDetail(inv.id)}
+                      >
+                        {invoiceBusy === inv.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center gap-1.5 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg py-2.5 min-h-[44px] hover:border-orange-300 hover:text-orange-700 transition disabled:opacity-50"
+                        disabled={invoiceBusy === inv.id}
+                        onClick={() => void printInvoice(inv.id)}
+                      >
+                        <Printer size={14} />
+                        Print
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              {!me.invoices?.filter((inv: any) => String(inv.status || '') !== 'void').length && (
+                <p className="py-8 text-center text-slate-600 text-sm">No invoices yet.</p>
+              )}
+            </div>
+            <div className="hidden sm:block overflow-x-auto -mx-1">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-slate-600 border-b border-slate-200">
                     <th className="py-2 px-1 font-semibold">Invoice</th>
                     <th className="py-2 px-1 font-semibold">Due</th>
                     <th className="py-2 px-1 font-semibold text-right">Balance</th>
@@ -915,19 +966,19 @@ export default function ClientPortal() {
                   {(me.invoices || [])
                     .filter((inv: any) => String(inv.status || '') !== 'void')
                     .map((inv: any) => (
-                    <tr key={inv.id} className="border-b border-slate-50 last:border-0">
-                      <td className="py-2.5 px-1 font-mono text-xs text-slate-700">{inv.number}</td>
-                      <td className="py-2.5 px-1 text-slate-600">{inv.due_date || '—'}</td>
-                      <td className="py-2.5 px-1 text-right tabular-nums font-medium text-slate-800">
+                    <tr key={inv.id} className="border-b border-slate-100 last:border-0">
+                      <td className="py-2.5 px-1 font-mono text-xs text-slate-800">{inv.number}</td>
+                      <td className="py-2.5 px-1 text-slate-700">{inv.due_date || '—'}</td>
+                      <td className="py-2.5 px-1 text-right tabular-nums font-semibold text-slate-900">
                         {peso(inv.amount - inv.amount_paid)}
                       </td>
                       <td className="py-2.5 px-1">
-                        <span className="capitalize text-xs font-medium text-slate-600">{inv.status}</span>
+                        <span className="capitalize text-xs font-semibold text-slate-700">{inv.status}</span>
                       </td>
                       <td className="py-2.5 px-1 text-right whitespace-nowrap">
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-orange-600 px-2 py-1 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-orange-700 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
                           disabled={invoiceBusy === inv.id}
                           onClick={() => void viewInvoiceDetail(inv.id)}
                           title="View invoice"
@@ -937,7 +988,7 @@ export default function ClientPortal() {
                         </button>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-orange-600 px-2 py-1 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-orange-700 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition disabled:opacity-50"
                           disabled={invoiceBusy === inv.id}
                           onClick={() => void printInvoice(inv.id)}
                           title="Print invoice"
@@ -950,7 +1001,7 @@ export default function ClientPortal() {
                   ))}
                   {!me.invoices?.filter((inv: any) => String(inv.status || '') !== 'void').length && (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-400">No invoices yet.</td>
+                      <td colSpan={5} className="py-8 text-center text-slate-600">No invoices yet.</td>
                     </tr>
                   )}
                 </tbody>
@@ -960,20 +1011,20 @@ export default function ClientPortal() {
         )}
 
         {showTickets && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-semibold text-slate-800 flex items-center gap-2 mb-1">
-              <LifeBuoy size={16} className="text-slate-500" /> Request support
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-900 flex items-center gap-2 mb-1 text-base">
+              <LifeBuoy size={16} className="text-slate-600" /> Request support
             </h2>
-            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+            <p className="text-sm text-slate-600 mb-3 leading-relaxed">
               Select apps or services that are down (optional), then describe the issue. Service outages also appear on the ISP Outage Monitor.
             </p>
             {outageServices.length > 0 && (
-              <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/90 p-3">
+              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                     Affected services
                     {selectedServices.length > 0 && (
-                      <span className="ml-1 normal-case font-medium text-orange-600">
+                      <span className="ml-1 normal-case font-semibold text-orange-700">
                         ({selectedServices.length} selected)
                       </span>
                     )}
@@ -981,7 +1032,7 @@ export default function ClientPortal() {
                   {selectedServices.length > 0 && (
                     <button
                       type="button"
-                      className="text-xs text-slate-500 hover:text-slate-800"
+                      className="text-xs font-semibold text-slate-600 hover:text-slate-900 py-1"
                       onClick={() => setSelectedServices([])}
                     >
                       Clear
@@ -989,7 +1040,7 @@ export default function ClientPortal() {
                   )}
                 </div>
                 <input
-                  className="portal-field w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
+                  className="portal-field w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-slate-900 mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
                   placeholder="Filter services (GCash, Facebook…)"
                   value={serviceFilter}
                   onChange={(e) => setServiceFilter(e.target.value)}
@@ -997,7 +1048,7 @@ export default function ClientPortal() {
                 <div className="max-h-52 overflow-y-auto space-y-3 pr-1">
                   {servicesByCategory.map(([cat, items]) => (
                     <div key={cat}>
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">{cat}</div>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1.5">{cat}</div>
                       <div className="flex flex-wrap gap-1.5">
                         {items.map((svc) => {
                           const on = selectedServices.includes(svc.slug);
@@ -1006,10 +1057,10 @@ export default function ClientPortal() {
                               key={svc.slug}
                               type="button"
                               onClick={() => toggleService(svc.slug)}
-                              className={`text-xs px-2.5 py-1 rounded-lg border transition ${
+                              className={`text-xs px-2.5 py-2 min-h-[36px] rounded-lg border transition ${
                                 on
-                                  ? 'bg-rose-50 border-rose-300 text-rose-800 font-semibold'
-                                  : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                                  ? 'bg-rose-50 border-rose-300 text-rose-900 font-semibold'
+                                  : 'bg-white border-slate-200 text-slate-700 hover:border-slate-400'
                               }`}
                             >
                               {svc.name}
@@ -1020,31 +1071,31 @@ export default function ClientPortal() {
                     </div>
                   ))}
                   {!servicesByCategory.length && (
-                    <p className="text-xs text-slate-400 py-2">No services match that filter.</p>
+                    <p className="text-xs text-slate-600 py-2">No services match that filter.</p>
                   )}
                 </div>
               </div>
             )}
             <textarea
-              className="portal-field w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 min-h-[90px] mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
+              className="portal-field w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-900 min-h-[100px] mb-2 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
               placeholder="Describe the issue (no signal, slow, relocation…)"
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
             />
             <button
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-2.5 text-sm disabled:opacity-50 transition"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold px-4 py-3 min-h-[48px] text-sm disabled:opacity-50 transition"
               disabled={!ticket.trim() && !selectedServices.length}
               onClick={submitTicket}
             >
               Submit report <ChevronRight size={16} />
             </button>
-            {ticketMsg && <p className="text-sm text-slate-600 mt-2">{ticketMsg}</p>}
+            {ticketMsg && <p className="text-sm text-slate-700 font-medium mt-2">{ticketMsg}</p>}
             {(me.openJobs || []).length > 0 && (
               <ul className="mt-4 space-y-2 text-sm">
                 {me.openJobs.map((j: any) => (
-                  <li key={j.id} className="flex justify-between border-t border-slate-50 pt-2">
-                    <span className="font-mono text-xs text-slate-700">{j.number}</span>
-                    <span className="capitalize text-slate-500">{j.status}</span>
+                  <li key={j.id} className="flex justify-between border-t border-slate-200 pt-2">
+                    <span className="font-mono text-xs text-slate-800 font-semibold">{j.number}</span>
+                    <span className="capitalize text-slate-600 font-medium">{j.status}</span>
                   </li>
                 ))}
               </ul>
@@ -1301,7 +1352,7 @@ function IosInstallHint({ onClose }: { onClose: () => void }) {
             >
               Install on iPhone
             </h3>
-            <p className="text-sm text-slate-500 mt-1">Add Subscriber Portal to your Home Screen.</p>
+            <p className="text-sm text-slate-600 mt-1">Add Subscriber Portal to your Home Screen.</p>
           </div>
           <button type="button" className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" onClick={onClose}>
             <X size={18} />
