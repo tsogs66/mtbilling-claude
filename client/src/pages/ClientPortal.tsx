@@ -388,7 +388,6 @@ export default function ClientPortal() {
   const brandTitle = 'PANORTH';
   const brandSubtitle = 'Internet Solutions';
   const title = pageSettings.title?.trim() || brandTitle;
-  const subtitle = pageSettings.subtitle?.trim() || brandSubtitle;
   const helpText =
     pageSettings.helpText ||
     'Sign in with your account number and password. First time: use your phone number, then set a new password.';
