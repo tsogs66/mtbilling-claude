@@ -1,5 +1,5 @@
 /* Subscriber Portal service worker — enables Add to Home Screen / install. */
-const CACHE = 'mt-portal-shell-v1';
+const CACHE = 'mt-portal-shell-v2-panorth';
 const SHELL = ['/portal', '/portal-manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png', '/logo.png'];
 
 self.addEventListener('install', (event) => {
