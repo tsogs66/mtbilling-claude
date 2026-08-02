@@ -1023,6 +1023,8 @@ export function createPaymentLink(opts: {
   amount?: number | null;
   ttlHours?: number;
   baseUrl?: string;
+  /** admin = panel create; portal = subscriber initiated; system = reminders */
+  createdBy?: 'admin' | 'portal' | 'system';
 }) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
   if (!user) throw new Error('User not found');
@@ -1033,11 +1035,15 @@ export function createPaymentLink(opts: {
   // Default validity: 15 days (360 hours)
   const ttl = Math.max(1, Math.floor(Number(opts.ttlHours) || 15 * 24));
   const expiresAt = new Date(Date.now() + ttl * 3600000).toISOString();
+  const createdBy =
+    opts.createdBy === 'portal' || opts.createdBy === 'system' || opts.createdBy === 'admin'
+      ? opts.createdBy
+      : 'admin';
 
   const info = db.prepare(
-    `INSERT INTO payment_links (pppoe_user_id, token, amount, months, status, expires_at)
-     VALUES (?, ?, ?, ?, 'pending', ?)`
-  ).run(opts.pppoeUserId, token, amount, months, expiresAt);
+    `INSERT INTO payment_links (pppoe_user_id, token, amount, months, status, expires_at, created_by)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?)`
+  ).run(opts.pppoeUserId, token, amount, months, expiresAt, createdBy);
 
   const path = `/pay/${token}`;
   const resolved = resolvePublicBaseUrl(opts.baseUrl);
@@ -1053,6 +1059,7 @@ export function createPaymentLink(opts: {
     amount,
     months,
     expiresAt,
+    createdBy,
     username: user.username,
     customer: user.customer_name,
     account: user.account_number,
@@ -1216,6 +1223,7 @@ export function listPaymentLinks(limit = 100) {
               pl.created_at AS createdAt, pl.external_ref AS externalRef,
               pl.pay_channel AS payChannel, pl.proof_image AS proofImage, pl.submitted_at AS submittedAt,
               pl.reviewed_at AS reviewedAt, pl.review_note AS reviewNote,
+              COALESCE(NULLIF(pl.created_by, ''), 'admin') AS createdBy,
               u.username, u.customer_name AS customer, u.account_number AS account
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
@@ -1234,8 +1242,12 @@ export function listPaymentLinks(limit = 100) {
   });
 }
 
-/** Ensure a fresh pending pay link exists for reminder messages. */
-export function ensureFreshPayLink(userId: number, baseUrl?: string) {
+/** Ensure a fresh pending pay link exists for reminder messages or portal self-serve. */
+export function ensureFreshPayLink(
+  userId: number,
+  baseUrl?: string,
+  opts?: { createdBy?: 'admin' | 'portal' | 'system'; months?: number; amount?: number | null }
+) {
   const existing = db
     .prepare(
       `SELECT * FROM payment_links WHERE pppoe_user_id = ? AND status = 'pending' AND datetime(expires_at) > datetime('now')
@@ -1254,9 +1266,17 @@ export function ensureFreshPayLink(userId: number, baseUrl?: string) {
       warning: resolved.warning || null,
       amount: existing.amount,
       months: existing.months,
+      createdBy: existing.created_by || 'admin',
     };
   }
-  return createPaymentLink({ pppoeUserId: userId, months: 1, baseUrl, ttlHours: 15 * 24 });
+  return createPaymentLink({
+    pppoeUserId: userId,
+    months: opts?.months ?? 1,
+    amount: opts?.amount,
+    baseUrl,
+    ttlHours: 15 * 24,
+    createdBy: opts?.createdBy ?? 'admin',
+  });
 }
 
 /** Create or refresh a pay link for resend (always 15-day validity). */

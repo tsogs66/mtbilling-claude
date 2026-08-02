@@ -37,7 +37,15 @@ type PortalAccount = {
   portal_enabled: number;
   has_pin: number;
   portal_must_change_password?: number;
+  portal_last_login_at?: string | null;
+  portal_session_active?: number;
 };
+
+function formatPortalLoginAt(raw?: string | null) {
+  if (!raw) return 'Never';
+  const s = String(raw).replace('T', ' ').slice(0, 16);
+  return s || 'Never';
+}
 
 const DEFAULT_SETTINGS: PortalSettings = {
   title: 'Subscriber Portal',
@@ -383,6 +391,8 @@ export default function PortalAdmin() {
                   <th className="px-3 py-2.5">Contact</th>
                   <th className="px-3 py-2.5">Status</th>
                   <th className="px-3 py-2.5">Portal</th>
+                  <th className="px-3 py-2.5">Login</th>
+                  <th className="px-3 py-2.5">Last logged in</th>
                   <th className="px-3 py-2.5 w-28" />
                 </tr>
               </thead>
@@ -415,6 +425,24 @@ export default function PortalAdmin() {
                         <span className="text-xs text-slate-400">Off</span>
                       )}
                     </td>
+                    <td className="px-3 py-2.5">
+                      {a.portal_enabled ? (
+                        a.portal_session_active ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                            Logged in
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                            Offline
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600 whitespace-nowrap">
+                      {formatPortalLoginAt(a.portal_last_login_at)}
+                    </td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
                       <button
                         type="button"
@@ -434,7 +462,7 @@ export default function PortalAdmin() {
                 ))}
                 {!filtered.length && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
+                    <td colSpan={8} className="px-3 py-10 text-center text-slate-400">
                       No subscribers match. Enable access for a PPPoE user to create a portal login.
                     </td>
                   </tr>

@@ -262,7 +262,8 @@ export default function ClientPortal() {
   const openPayment = async () => {
     setPayMsg('');
     const existing: PaymentLink | null = me?.paymentLink || null;
-    if (existing?.path) {
+    // Reuse pending/submitted links; otherwise create a subscriber-initiated payment-link entry.
+    if (existing?.path && (existing.status === 'pending' || existing.status === 'submitted')) {
       window.location.href = existing.path;
       return;
     }
@@ -565,15 +566,16 @@ export default function ClientPortal() {
   const paymentLink: PaymentLink | null = me.paymentLink || null;
   const balance = Number(me.balance) || 0;
   const company = me.company || {};
-  const canPay = balance > 0 || !!paymentLink || Number(c.price) > 0;
+  // Always allow sending payment details — creates a Payment Links entry if none exists (reverse of admin create).
+  const canPay = showBalance;
   const pendingPlan = me.planChangeRequest || null;
 
   const payCtaLabel = (() => {
     if (paymentLink?.status === 'submitted') return 'View status';
-    if (paymentLink?.status === 'rejected') return 'Resubmit';
+    if (paymentLink?.status === 'rejected') return 'Resubmit payment';
     if (paymentLink?.status === 'pending') return 'Pay now';
     if (balance > 0) return 'Pay now';
-    return 'Pay';
+    return 'Send payment details';
   })();
 
   const previewProration = (newPrice: number) => {
@@ -799,6 +801,11 @@ export default function ClientPortal() {
                     {payBusy ? 'Opening…' : payCtaLabel}
                     <ExternalLink size={15} />
                   </button>
+                )}
+                {canPay && !paymentLink && (
+                  <p className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+                    Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
+                  </p>
                 )}
                 {payMsg && <p className="mt-2 text-xs text-rose-300">{payMsg}</p>}
               </div>

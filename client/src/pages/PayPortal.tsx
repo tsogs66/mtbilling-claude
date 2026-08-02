@@ -394,6 +394,7 @@ export default function PayPortal() {
         <div className="text-sm text-slate-500 mb-4">
           Subscribers submit GCash/Maya proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
           New links are valid for <b>{LINK_TTL_DAYS} days</b>. Upload your merchant QR under <b>Company</b>.
+          Entries tagged <b>Portal</b> were opened by the subscriber (no admin link required).
         </div>
         <div className="flex flex-wrap gap-2 items-end mb-6">
           <label className="text-sm flex-1 min-w-[200px]">
@@ -547,6 +548,7 @@ export default function PayPortal() {
                 </th>
                 <th className="py-2">Subscriber</th>
                 <th className="py-2">Amount</th>
+                <th className="py-2">From</th>
                 <th className="py-2">Status</th>
                 <th className="py-2">Proof / Ref</th>
                 <th className="py-2">Expires</th>
@@ -570,6 +572,21 @@ export default function PayPortal() {
                     <div className="text-xs text-slate-400">{l.customer} · {l.account}</div>
                   </td>
                   <td className="py-2.5">{peso(l.amount)} · {l.months}mo</td>
+                  <td className="py-2.5">
+                    {String(l.createdBy || l.created_by || 'admin') === 'portal' ? (
+                      <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-violet-50 text-violet-700 ring-1 ring-violet-200">
+                        Portal
+                      </span>
+                    ) : String(l.createdBy || l.created_by || '') === 'system' ? (
+                      <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-slate-100 text-slate-600 ring-1 ring-slate-200">
+                        System
+                      </span>
+                    ) : (
+                      <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200">
+                        Admin
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2.5"><StatusBadge status={l.status} /></td>
                   <td className="py-2.5 text-xs text-slate-600 min-w-[140px]">
                     {l.payChannel || l.externalRef || l.proofImage ? (
@@ -610,7 +627,7 @@ export default function PayPortal() {
               ))}
               {links.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400">No payment links yet.</td>
+                  <td colSpan={8} className="py-8 text-center text-slate-400">No payment links yet.</td>
                 </tr>
               )}
             </tbody>

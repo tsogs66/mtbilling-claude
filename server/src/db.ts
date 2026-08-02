@@ -759,6 +759,8 @@ export function migrate() {
     ['submitted_at', 'TEXT'],
     ['reviewed_at', 'TEXT'],
     ['review_note', 'TEXT'],
+    // Who opened the link: admin panel vs subscriber portal (reverse create)
+    ['created_by', "TEXT DEFAULT 'admin'"],
   ];
   for (const [col, type] of payLinkCols) {
     if (!columnExists('payment_links', col)) db.exec(`ALTER TABLE payment_links ADD COLUMN ${col} ${type}`);
