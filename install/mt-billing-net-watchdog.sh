@@ -211,14 +211,17 @@ run_once() {
     fi
   fi
 
-  # Keep local panel + Cloudflare tunnel up (502 Bad gateway = host side dead)
+  # Keep local panel + Cloudflare tunnel up (502 / Error 1033 = host side dead)
   ensure_local_panel
-  # Critical: Cloudflare Host Error / 502 often happens while LAN :80 is fine
+  # Critical: Cloudflare Host Error / 1033 often happens while LAN :80 is fine
   # (cloudflared died, StartLimitHit, or connector stuck). Probe tunnel separately.
   ensure_cloudflare_tunnel
-  # After DNS/route surgery, force a reconnect — cloudflared often stays half-dead
-  if [[ "$dns_or_route_fixed" == "1" ]]; then
-    bounce_cloudflared "DNS/route repaired — reconnect tunnel to Cloudflare edge"
+  # After DNS/route surgery, only bounce if the connector is actually stale.
+  # Always-bounce here caused Error 1033 every ~90s when Twingate rewrote DNS.
+  if [[ "$dns_or_route_fixed" == "1" ]] && cloudflared_connection_stale; then
+    bounce_cloudflared "DNS/route repaired and tunnel edge registration missing"
+  elif [[ "$dns_or_route_fixed" == "1" ]]; then
+    log "WATCHDOG: DNS/route repaired — cloudflared still registered, not bouncing"
   fi
 }
 
@@ -251,8 +254,15 @@ cloudflared_bounce_allowed() {
   local last now
   last="$(cat "$CF_BOUNCE_STAMP" 2>/dev/null || echo 0)"
   now="$(date +%s)"
-  # At most one intentional bounce every 90s (timer is ~30s)
-  [[ $((now - last)) -ge 90 ]]
+  # At most one intentional bounce every 10 minutes — frequent restarts
+  # cause Error 1033 while cloudflared does a long graceful shutdown.
+  [[ $((now - last)) -ge 600 ]]
+}
+
+cloudflared_recently_registered() {
+  # Only a real edge registration counts (not ERR lines that also say connIndex=)
+  journalctl -u "$CF_UNIT" --since "12 min ago" --no-pager -o cat 2>/dev/null \
+    | grep -Eiq 'Registered tunnel connection|Updated to new configuration'
 }
 
 bounce_cloudflared() {
@@ -263,7 +273,7 @@ bounce_cloudflared() {
     return 0
   }
   date +%s >"$CF_BOUNCE_STAMP"
-  log "WATCHDOG: bouncing cloudflared (${reason}) — clears Cloudflare 502 Host Error"
+  log "WATCHDOG: bouncing cloudflared (${reason}) — clears Cloudflare 502/1033"
   systemctl reset-failed "$CF_UNIT" 2>/dev/null || true
   # Prefer restart; start if inactive / StartLimitHit left it dead
   if systemctl is-active --quiet "$CF_UNIT" 2>/dev/null; then
@@ -273,11 +283,11 @@ bounce_cloudflared() {
   fi
 }
 
-# Process running but not registered with Cloudflare edge → public hostname 502s
+# Process running but not registered with Cloudflare edge → public hostname 502/1033
 cloudflared_connection_stale() {
   systemctl is-active --quiet "$CF_UNIT" 2>/dev/null || return 1
   # Give a fresh start time to connect
-  local active_enter now age
+  local active_enter now age=0
   active_enter="$(systemctl show -p ActiveEnterTimestamp --value "$CF_UNIT" 2>/dev/null || true)"
   now="$(date +%s)"
   if [[ -n "$active_enter" && "$active_enter" != "n/a" ]]; then
@@ -285,20 +295,14 @@ cloudflared_connection_stale() {
     enter_epoch="$(date -d "$active_enter" +%s 2>/dev/null || echo 0)"
     age=$((now - enter_epoch))
     # Still connecting
-    [[ "$age" -lt 90 ]] && return 1
+    [[ "$age" -lt 120 ]] && return 1
   fi
-  # Recent successful registration?
-  if journalctl -u "$CF_UNIT" --since "4 min ago" --no-pager -o cat 2>/dev/null \
-    | grep -Eiq 'Registered tunnel connection|Connected to the Cloudflare edge|connIndex='; then
+  # Healthy if we saw a real registration recently
+  if cloudflared_recently_registered; then
     return 1
   fi
-  # Explicit disconnect / auth / network failures
-  if journalctl -u "$CF_UNIT" --since "4 min ago" --no-pager -o cat 2>/dev/null \
-    | grep -Eiq 'Unable to (reach|dial)|connection refused|no such host|context deadline exceeded|Unauthorized|failed to (serve|connect)|tunnel .+ error'; then
-    return 0
-  fi
-  # Up >2 min with no registration line at all → treat as stuck (classic CF 502)
-  if [[ "${age:-0}" -ge 120 ]]; then
+  # Up >3 min with no registration → stuck (classic Error 1033 / 502 Host Error)
+  if [[ "${age:-0}" -ge 180 ]]; then
     return 0
   fi
   return 1
@@ -312,14 +316,26 @@ harden_cloudflared_unit() {
     changed=1
   fi
   if ! grep -qE '^\s*StartLimitIntervalSec=' "$CF_UNIT_PATH" 2>/dev/null; then
-    # Avoid permanent "failed" after a burst of crashes (common CF 502 cause)
+    # Avoid permanent "failed" after a burst of crashes (common CF 502/1033 cause)
     if grep -qE '^\s*\[Service\]' "$CF_UNIT_PATH" 2>/dev/null; then
       sed -i '/^\s*\[Service\]/a StartLimitIntervalSec=0' "$CF_UNIT_PATH"
       changed=1
     fi
   fi
+  if ! grep -qE '^\s*TimeoutStopSec=' "$CF_UNIT_PATH" 2>/dev/null; then
+    if grep -qE '^\s*\[Service\]' "$CF_UNIT_PATH" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a TimeoutStopSec=8' "$CF_UNIT_PATH"
+      changed=1
+    fi
+  fi
+  if ! grep -qE '^\s*KillMode=' "$CF_UNIT_PATH" 2>/dev/null; then
+    if grep -qE '^\s*\[Service\]' "$CF_UNIT_PATH" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a KillMode=mixed' "$CF_UNIT_PATH"
+      changed=1
+    fi
+  fi
   if [[ "$changed" == "1" ]]; then
-    log "WATCHDOG: hardened ${CF_UNIT} (Restart=always, unlimited restart)"
+    log "WATCHDOG: hardened ${CF_UNIT} (Restart=always, fast stop, unlimited restart)"
     systemctl daemon-reload 2>/dev/null || true
   fi
 }
@@ -348,13 +364,15 @@ ensure_local_panel() {
   fails="$(cat "$FAIL_FILE" 2>/dev/null || echo 0)"
   fails=$((fails + 1))
   echo "$fails" >"$FAIL_FILE"
-  log "WATCHDOG: local panel :80 not OK (fail #${fails}) — restarting nginx/api/cloudflared"
+  log "WATCHDOG: local panel :80 not OK (fail #${fails}) — restarting nginx/api"
 
-  systemctl reset-failed nginx mt-billing-api "$CF_UNIT" 2>/dev/null || true
+  systemctl reset-failed nginx mt-billing-api 2>/dev/null || true
   systemctl try-restart nginx 2>/dev/null || systemctl start nginx 2>/dev/null || true
   systemctl try-restart mt-billing-api 2>/dev/null || systemctl start mt-billing-api 2>/dev/null || true
-  if cloudflared_wanted; then
-    bounce_cloudflared "local panel down"
+  # Do NOT bounce cloudflared just because nginx/api is slow — that creates
+  # Error 1033 on the public hostname while LAN is being healed.
+  if cloudflared_wanted && ! systemctl is-active --quiet "$CF_UNIT" 2>/dev/null; then
+    bounce_cloudflared "local panel down and cloudflared inactive"
   fi
 
   # After ~5 minutes of continuous failure (10 x 30s), soft-reboot once/hour
