@@ -200,8 +200,8 @@ export default function Notifications() {
       .replace(/\{username\}/gi, 'juan.d')
       .replace(/\{password\}/gi, '09171234567')
       .replace(/\{default_password\}/gi, '09171234567')
-      .replace(/\{portal_url\}/gi, 'https://billing.example.com/portal')
-      .replace(/\{portal_link\}/gi, 'https://billing.example.com/portal');
+      .replace(/\{portal_url\}/gi, 'billing.example.com/portal')
+      .replace(/\{portal_link\}/gi, 'billing.example.com/portal');
 
   const smsProvider = String(settings?.sms_provider || 'isms').toLowerCase();
   const setSmsProvider = (provider: string) => {
