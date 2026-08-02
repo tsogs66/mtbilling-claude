@@ -34,7 +34,7 @@ function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   );
 }
 
-/** Account meta (left) + logo sized to that block + brand text; Sign out under brand (right). */
+/** Account meta (left) + brand/Sign out (right) sharing the same top & bottom edges. */
 function PortalAccountBrandRow({
   name,
   accountNumber,
@@ -55,46 +55,51 @@ function PortalAccountBrandRow({
   onSignOut: () => void;
 }) {
   const accountMetaRef = useRef<HTMLDivElement | null>(null);
+  const signOutRef = useRef<HTMLButtonElement | null>(null);
   const [logoPx, setLogoPx] = useState(0);
 
   useLayoutEffect(() => {
     const el = accountMetaRef.current;
     if (!el) return;
     const apply = () => {
-      const h = Math.round(el.getBoundingClientRect().height);
+      const leftH = Math.round(el.getBoundingClientRect().height);
+      const signH = Math.round(signOutRef.current?.getBoundingClientRect().height || 32);
+      // Logo fills the band above Sign out so right column top/bottom match the left stack.
+      const h = Math.max(36, leftH - signH - 6);
       if (h > 0) setLogoPx(h);
     };
     apply();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(apply);
     ro.observe(el);
+    if (signOutRef.current) ro.observe(signOutRef.current);
     return () => ro.disconnect();
   }, [name, accountNumber, status]);
 
   return (
-    <div className="flex items-start justify-between gap-3 sm:gap-4">
-      <div ref={accountMetaRef} className="min-w-0 flex-1 pr-1">
-        <div className="text-[11px] uppercase tracking-[0.18em] text-orange-300 font-semibold">
+    <div className="flex items-stretch justify-between gap-3 sm:gap-4">
+      <div ref={accountMetaRef} className="min-w-0 flex-1 text-left pl-0">
+        <div className="text-[11px] uppercase tracking-[0.14em] text-orange-300 font-semibold leading-none">
           Subscriber portal
         </div>
-        <h1 className="mt-1 text-lg sm:text-2xl font-bold tracking-tight text-white break-words">
+        <h1 className="m-0 mt-1.5 text-lg sm:text-2xl font-bold tracking-tight text-white break-words leading-tight">
           {name}
         </h1>
-        <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-portal-muted">
-          <span className="font-mono">{accountNumber || '—'}</span>
+        <div className="m-0 mt-1.5 flex flex-wrap items-center gap-2 text-xs text-portal-muted leading-none">
+          <span className="font-mono tracking-normal">{accountNumber || '—'}</span>
           <span className={`portal-chip capitalize ${statusTone(status)}`}>
             {status || '—'}
           </span>
         </div>
       </div>
-      <div className="shrink-0 flex flex-col items-end gap-1.5 max-w-[52%] sm:max-w-[50%]">
+      <div className="shrink-0 self-stretch flex flex-col items-end justify-between gap-1.5 max-w-[52%] sm:max-w-[50%]">
         <div className="portal-brand-glow flex items-center gap-2 sm:gap-2.5">
           <div
             className="rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
             style={
               logoPx > 0
                 ? { width: logoPx, height: logoPx }
-                : { width: '4.25rem', height: '4.25rem', visibility: 'hidden' as const }
+                : { width: '3.5rem', height: '3.5rem', visibility: 'hidden' as const }
             }
             title={brandTitle}
           >
@@ -114,6 +119,7 @@ function PortalAccountBrandRow({
           </div>
         </div>
         <button
+          ref={signOutRef}
           type="button"
           onClick={onSignOut}
           className="portal-btn-ghost inline-flex items-center justify-end gap-1.5 text-xs sm:text-sm rounded-lg px-2.5 py-1.5 text-portal-dim hover:text-white"
@@ -816,10 +822,10 @@ export default function ClientPortal() {
           </div>
 
           {showBalance && (
-            <div className="mt-3 sm:mt-4 portal-glass rounded-2xl p-4 flex flex-col">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="flex items-center gap-2 text-portal-muted text-[11px] uppercase tracking-wider font-semibold">
-                  <Wallet size={13} className="text-orange-300" /> Balance due
+            <div className="mt-3 sm:mt-4 portal-glass rounded-2xl p-4 flex flex-col text-left">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-portal-muted text-[11px] uppercase tracking-[0.14em] font-semibold leading-none">
+                  <Wallet size={13} className="text-orange-300 shrink-0" /> Balance due
                 </div>
                 {paymentLink?.status && (
                   <span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-white capitalize ring-1 ring-white/15">
@@ -828,39 +834,42 @@ export default function ClientPortal() {
                 )}
               </div>
               <div
-                className={`text-3xl font-bold tabular-nums ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
+                className={`mt-1.5 text-3xl font-bold tabular-nums leading-none ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
               >
                 {peso(paymentLink?.amount || balance)}
               </div>
-              <div className="text-sm text-portal-muted mt-0.5">
-                {peso(c.price)} · due {c.due || '—'}
-              </div>
-              {canPay && paymentLink?.expiresAt && paymentLink.status === 'pending' ? (
-                <div className="mt-3 flex items-center gap-3">
-                  <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug">
-                    Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openPayment}
-                    disabled={payBusy}
-                    className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 min-h-[44px] text-sm shrink-0"
-                  >
-                    {payBusy ? 'Opening…' : payCtaLabel}
-                    <ExternalLink size={15} />
-                  </button>
+              <div className="mt-1 space-y-0.5">
+                <div className="text-sm text-portal-muted leading-snug">
+                  {peso(c.price)} · due {c.due || '—'}
                 </div>
-              ) : canPay ? (
+                {canPay && paymentLink?.expiresAt && paymentLink.status === 'pending' ? (
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug">
+                      Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openPayment}
+                      disabled={payBusy}
+                      className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 min-h-[40px] text-sm shrink-0"
+                    >
+                      {payBusy ? 'Opening…' : payCtaLabel}
+                      <ExternalLink size={15} />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {canPay && !(paymentLink?.expiresAt && paymentLink.status === 'pending') && (
                 <button
                   type="button"
                   onClick={openPayment}
                   disabled={payBusy}
-                  className="portal-cta mt-3 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 min-h-[48px] text-sm w-full"
+                  className="portal-cta mt-2.5 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 min-h-[48px] text-sm w-full"
                 >
                   {payBusy ? 'Opening…' : payCtaLabel}
                   <ExternalLink size={15} />
                 </button>
-              ) : null}
+              )}
               {canPay && !paymentLink && (
                 <p className="mt-2 text-xs text-portal-dim leading-relaxed">
                   Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
