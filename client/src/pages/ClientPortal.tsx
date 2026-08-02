@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
   Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
@@ -31,6 +31,86 @@ function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
       <MatrixRain />
       <div className="portal-matrix-veil" aria-hidden="true" />
     </>
+  );
+}
+
+/** Account meta (left) + logo sized exactly to that block’s height + PANORTH text (right). */
+function PortalAccountBrandRow({
+  name,
+  accountNumber,
+  status,
+  logoSrc,
+  logoAlt,
+  brandTitle,
+  brandSubtitle,
+}: {
+  name: string;
+  accountNumber?: string | null;
+  status?: string | null;
+  logoSrc: string;
+  logoAlt: string;
+  brandTitle: string;
+  brandSubtitle: string;
+}) {
+  const accountMetaRef = useRef<HTMLDivElement | null>(null);
+  const [logoPx, setLogoPx] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = accountMetaRef.current;
+    if (!el) return;
+    const apply = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      if (h > 0) setLogoPx(h);
+    };
+    apply();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [name, accountNumber, status]);
+
+  return (
+    <div className="flex items-start justify-between gap-3 sm:gap-4">
+      <div ref={accountMetaRef} className="min-w-0 flex-1 pr-1">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-orange-300 font-semibold">
+          Subscriber portal
+        </div>
+        <h1 className="mt-1 text-lg sm:text-2xl font-bold tracking-tight text-white break-words">
+          {name}
+        </h1>
+        <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-portal-muted">
+          <span className="font-mono">{accountNumber || '—'}</span>
+          <span className={`portal-chip capitalize ${statusTone(status)}`}>
+            {status || '—'}
+          </span>
+        </div>
+      </div>
+      <div className="portal-brand-glow shrink-0 flex items-center gap-2 sm:gap-2.5 max-w-[52%] sm:max-w-[50%]">
+        <div
+          className="rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
+          style={
+            logoPx > 0
+              ? { width: logoPx, height: logoPx }
+              : { width: '4.25rem', height: '4.25rem', visibility: 'hidden' as const }
+          }
+          title={brandTitle}
+        >
+          <img
+            src={logoSrc}
+            alt={logoAlt}
+            className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
+          />
+        </div>
+        <div className="min-w-0 text-left">
+          <div className="text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
+            {brandTitle}
+          </div>
+          <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
+            {brandSubtitle}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -684,43 +764,15 @@ export default function ClientPortal() {
       <div className="subscriber-portal-hero relative z-[1]">
         <header className="max-w-3xl mx-auto px-4 pt-4 sm:pt-5 pb-6">
           <div className="portal-glass portal-glass-strong rounded-2xl p-4 sm:p-5">
-            {/* Top row: account (left) · logo + brand (right). Logo height matches left column. */}
-            <div className="flex items-stretch justify-between gap-3 sm:gap-4">
-              <div className="min-w-0 flex-1 pr-1">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-orange-300 font-semibold">
-                  Subscriber portal
-                </div>
-                <h1 className="mt-1 text-lg sm:text-2xl font-bold tracking-tight text-white break-words">
-                  {c.name}
-                </h1>
-                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-portal-muted">
-                  <span className="font-mono">{c.accountNumber || '—'}</span>
-                  <span className={`portal-chip capitalize ${statusTone(c.status)}`}>
-                    {c.status || '—'}
-                  </span>
-                </div>
-              </div>
-              <div className="portal-brand-glow shrink-0 flex items-center gap-2 sm:gap-2.5 self-stretch max-w-[52%] sm:max-w-[50%]">
-                <div
-                  className="h-full aspect-square max-h-[6.5rem] sm:max-h-[7.5rem] rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
-                  title={brandTitle}
-                >
-                  <img
-                    src={portalLogo}
-                    alt={company.name || brandCompany?.name || brandTitle}
-                    className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
-                  />
-                </div>
-                <div className="min-w-0 text-left">
-                  <div className="text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
-                    {brandTitle}
-                  </div>
-                  <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
-                    {brandSubtitle}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <PortalAccountBrandRow
+              name={c.name}
+              accountNumber={c.accountNumber}
+              status={c.status}
+              logoSrc={portalLogo}
+              logoAlt={company.name || brandCompany?.name || brandTitle}
+              brandTitle={brandTitle}
+              brandSubtitle={brandSubtitle}
+            />
 
             {/* Actions stacked below account/brand so they never collide on narrow screens */}
             <div className="mt-4 space-y-2.5">
