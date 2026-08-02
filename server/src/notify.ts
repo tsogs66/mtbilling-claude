@@ -911,11 +911,38 @@ export async function executeBillingEnforcement(opts?: {
     if (d == null) continue;
     const st = statusKey(u.status);
 
-    // Expiry reminder + pay link
-    if (s.reminder_enabled && st === 'active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
+    // Expiry reminder + pay link (honor per-subscriber portal reminder prefs when present)
+    let portalPrefs: {
+      due_reminder_enabled: number;
+      due_reminder_days: number;
+      sms_enabled: number;
+      email_enabled: number;
+    } | null = null;
+    try {
+      portalPrefs = db
+        .prepare(
+          `SELECT due_reminder_enabled, due_reminder_days, sms_enabled, email_enabled
+           FROM portal_reminder_prefs WHERE pppoe_user_id = ?`
+        )
+        .get(u.id) as any;
+    } catch {
+      portalPrefs = null;
+    }
+    const reminderDays = portalPrefs
+      ? Math.max(1, Number(portalPrefs.due_reminder_days) || s.days_before)
+      : s.days_before;
+    const reminderAllowed =
+      s.reminder_enabled &&
+      (!portalPrefs || Number(portalPrefs.due_reminder_enabled) === 1) &&
+      st === 'active' &&
+      d >= 0 &&
+      d <= reminderDays &&
+      u.reminder_sent !== u.subscription_due;
+
+    if (reminderAllowed) {
       const channels: ('email' | 'sms')[] = [];
-      if (s.email_enabled) channels.push('email');
-      if (s.sms_enabled) channels.push('sms');
+      if (s.email_enabled && (!portalPrefs || Number(portalPrefs.email_enabled) === 1)) channels.push('email');
+      if (s.sms_enabled && (!portalPrefs || Number(portalPrefs.sms_enabled) === 1)) channels.push('sms');
       if (channels.length) {
         let payUrl = '';
         try {

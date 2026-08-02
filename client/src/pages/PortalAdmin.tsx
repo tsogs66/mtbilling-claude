@@ -73,11 +73,132 @@ const PORTAL_THEMES: { key: PortalThemeId; label: string; hint: string; Icon: ty
   { key: 'orbital', label: 'Orbital Net', hint: 'Satellites & towers · optical signal routing', Icon: Satellite },
 ];
 
+function PortalRequestsPanel() {
+  const [addons, setAddons] = useState<any[]>([]);
+  const [reconnects, setReconnects] = useState<any[]>([]);
+  const [referrals, setReferrals] = useState<any[]>([]);
+  const [msg, setMsg] = useState('');
+
+  const load = () => {
+    void api.get('/portal-requests/addons').then((r) => setAddons(r.data.items || [])).catch(() => setAddons([]));
+    void api
+      .get('/portal-requests/reconnects')
+      .then((r) => setReconnects(r.data.items || []))
+      .catch(() => setReconnects([]));
+    void api
+      .get('/portal-requests/referrals')
+      .then((r) => setReferrals(r.data.items || []))
+      .catch(() => setReferrals([]));
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const decideAddon = async (id: number, decision: 'accept' | 'reject') => {
+    await api.post(`/portal-requests/addons/${id}/decide`, { decision });
+    setMsg(`Add-on ${decision}ed`);
+    load();
+  };
+  const decideReconnect = async (id: number, decision: 'accept' | 'reject') => {
+    await api.post(`/portal-requests/reconnects/${id}/decide`, { decision });
+    setMsg(`Reconnect ${decision}ed`);
+    load();
+  };
+
+  return (
+    <div className="space-y-4">
+      {msg && (
+        <div className="text-sm rounded-lg px-3 py-2 bg-brand-50 text-brand-800 border border-brand-100">{msg}</div>
+      )}
+      <Card title="Add-on requests" icon={Zap}>
+        <ul className="divide-y divide-slate-100">
+          {addons.map((a) => (
+            <li key={a.id} className="py-2.5 flex flex-wrap items-center gap-2 justify-between">
+              <div className="text-sm">
+                <div className="font-medium text-slate-800">
+                  {a.customerName || 'Subscriber'}{' '}
+                  <span className="font-mono text-xs text-slate-400">{a.accountNumber}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  {a.addonName} · {peso(a.price)}
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <button type="button" className="btn-primary text-xs" onClick={() => void decideAddon(a.id, 'accept')}>
+                  <Check size={14} /> Accept
+                </button>
+                <button type="button" className="btn-secondary text-xs" onClick={() => void decideAddon(a.id, 'reject')}>
+                  <X size={14} /> Reject
+                </button>
+              </div>
+            </li>
+          ))}
+          {!addons.length && <li className="py-6 text-center text-slate-400 text-sm">No pending add-ons.</li>}
+        </ul>
+      </Card>
+      <Card title="Reconnect requests" icon={KeyRound}>
+        <ul className="divide-y divide-slate-100">
+          {reconnects.map((r) => (
+            <li key={r.id} className="py-2.5 flex flex-wrap items-center gap-2 justify-between">
+              <div className="text-sm">
+                <div className="font-medium text-slate-800">
+                  {r.customerName || 'Subscriber'}{' '}
+                  <span className="font-mono text-xs text-slate-400">{r.accountNumber}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Status {r.accountStatus || '—'}
+                  {r.reason ? ` · ${r.reason}` : ''}
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className="btn-primary text-xs"
+                  onClick={() => void decideReconnect(r.id, 'accept')}
+                >
+                  <Check size={14} /> Accept
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  onClick={() => void decideReconnect(r.id, 'reject')}
+                >
+                  <X size={14} /> Reject
+                </button>
+              </div>
+            </li>
+          ))}
+          {!reconnects.length && (
+            <li className="py-6 text-center text-slate-400 text-sm">No pending reconnects.</li>
+          )}
+        </ul>
+      </Card>
+      <Card title="Referral leads" icon={Users}>
+        <ul className="divide-y divide-slate-100">
+          {referrals.map((r) => (
+            <li key={r.id} className="py-2.5 text-sm">
+              <div className="font-medium text-slate-800">
+                {r.name} · {r.contact}
+              </div>
+              <div className="text-xs text-slate-500">
+                via {r.referrerName || '—'} ({r.referrerAccount || r.code}) · {r.status}
+                {r.address ? ` · ${r.address}` : ''}
+              </div>
+            </li>
+          ))}
+          {!referrals.length && <li className="py-6 text-center text-slate-400 text-sm">No referrals yet.</li>}
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
 export default function PortalAdmin() {
-  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings'>(() => {
+  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings' | 'requests'>(() => {
     try {
       const t = new URLSearchParams(window.location.search).get('tab');
-      if (t === 'plans' || t === 'settings' || t === 'accounts') return t;
+      if (t === 'plans' || t === 'settings' || t === 'accounts' || t === 'requests') return t;
     } catch {
       /* ignore */
     }
@@ -335,6 +456,13 @@ export default function PortalAdmin() {
         </button>
         <button
           type="button"
+          className={tab === 'requests' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setTab('requests')}
+        >
+          <Globe2 size={16} /> Requests
+        </button>
+        <button
+          type="button"
           className={tab === 'settings' ? 'btn-primary' : 'btn-secondary'}
           onClick={() => setTab('settings')}
         >
@@ -567,6 +695,8 @@ export default function PortalAdmin() {
           </div>
         </Card>
       )}
+
+      {tab === 'requests' && <PortalRequestsPanel />}
 
       {tab === 'settings' && (
         <Card title="Portal page settings" icon={Settings2}>
