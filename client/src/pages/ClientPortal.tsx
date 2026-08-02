@@ -34,7 +34,11 @@ function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   );
 }
 
-/** Account meta (left) + brand/Sign out (right) sharing the same top & bottom edges. */
+/**
+ * Two aligned rows:
+ *  1) label+name (left) · logo+brand (right) — logo height = left top block
+ *  2) account+status (left) · Sign out (right) — shared bottom edge
+ */
 function PortalAccountBrandRow({
   name,
   accountNumber,
@@ -54,59 +58,48 @@ function PortalAccountBrandRow({
   brandSubtitle: string;
   onSignOut: () => void;
 }) {
-  const accountMetaRef = useRef<HTMLDivElement | null>(null);
-  const signOutRef = useRef<HTMLButtonElement | null>(null);
+  const topLeftRef = useRef<HTMLDivElement | null>(null);
   const [logoPx, setLogoPx] = useState(0);
 
   useLayoutEffect(() => {
-    const el = accountMetaRef.current;
+    const el = topLeftRef.current;
     if (!el) return;
     const apply = () => {
-      const leftH = Math.round(el.getBoundingClientRect().height);
-      const signH = Math.round(signOutRef.current?.getBoundingClientRect().height || 32);
-      // Logo fills the band above Sign out so right column top/bottom match the left stack.
-      const h = Math.max(36, leftH - signH - 6);
+      const h = Math.round(el.getBoundingClientRect().height);
       if (h > 0) setLogoPx(h);
     };
     apply();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(apply);
     ro.observe(el);
-    if (signOutRef.current) ro.observe(signOutRef.current);
     return () => ro.disconnect();
-  }, [name, accountNumber, status]);
+  }, [name]);
 
   return (
-    <div className="flex items-stretch justify-between gap-3 sm:gap-4">
-      <div ref={accountMetaRef} className="min-w-0 flex-1 text-left pl-0">
-        <div className="text-[11px] uppercase tracking-[0.14em] text-orange-300 font-semibold leading-none">
-          Subscriber portal
+    <div className="flex flex-col gap-2 text-left">
+      <div className="flex items-start justify-between gap-3 sm:gap-4">
+        <div ref={topLeftRef} className="min-w-0 flex-1">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-orange-300 font-semibold leading-none">
+            Subscriber portal
+          </div>
+          <h1 className="m-0 mt-1.5 text-lg sm:text-2xl font-bold tracking-tight text-white break-words leading-tight">
+            {name}
+          </h1>
         </div>
-        <h1 className="m-0 mt-1.5 text-lg sm:text-2xl font-bold tracking-tight text-white break-words leading-tight">
-          {name}
-        </h1>
-        <div className="m-0 mt-1.5 flex flex-wrap items-center gap-2 text-xs text-portal-muted leading-none">
-          <span className="font-mono tracking-normal">{accountNumber || '—'}</span>
-          <span className={`portal-chip capitalize ${statusTone(status)}`}>
-            {status || '—'}
-          </span>
-        </div>
-      </div>
-      <div className="shrink-0 self-stretch flex flex-col items-end justify-between gap-1.5 max-w-[52%] sm:max-w-[50%]">
-        <div className="portal-brand-glow flex items-center gap-2 sm:gap-2.5">
+        <div className="portal-brand-glow shrink-0 flex items-center gap-2 sm:gap-2.5 max-w-[52%] sm:max-w-[50%]">
           <div
             className="rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
             style={
               logoPx > 0
                 ? { width: logoPx, height: logoPx }
-                : { width: '3.5rem', height: '3.5rem', visibility: 'hidden' as const }
+                : { width: '3.75rem', height: '3.75rem', visibility: 'hidden' as const }
             }
             title={brandTitle}
           >
             <img
               src={logoSrc}
               alt={logoAlt}
-              className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
+              className="h-full w-full object-contain object-center p-1 rounded-[inherit]"
             />
           </div>
           <div className="min-w-0 text-left">
@@ -118,11 +111,19 @@ function PortalAccountBrandRow({
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex flex-wrap items-center gap-2 text-xs text-portal-muted leading-none">
+          <span className="font-mono tracking-normal">{accountNumber || '—'}</span>
+          <span className={`portal-chip capitalize ${statusTone(status)}`}>
+            {status || '—'}
+          </span>
+        </div>
         <button
-          ref={signOutRef}
           type="button"
           onClick={onSignOut}
-          className="portal-btn-ghost inline-flex items-center justify-end gap-1.5 text-xs sm:text-sm rounded-lg px-2.5 py-1.5 text-portal-dim hover:text-white"
+          className="portal-btn-ghost inline-flex items-center gap-1.5 text-xs sm:text-sm rounded-lg px-2.5 py-1.5 text-portal-dim hover:text-white shrink-0"
         >
           <LogOut size={14} />
           <span>Sign out</span>
@@ -838,37 +839,26 @@ export default function ClientPortal() {
               >
                 {peso(paymentLink?.amount || balance)}
               </div>
-              <div className="mt-1 space-y-0.5">
-                <div className="text-sm text-portal-muted leading-snug">
-                  {peso(c.price)} · due {c.due || '—'}
-                </div>
-                {canPay && paymentLink?.expiresAt && paymentLink.status === 'pending' ? (
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug">
-                      Link expires {String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={openPayment}
-                      disabled={payBusy}
-                      className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 min-h-[40px] text-sm shrink-0"
-                    >
-                      {payBusy ? 'Opening…' : payCtaLabel}
-                      <ExternalLink size={15} />
-                    </button>
-                  </div>
-                ) : null}
+              <div className="mt-1 text-sm text-portal-muted leading-snug">
+                due {c.due || '—'}
               </div>
-              {canPay && !(paymentLink?.expiresAt && paymentLink.status === 'pending') && (
-                <button
-                  type="button"
-                  onClick={openPayment}
-                  disabled={payBusy}
-                  className="portal-cta mt-2.5 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 min-h-[48px] text-sm w-full"
-                >
-                  {payBusy ? 'Opening…' : payCtaLabel}
-                  <ExternalLink size={15} />
-                </button>
+              {canPay && (
+                <div className="mt-1.5 flex flex-nowrap items-center justify-between gap-3">
+                  <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug truncate">
+                    {paymentLink?.expiresAt && paymentLink.status === 'pending'
+                      ? `Link expires ${String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}`
+                      : '\u00a0'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openPayment}
+                    disabled={payBusy}
+                    className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 min-h-[40px] text-sm shrink-0 whitespace-nowrap"
+                  >
+                    {payBusy ? 'Opening…' : payCtaLabel}
+                    <ExternalLink size={15} />
+                  </button>
+                </div>
               )}
               {canPay && !paymentLink && (
                 <p className="mt-2 text-xs text-portal-dim leading-relaxed">
