@@ -13,6 +13,7 @@ import {
   cancelExpiryScheduleOnRouter,
 } from './mikrotik.js';
 import { getSettings as getNotifySettings } from './notify.js';
+import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 
 const SESSION_REFRESH_MS = 2000;
 /** Cap how long any single request will wait on a router call before responding anyway. */
@@ -1045,11 +1046,32 @@ export function createPaymentLink(opts: {
      VALUES (?, ?, ?, ?, 'pending', ?, ?)`
   ).run(opts.pppoeUserId, token, amount, months, expiresAt, createdBy);
 
+  const id = Number(info.lastInsertRowid);
   const path = `/pay/${token}`;
   const resolved = resolvePublicBaseUrl(opts.baseUrl);
   const url = resolved.baseUrl ? `${resolved.baseUrl}${path}` : path;
+
+  // Staff inbox: only subscriber-initiated creates (exclude admin/system).
+  if (createdBy === 'portal') {
+    try {
+      const who = subscriberLabel(opts.pppoeUserId);
+      notifyStaff({
+        type: 'payment_link_created',
+        title: 'Payment link created',
+        body: `${who} opened a ₱${Number(amount || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })} payment link`,
+        entityType: 'payment_link',
+        entityId: id,
+        pppoeUserId: opts.pppoeUserId,
+        status: 'pending',
+        payload: { amount, months, account: user.account_number || null },
+      });
+    } catch {
+      /* never block pay-link create on notify failure */
+    }
+  }
+
   return {
-    id: Number(info.lastInsertRowid),
+    id,
     token,
     path,
     url,
@@ -1169,6 +1191,29 @@ export function submitPaymentProof(
        submitted_at = datetime('now')
      WHERE id = ?`
   ).run(channel, reference, proofPath, link.id);
+
+  // Subscriber payment proof — notify staff regardless of who created the link.
+  try {
+    const who = subscriberLabel(link.pppoe_user_id);
+    const amt = Number(link.amount) || 0;
+    notifyStaff({
+      type: 'payment_submitted',
+      title: 'Payment received',
+      body: `${who} submitted ${channel.toUpperCase()} proof for ₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} (ref ${reference})`,
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+      pppoeUserId: Number(link.pppoe_user_id) || null,
+      status: 'submitted',
+      payload: {
+        channel,
+        reference,
+        amount: amt,
+        createdBy: link.created_by || 'admin',
+      },
+    });
+  } catch {
+    /* ignore */
+  }
 
   return {
     ok: true,

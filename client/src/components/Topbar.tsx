@@ -10,6 +10,7 @@ import { useLayout } from './Layout';
 import { PRODUCT_TITLE } from '../branding';
 import { api } from '../api';
 import { isNativeApp } from '../config';
+import TopbarNotifications from './TopbarNotifications';
 
 const THEMES: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] = [
   { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
@@ -179,6 +180,8 @@ export default function Topbar({ title }: { title: string }) {
             </div>
           )}
         </div>
+
+        <TopbarNotifications />
 
         <button
           type="button"

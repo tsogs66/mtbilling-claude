@@ -15,6 +15,13 @@ import {
 import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
 import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
 import {
+  initStaffNotifications,
+  listStaffNotifications,
+  markStaffNotificationsRead,
+  notifyStaff,
+  subscriberLabel,
+} from './staffNotifications.js';
+import {
   notifyClientChannels,
   phonesMatch,
   sendInstallationSuccessNotice,
@@ -366,6 +373,12 @@ export function initIspOps() {
   // Auto-create portal logins (account # + phone) for subscribers that still lack one.
   try {
     backfillDefaultPortalCredentials();
+  } catch {
+    /* ignore migration hiccups */
+  }
+
+  try {
+    initStaffNotifications();
   } catch {
     /* ignore migration hiccups */
   }
@@ -828,6 +841,22 @@ function portalSettingsRow() {
 
 ispOpsRouter.get('/client-portal/settings', (_req, res) => {
   res.json(portalSettingsRow());
+});
+
+/** Staff topbar inbox — portal / payment-link subscriber activity. */
+ispOpsRouter.get('/staff-notifications', (req, res) => {
+  const userId = Number((req as any).user?.id);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const limit = Number(req.query.limit) || 40;
+  res.json(listStaffNotifications(userId, limit));
+});
+
+ispOpsRouter.post('/staff-notifications/read', (req, res) => {
+  const userId = Number((req as any).user?.id);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : undefined;
+  const all = req.body?.all === true || req.body?.all === 1;
+  res.json(markStaffNotificationsRead(userId, { ids, all }));
 });
 
 ispOpsRouter.put('/client-portal/settings', (req, res) => {
@@ -1743,13 +1772,20 @@ publicPortalRouter.post('/public/portal/plan-change', (req, res) => {
        FROM plan_change_requests WHERE id = ?`
     )
     .get(info.lastInsertRowid);
-  publishPortalEvent({
+  const who = subscriberLabel(sess.uid);
+  notifyStaff({
     type: 'plan_change',
-    action: 'created',
+    title: 'Plan change request',
+    body: `${who} requested ${user?.profile || '—'} → ${plan.name}`,
+    entityType: 'plan_change_request',
+    entityId: Number(info.lastInsertRowid),
     pppoeUserId: sess.uid,
-    requestId: Number(info.lastInsertRowid),
     status: 'pending',
-    payload: { toPlan: plan.name, fromPlan: user?.profile || null, proratedBalance: proration.proratedBalance },
+    payload: {
+      toPlan: plan.name,
+      fromPlan: user?.profile || null,
+      proratedBalance: proration.proratedBalance,
+    },
   });
   res.status(201).json({ request: row, proration });
 });
@@ -1783,21 +1819,43 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
     .filter(Boolean)
     .join('\n\n');
   const number = nextNumber('JO', 'job_orders', 'number');
-  const info = db
-    .prepare(
-      `INSERT INTO job_orders
-       (number, pppoe_user_id, customer_name, contact, address, type, status, priority, description)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', 'normal', ?)`
-    )
-    .run(
-      number,
-      sess.uid,
-      sess.customer_name || sess.username,
-      sess.contact,
-      sess.address,
-      ['repair', 'new_install', 'follow_up', 'disconnect', 'other'].includes(type) ? type : 'repair',
-      fullDescription
-    );
+  const jobType = ['repair', 'new_install', 'follow_up', 'disconnect', 'other'].includes(type)
+    ? type
+    : 'repair';
+  let info;
+  try {
+    info = db
+      .prepare(
+        `INSERT INTO job_orders
+         (number, pppoe_user_id, customer_name, contact, address, type, status, priority, description, source)
+         VALUES (?, ?, ?, ?, ?, ?, 'open', 'normal', ?, 'portal')`
+      )
+      .run(
+        number,
+        sess.uid,
+        sess.customer_name || sess.username,
+        sess.contact,
+        sess.address,
+        jobType,
+        fullDescription
+      );
+  } catch {
+    info = db
+      .prepare(
+        `INSERT INTO job_orders
+         (number, pppoe_user_id, customer_name, contact, address, type, status, priority, description)
+         VALUES (?, ?, ?, ?, ?, ?, 'open', 'normal', ?)`
+      )
+      .run(
+        number,
+        sess.uid,
+        sess.customer_name || sess.username,
+        sess.contact,
+        sess.address,
+        jobType,
+        fullDescription
+      );
+  }
   const job = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(info.lastInsertRowid) as any;
   let outageReport = null;
   if (serviceSlugs.length) {
@@ -1811,13 +1869,21 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
       serviceSlugs,
     });
   }
-  publishPortalEvent({
+  const who = subscriberLabel(sess.uid);
+  const servicesNote = serviceNames.length ? ` Apps: ${serviceNames.join(', ')}.` : '';
+  notifyStaff({
     type: 'ticket',
-    action: 'created',
+    title: serviceNames.length ? 'Service outage report' : 'Support request',
+    body: `${who} filed ${job?.number || number}.${servicesNote}`,
+    entityType: 'job_order',
+    entityId: Number(job?.id) || Number(info.lastInsertRowid),
     pppoeUserId: sess.uid,
-    requestId: Number(job?.id) || Number(info.lastInsertRowid),
     status: 'open',
-    payload: { number: job?.number || number },
+    payload: {
+      number: job?.number || number,
+      serviceNames,
+      description: description || null,
+    },
   });
   res.status(201).json({ ...job, outageReport });
 });
