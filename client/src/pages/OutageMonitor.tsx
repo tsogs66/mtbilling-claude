@@ -8,6 +8,8 @@ import {
   TrendingUp,
   XCircle,
   ExternalLink,
+  RadioTower,
+  Send,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { api } from '../api';
@@ -121,6 +123,16 @@ export default function OutageMonitor() {
   const [category, setCategory] = useState<string>('all');
   const [selected, setSelected] = useState<OutageService | null>(null);
   const [busy, setBusy] = useState(false);
+  const [naps, setNaps] = useState<
+    { id: number; name: string; code?: string; subscriberCount?: number }[]
+  >([]);
+  const [selectedNapIds, setSelectedNapIds] = useState<number[]>([]);
+  const [noticeTitle, setNoticeTitle] = useState('Network outage');
+  const [noticeBody, setNoticeBody] = useState('');
+  const [noticeChannels, setNoticeChannels] = useState<string[]>(['sms']);
+  const [noticeBusy, setNoticeBusy] = useState(false);
+  const [noticeMsg, setNoticeMsg] = useState('');
+  const [recentNotices, setRecentNotices] = useState<any[]>([]);
 
   const applyPayload = (data: any) => {
     setServices(data.services || []);
@@ -154,6 +166,52 @@ export default function OutageMonitor() {
     const id = setInterval(() => load().catch(() => undefined), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    void api
+      .get('/outage-notices/naps')
+      .then((r) => setNaps(r.data.naps || []))
+      .catch(() => setNaps([]));
+    void api
+      .get('/outage-notices')
+      .then((r) => setRecentNotices(r.data.notices || []))
+      .catch(() => setRecentNotices([]));
+  }, []);
+
+  const toggleNap = (id: number) => {
+    setSelectedNapIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const recipientPreview = useMemo(
+    () =>
+      naps
+        .filter((n) => selectedNapIds.includes(n.id))
+        .reduce((s, n) => s + (Number(n.subscriberCount) || 0), 0),
+    [naps, selectedNapIds]
+  );
+
+  const sendNapNotice = async () => {
+    setNoticeBusy(true);
+    setNoticeMsg('');
+    try {
+      const r = await api.post('/outage-notices/send', {
+        title: noticeTitle,
+        body: noticeBody,
+        napIds: selectedNapIds,
+        channels: noticeChannels,
+      });
+      setNoticeMsg(
+        `Sent to ${r.data.recipientCount} subscriber${r.data.recipientCount === 1 ? '' : 's'} on selected NAP boxes.`
+      );
+      setNoticeBody('');
+      const list = await api.get('/outage-notices');
+      setRecentNotices(list.data.notices || []);
+    } catch (e: any) {
+      setNoticeMsg(e?.response?.data?.error || e.message || 'Send failed');
+    } finally {
+      setNoticeBusy(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -243,6 +301,127 @@ export default function OutageMonitor() {
             <> · <b>{summary.localReports24h}</b> subscriber report{summary.localReports24h === 1 ? '' : 's'} /24h</>
           )}
         </p>
+
+        <section className="card p-4 sm:p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <RadioTower size={16} className="text-orange-500" />
+            <h2 className="text-sm font-semibold text-slate-800">Notify subscribers by NAP box</h2>
+          </div>
+          <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+            Select affected NAP boxes — only clients linked to those NAPs get the SMS/email and an in-portal
+            activity notice.
+          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">NAP boxes</span>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="text-brand-600 font-semibold"
+                    onClick={() => setSelectedNapIds(naps.map((n) => n.id))}
+                  >
+                    Select all
+                  </button>
+                  <button type="button" className="text-slate-400" onClick={() => setSelectedNapIds([])}>
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-56 overflow-y-auto border border-slate-100 rounded-xl divide-y divide-slate-100">
+                {naps.map((n) => {
+                  const on = selectedNapIds.includes(n.id);
+                  return (
+                    <label
+                      key={n.id}
+                      className={`flex items-center gap-2 px-3 py-2 text-sm cursor-pointer ${
+                        on ? 'bg-orange-50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <input type="checkbox" checked={on} onChange={() => toggleNap(n.id)} />
+                      <span className="min-w-0 flex-1 truncate font-medium text-slate-800">
+                        {n.name}
+                        {n.code ? <span className="text-slate-400 font-normal"> · {n.code}</span> : null}
+                      </span>
+                      <span className="text-[11px] text-slate-400 tabular-nums shrink-0">
+                        {n.subscriberCount ?? 0} clients
+                      </span>
+                    </label>
+                  );
+                })}
+                {!naps.length && (
+                  <div className="px-3 py-6 text-sm text-slate-400 text-center">No NAP boxes found.</div>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Selected {selectedNapIds.length} NAP
+                {selectedNapIds.length === 1 ? '' : 's'} · ~{recipientPreview} subscriber
+                {recipientPreview === 1 ? '' : 's'}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <input
+                className="input"
+                value={noticeTitle}
+                onChange={(e) => setNoticeTitle(e.target.value)}
+                placeholder="Notice title"
+              />
+              <textarea
+                className="input min-h-[120px]"
+                value={noticeBody}
+                onChange={(e) => setNoticeBody(e.target.value)}
+                placeholder="Message shown in portal + SMS/email (e.g. fiber cut on feeder, ETA 2 hours)…"
+              />
+              <div className="flex flex-wrap gap-4 text-sm text-slate-600">
+                {(['sms', 'email'] as const).map((ch) => (
+                  <label key={ch} className="inline-flex items-center gap-2 capitalize">
+                    <input
+                      type="checkbox"
+                      checked={noticeChannels.includes(ch)}
+                      onChange={(e) =>
+                        setNoticeChannels((prev) =>
+                          e.target.checked ? [...prev, ch] : prev.filter((x) => x !== ch)
+                        )
+                      }
+                    />
+                    {ch}
+                  </label>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={noticeBusy || !selectedNapIds.length || !noticeBody.trim()}
+                onClick={() => void sendNapNotice()}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
+              >
+                <Send size={15} />
+                {noticeBusy ? 'Sending…' : 'Send to selected NAPs'}
+              </button>
+              {noticeMsg && <p className="text-xs text-slate-600">{noticeMsg}</p>}
+            </div>
+          </div>
+          {recentNotices.length > 0 && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Recent sends</div>
+              <ul className="space-y-1.5 text-sm">
+                {recentNotices.slice(0, 6).map((n) => (
+                  <li key={n.id} className="flex justify-between gap-3 text-slate-600">
+                    <span className="truncate">
+                      <b className="text-slate-800 font-medium">{n.title}</b>
+                      <span className="text-slate-400">
+                        {' '}
+                        · {(n.napIds || []).length} NAP · {n.recipientCount || 0} clients
+                      </span>
+                    </span>
+                    <span className="text-[11px] text-slate-400 shrink-0">
+                      {String(n.sentAt || n.createdAt || '').replace('T', ' ').slice(0, 16)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
 
         {subscriberReports.length > 0 && (
           <section className="card p-4">

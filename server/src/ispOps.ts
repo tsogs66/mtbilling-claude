@@ -27,6 +27,7 @@ import {
   sendInstallationSuccessNotice,
   sendPortalActivationNotice,
 } from './notify.js';
+import { initPortalExtras, pushPortalActivity, registerPortalExtraRoutes } from './portalExtras.js';
 
 const PLAN_CYCLE_DAYS = 30;
 
@@ -379,6 +380,12 @@ export function initIspOps() {
 
   try {
     initStaffNotifications();
+  } catch {
+    /* ignore migration hiccups */
+  }
+
+  try {
+    initPortalExtras();
   } catch {
     /* ignore migration hiccups */
   }
@@ -1194,6 +1201,14 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/accept', async (req, res) => 
     status: 'accepted',
     payload: { proration, toPlan: plan.name },
   });
+  pushPortalActivity({
+    pppoeUserId: user.id,
+    type: 'plan_change',
+    title: 'Plan change accepted',
+    body: `Switched to ${plan.name}. New balance due: ₱${Number(proration.proratedBalance || 0).toFixed(2)}.`,
+    entityType: 'plan_change_request',
+    entityId: id,
+  });
   res.json({
     ok: true,
     request: accepted,
@@ -1208,9 +1223,10 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/reject', (req, res) => {
   const row = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id) as any;
   if (!row) return res.status(404).json({ error: 'not found' });
   if (row.status !== 'pending') return res.status(400).json({ error: 'Request is not pending' });
+  const rejectNote = String(req.body?.note || '').trim() || null;
   db.prepare(
     `UPDATE plan_change_requests SET status = 'rejected', review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`
-  ).run(String(req.body?.note || '').trim() || null, id);
+  ).run(rejectNote, id);
   const rejected = db.prepare('SELECT * FROM plan_change_requests WHERE id = ?').get(id);
   publishPortalEvent({
     type: 'plan_change',
@@ -1218,6 +1234,14 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/reject', (req, res) => {
     pppoeUserId: row.pppoe_user_id,
     requestId: id,
     status: 'rejected',
+  });
+  pushPortalActivity({
+    pppoeUserId: Number(row.pppoe_user_id),
+    type: 'plan_change',
+    title: 'Plan change declined',
+    body: rejectNote || `Request to switch to ${row.to_plan} was not approved.`,
+    entityType: 'plan_change_request',
+    entityId: id,
   });
   res.json({ ok: true, request: rejected });
 });
@@ -1555,7 +1579,7 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
     .all(sess.uid);
   const openJobs = db
     .prepare(
-      `SELECT id, number, type, status, description, created_at FROM job_orders
+      `SELECT id, number, type, status, description, assigned_to, scheduled_at, created_at FROM job_orders
        WHERE pppoe_user_id = ? AND status NOT IN ('completed','cancelled') ORDER BY id DESC LIMIT 10`
     )
     .all(sess.uid);
@@ -1893,6 +1917,8 @@ publicPortalRouter.post('/public/portal/logout', (req, res) => {
   if (token) db.prepare('DELETE FROM client_portal_sessions WHERE token = ?').run(token);
   res.json({ ok: true });
 });
+
+registerPortalExtraRoutes(publicPortalRouter, ispOpsRouter);
 
 /** Helper used by PPPoE update to enforce NAP capacity. */
 export function assertNapHasCapacity(napId: number | null | undefined, excludeUserId?: number): string | null {

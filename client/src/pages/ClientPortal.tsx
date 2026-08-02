@@ -14,6 +14,11 @@ import { useCompany } from '../context/CompanyContext';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
 import { subscribePortalLive } from '../lib/portalLive';
 import { openInvoicePrint } from '../lib/invoicePrint';
+import {
+  PortalExtrasStack,
+  PortalPlanCancelButton,
+  PortalTicketThread,
+} from '../components/portal/PortalExtraPanels';
 
 const TOKEN_KEY = 'mt_portal_token';
 
@@ -214,6 +219,8 @@ export default function ClientPortal() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotMsg, setForgotMsg] = useState('');
   const [forgotOk, setForgotOk] = useState(false);
+  const [ticketThreadId, setTicketThreadId] = useState<number | null>(null);
+  const [extrasRefresh, setExtrasRefresh] = useState(0);
   const portalTheme: PortalThemeId =
     (me?.settings?.theme || pageSettings.theme) === 'orbital' ? 'orbital' : 'matrix';
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall(portalTheme);
@@ -264,6 +271,16 @@ export default function ClientPortal() {
           } else if (data?.action === 'rejected') {
             setPlanMsg('Plan change was declined by your ISP. You can request again.');
           }
+        }
+        if (
+          event === 'portal_activity' ||
+          event === 'outage_notice' ||
+          event === 'payment' ||
+          event === 'ticket' ||
+          data?.type === 'portal_activity'
+        ) {
+          setExtrasRefresh((n) => n + 1);
+          void loadMe().catch(() => undefined);
         }
       },
     });
@@ -892,6 +909,13 @@ export default function ClientPortal() {
                 <span className="block text-xs text-amber-200/80 mt-0.5">
                   {pendingPlan.consumedDays}d @ {peso(pendingPlan.fromPrice)} + {pendingPlan.remainingDays}d @ {peso(pendingPlan.toPrice)}
                 </span>
+                <PortalPlanCancelButton
+                  pending={pendingPlan}
+                  onCancelled={() => {
+                    setPlanMsg('Plan change request cancelled.');
+                    void loadMe();
+                  }}
+                />
               </div>
             )}
 
@@ -1137,16 +1161,34 @@ export default function ClientPortal() {
             {(me.openJobs || []).length > 0 && (
               <ul className="mt-4 space-y-2 text-sm">
                 {me.openJobs.map((j: any) => (
-                  <li key={j.id} className="flex justify-between border-t border-white/10 pt-2">
-                    <span className="font-mono text-xs text-slate-200 font-semibold">{j.number}</span>
-                    <span className="capitalize text-portal-dim font-medium">{j.status}</span>
+                  <li key={j.id}>
+                    <button
+                      type="button"
+                      onClick={() => setTicketThreadId(Number(j.id))}
+                      className="w-full flex justify-between items-center border-t border-white/10 pt-2 text-left hover:text-orange-200"
+                    >
+                      <span className="font-mono text-xs text-slate-200 font-semibold">{j.number}</span>
+                      <span className="capitalize text-portal-dim font-medium inline-flex items-center gap-1">
+                        {j.status} <ChevronRight size={14} />
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
             )}
           </section>
         )}
+
+        <PortalExtrasStack
+          me={me}
+          refreshKey={extrasRefresh}
+          onReloadMe={() => void loadMe()}
+        />
       </main>
+
+      {ticketThreadId != null && (
+        <PortalTicketThread jobId={ticketThreadId} onClose={() => setTicketThreadId(null)} />
+      )}
 
       {showCompany && (
         <footer className="relative z-[1] mt-auto">

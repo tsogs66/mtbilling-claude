@@ -7,11 +7,22 @@ export type PortalLiveEvent = {
     | 'ticket'
     | 'ping'
     | 'payment_link_created'
-    | 'payment_submitted';
-  action?: 'created' | 'accepted' | 'rejected' | 'updated';
+    | 'payment_submitted'
+    | 'outage_notice'
+    | 'portal_activity'
+    | 'addon_request'
+    | 'reconnect_request'
+    | 'contact_updated'
+    | 'referral'
+    | 'payment';
+  action?: 'created' | 'accepted' | 'rejected' | 'updated' | 'cancelled';
   /** PPPoE user id — portal clients filter to themselves; staff see all. */
   pppoeUserId?: number | null;
   requestId?: number | null;
+  entityType?: string | null;
+  entityId?: number | null;
+  title?: string | null;
+  body?: string | null;
   status?: string | null;
   at?: string;
   payload?: Record<string, unknown>;

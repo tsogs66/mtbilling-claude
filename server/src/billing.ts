@@ -14,6 +14,7 @@ import {
 } from './mikrotik.js';
 import { getSettings as getNotifySettings } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
+import { pushPortalActivity } from './portalExtras.js';
 
 const SESSION_REFRESH_MS = 2000;
 /** Cap how long any single request will wait on a router call before responding anyway. */
@@ -1247,6 +1248,20 @@ export async function markPaymentLinkPaid(token: string, externalRef?: string) {
        reviewed_at = datetime('now')
      WHERE id = ?`
   ).run(externalRef || null, link.id);
+  try {
+    const amt = Number(link.amount) || Number((result as any)?.amount) || 0;
+    pushPortalActivity({
+      pppoeUserId: Number(link.pppoe_user_id),
+      type: 'payment',
+      title: 'Payment approved',
+      body: `₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} was posted to your account.`,
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+      payload: { transactionId: (result as any)?.transactionId || (result as any)?.id || null },
+    });
+  } catch {
+    /* ignore */
+  }
   return { ok: true, alreadyPaid: false, payment: result, link };
 }
 
@@ -1257,6 +1272,18 @@ export function rejectPaymentProof(id: number, note?: string) {
   db.prepare(
     `UPDATE payment_links SET status = 'rejected', reviewed_at = datetime('now'), review_note = ? WHERE id = ?`
   ).run(note || null, id);
+  try {
+    pushPortalActivity({
+      pppoeUserId: Number(link.pppoe_user_id),
+      type: 'payment',
+      title: 'Payment rejected',
+      body: note || 'Your payment proof was not accepted. Please resubmit with a clearer receipt.',
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+    });
+  } catch {
+    /* ignore */
+  }
   return { ok: true, status: 'rejected' };
 }
 
