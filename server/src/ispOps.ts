@@ -14,7 +14,12 @@ import {
 } from './outageMonitor.js';
 import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
 import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
-import { notifyClientChannels, phonesMatch } from './notify.js';
+import {
+  notifyClientChannels,
+  phonesMatch,
+  sendInstallationSuccessNotice,
+  sendPortalActivationNotice,
+} from './notify.js';
 
 const PLAN_CYCLE_DAYS = 30;
 
@@ -146,6 +151,17 @@ export function ensureDefaultPortalCredentials(
     db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
   }
   return { ok: true, provisioned: true };
+}
+
+/** After newly provisioning portal creds, SMS the activation template (account + default password + link). */
+export function notifyPortalActivationIfProvisioned(
+  userId: number,
+  result: { ok?: boolean; provisioned?: boolean } | null | undefined
+) {
+  if (!result?.ok || !result.provisioned) return;
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) return;
+  void sendPortalActivationNotice(user).catch(() => undefined);
 }
 
 function portalSubscriberId(sess: any): number {
@@ -476,8 +492,10 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
   const status = b.status !== undefined ? b.status : ex.status;
+  const type = b.type !== undefined ? b.type : ex.type;
   const completed_at =
     status === 'completed' ? b.completed_at || ex.completed_at || new Date().toISOString() : status !== 'completed' ? null : ex.completed_at;
+  const wasCompleted = String(ex.status || '') === 'completed';
   db.prepare(
     `UPDATE job_orders SET
       pppoe_user_id=?, customer_name=?, contact=?, address=?, lat=?, lng=?,
@@ -491,7 +509,7 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
     b.address !== undefined ? b.address : ex.address,
     b.lat !== undefined ? b.lat : ex.lat,
     b.lng !== undefined ? b.lng : ex.lng,
-    b.type !== undefined ? b.type : ex.type,
+    type,
     status,
     b.priority !== undefined ? b.priority : ex.priority,
     b.assigned_to !== undefined ? b.assigned_to : ex.assigned_to,
@@ -501,7 +519,32 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
     completed_at,
     id
   );
-  res.json(db.prepare('SELECT * FROM job_orders WHERE id = ?').get(id));
+  const row = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(id) as any;
+  res.json(row);
+
+  // Successful installation template when a new-install job is first marked completed.
+  if (!wasCompleted && status === 'completed' && String(type) === 'new_install') {
+    const userId = Number(row?.pppoe_user_id || 0);
+    const user = userId
+      ? (db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any)
+      : null;
+    const target =
+      user ||
+      (row?.contact
+        ? {
+            id: null,
+            username: row.customer_name || 'subscriber',
+            customer_name: row.customer_name,
+            contact: row.contact,
+            account_number: user?.account_number || '',
+            profile: user?.profile || '',
+            subscription_due: user?.subscription_due || null,
+            price: user?.price ?? null,
+            email: user?.email || null,
+          }
+        : null);
+    if (target) void sendInstallationSuccessNotice(target).catch(() => undefined);
+  }
 });
 
 ispOpsRouter.delete('/job-orders/:id', (req, res) => {
@@ -795,6 +838,7 @@ ispOpsRouter.post('/client-portal/enable', (req, res) => {
   if (useDefault) {
     const result = ensureDefaultPortalCredentials(userId, { force: true });
     if (!result.ok) return res.status(400).json({ error: result.error });
+    notifyPortalActivationIfProvisioned(userId, result);
     return res.json({
       ok: true,
       pppoe_user_id: userId,
@@ -844,6 +888,7 @@ ispOpsRouter.post('/client-portal/accounts/:id/reset-default-password', (req, re
   const id = Number(req.params.id);
   const result = ensureDefaultPortalCredentials(id, { force: true });
   if (!result.ok) return res.status(400).json({ error: result.error });
+  notifyPortalActivationIfProvisioned(id, result);
   const updated = db
     .prepare(
       `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
@@ -938,12 +983,18 @@ ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
     db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(id);
   }
 
+  const hadCreds = !!(user.portal_enabled && user.portal_pin_hash);
   db.prepare(
     `UPDATE pppoe_users SET
        customer_name = ?, account_number = ?, contact = ?, email = ?,
        portal_enabled = ?, portal_pin_hash = ?, portal_must_change_password = ?
      WHERE id = ?`
   ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, mustChange, id);
+
+  // SMS portal activation when staff newly enables with default (phone) password.
+  if (portal_enabled && pinHash && mustChange === 1 && (useDefault || !hadCreds)) {
+    notifyPortalActivationIfProvisioned(id, { ok: true, provisioned: true });
+  }
 
   const updated = db
     .prepare(

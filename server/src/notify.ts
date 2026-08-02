@@ -498,10 +498,42 @@ interface Client {
   price?: number | null;
 }
 
+/** Public subscriber portal URL for SMS/email templates. */
+function resolvePortalLink(): string {
+  try {
+    const app = db
+      .prepare(
+        `SELECT public_base_url, ngrok_url, ngrok_status,
+                cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
+         FROM app_settings WHERE id = 1`
+      )
+      .get() as any;
+    const cf =
+      app?.cf_tunnel_status === 'running'
+        ? app?.cf_tunnel_url ||
+          (app?.cf_tunnel_hostname
+            ? `https://${String(app.cf_tunnel_hostname).replace(/^https?:\/\//i, '')}`
+            : '')
+        : '';
+    const ngrok = app?.ngrok_status === 'running' ? app?.ngrok_url : '';
+    for (const raw of [app?.public_base_url, process.env.PUBLIC_BASE_URL, cf, ngrok]) {
+      const base = String(raw || '')
+        .trim()
+        .replace(/\/+$/, '');
+      if (base) return `${base}/portal`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return '/portal';
+}
+
 // Personalize template tokens with the recipient's own details.
-function fillTemplate(text: string, client: Client): string {
+function fillTemplate(text: string, client: Client, extras?: Record<string, string>): string {
   if (!text) return text;
   const amount = client.price != null ? formatCurrency(Number(client.price)) : '';
+  const password = extras?.password ?? extras?.default_password ?? String(client.contact || '').trim();
+  const portalUrl = extras?.portal_url ?? extras?.portal_link ?? resolvePortalLink();
   const map: Record<string, string> = {
     name: client.customer_name || client.username || '',
     account: client.account_number || '',
@@ -509,9 +541,30 @@ function fillTemplate(text: string, client: Client): string {
     amount,
     due: (client.subscription_due || '').slice(0, 10),
     username: client.username || '',
+    password,
+    default_password: password,
+    portal_url: portalUrl,
+    portal_link: portalUrl,
   };
-  return text.replace(/\{(name|account|plan|amount|due|username)\}/gi, (_m, k) => map[String(k).toLowerCase()] ?? '');
+  return text.replace(
+    /\{(name|account|plan|amount|due|username|password|default_password|portal_url|portal_link)\}/gi,
+    (_m, k) => map[String(k).toLowerCase()] ?? ''
+  );
 }
+
+/** Same wording as the Notifications → Successful Installation template. */
+export const INSTALLATION_SUCCESS_TEMPLATE = {
+  subject: 'Installation Complete',
+  message:
+    'Hi {name}, your internet installation is complete! Account #{account} ({plan}) is ready. Welcome aboard — enjoy your connection. For billing and support, open your subscriber portal: {portal_url}',
+};
+
+/** Same wording as the Notifications → Portal Account Activation template. */
+export const PORTAL_ACTIVATION_TEMPLATE = {
+  subject: 'Subscriber Portal Access',
+  message:
+    'Hi {name}, your subscriber portal is now active. Account number: {account}. Default password: {password} (your registered mobile number). Sign in here: {portal_url}. Please change your password after the first login.',
+};
 
 async function notifyClient(client: Client, channels: ('email' | 'sms')[], subject: string, message: string, type: string) {
   const subjectF = fillTemplate(subject, client);
@@ -608,6 +661,51 @@ export async function sendPaymentConfirmationSms(
     detail: r.detail,
   });
   return { sent: r.status === 'sent', detail: r.detail };
+}
+
+async function sendTemplatedSms(
+  client: Client,
+  template: { subject: string; message: string },
+  type: string,
+  extras?: Record<string, string>
+): Promise<{ sent: boolean; detail: string }> {
+  if (!client?.contact) return { sent: false, detail: 'no phone number on file' };
+  const s = getSettings();
+  if (!s.sms_enabled) return { sent: false, detail: 'SMS notifications disabled' };
+  const subject = fillTemplate(template.subject, client, extras);
+  const message = fillTemplate(template.message, client, extras);
+  const r = await deliver('sms', client.contact, subject, message);
+  record({
+    channel: 'sms',
+    recipient: client.contact,
+    client_id: client.id,
+    customer_name: client.customer_name,
+    subject,
+    message: formatSmsMessage(message),
+    type,
+    status: r.status,
+    detail: r.detail,
+  });
+  return { sent: r.status === 'sent', detail: r.detail };
+}
+
+/** Successful installation — Notifications template `successful_installation`. */
+export async function sendInstallationSuccessNotice(client: any): Promise<{ sent: boolean; detail: string }> {
+  return sendTemplatedSms(client as Client, INSTALLATION_SUCCESS_TEMPLATE, 'installation_success');
+}
+
+/**
+ * Portal account activation — account #, default password (mobile), portal link.
+ * Notifications template `portal_activation`.
+ */
+export async function sendPortalActivationNotice(client: any): Promise<{ sent: boolean; detail: string }> {
+  const password = String(client?.contact || '').trim();
+  if (!password) return { sent: false, detail: 'no phone number on file' };
+  return sendTemplatedSms(client as Client, PORTAL_ACTIVATION_TEMPLATE, 'portal_activation', {
+    password,
+    default_password: password,
+    portal_url: resolvePortalLink(),
+  });
 }
 
 /** Manual broadcast/one-off send initiated from the Notifications page. */
