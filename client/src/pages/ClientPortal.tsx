@@ -181,16 +181,37 @@ export default function ClientPortal() {
   const submitNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPwMsg('');
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      setPwMsg('Passwords do not match');
+      return;
+    }
+    if (newPassword.trim().length < 6) {
+      setPwMsg('Password must be at least 6 characters');
+      return;
+    }
     setPwBusy(true);
+    const chosen = newPassword.trim();
     try {
-      await portalFetch('/public/portal/change-password', {
+      const result = await portalFetch('/public/portal/change-password', {
         method: 'POST',
-        body: JSON.stringify({ password: newPassword, confirm: confirmPassword }),
+        body: JSON.stringify({ password: chosen, confirm: confirmPassword.trim() }),
       });
+      if (result?.mustChangePassword) {
+        setPwMsg('Password was not saved. Please try again.');
+        return;
+      }
       setNewPassword('');
       setConfirmPassword('');
+      // Remember what they chose so login autofill can use it after sign-out.
+      setPassword(chosen);
       setPwMsg('Password updated. Welcome to your portal.');
-      await loadMe();
+      // Optimistically clear the gate even if /me is briefly stale.
+      setMe((prev: any) => (prev ? { ...prev, mustChangePassword: false } : prev));
+      try {
+        await loadMe();
+      } catch {
+        /* keep optimistic state — password already saved */
+      }
     } catch (err: any) {
       setPwMsg(err.message || 'Could not update password');
     } finally {
@@ -368,6 +389,7 @@ export default function ClientPortal() {
             Account number
             <input
               className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              name="portal-account"
               value={account}
               onChange={(e) => setAccount(e.target.value)}
               required
@@ -379,14 +401,18 @@ export default function ClientPortal() {
             Password
             <input
               className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              name="portal-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
-              placeholder="Phone number (default)"
+              placeholder="Your portal password"
             />
           </label>
+          <p className="text-[11px] text-slate-500 -mt-2">
+            First time? Use your phone number, then you will set a new password.
+          </p>
           <button
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition shadow-[0_12px_40px_-12px_rgba(249,115,22,0.7)] disabled:opacity-60"
             disabled={busy}
