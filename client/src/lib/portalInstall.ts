@@ -27,8 +27,8 @@ export function usePortalManifest() {
     const html = document.documentElement;
     html.classList.add('portal-route');
 
-    // Suspend panel themes (dark/isptech/blueglass…) so their slate/white remaps
-    // cannot wash out portal light sections on mobile.
+    // Suspend panel themes (dark/isptech/blueglass…) so their remaps
+    // cannot override the portal matrix glass theme.
     const prevDataTheme = html.getAttribute('data-theme');
     html.removeAttribute('data-theme');
 
