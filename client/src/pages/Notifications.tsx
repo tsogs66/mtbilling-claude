@@ -8,6 +8,14 @@ const TYPE_LABEL: Record<string, string> = {
   manual: 'Manual',
   expiry_reminder: 'Expiry reminder',
   auto_disable: 'Auto-disable',
+  nonpayment_notice: 'Non-payment notice',
+  payment_confirmation: 'Payment confirmation',
+  payment_receipt: 'Payment receipt',
+  pay_link_resend: 'Pay link',
+  portal_password_reset: 'Portal password reset',
+  portal_activation: 'Portal activation',
+  installation_success: 'Successful installation',
+  fair_use_alert: 'Fair-use alert',
 };
 
 const TEMPLATES = [
@@ -31,6 +39,20 @@ const TEMPLATES = [
     subject: 'Service Commissioning',
     message:
       'Hello! Your connection is scheduled for commissioning and activation. Kindly ensure your equipment is powered on and accessible. Please contact our support team if you need any assistance.',
+  },
+  {
+    key: 'successful_installation',
+    label: 'Successful Installation',
+    subject: 'Installation Complete',
+    message:
+      'Hi {name}, your internet installation is complete! Account #{account} ({plan}) is ready. Welcome aboard — enjoy your connection. For billing and support, open your subscriber portal: {portal_url}',
+  },
+  {
+    key: 'portal_activation',
+    label: 'Portal Account Activation',
+    subject: 'Subscriber Portal Access',
+    message:
+      'Hi {name}, your subscriber portal is now active. Account number: {account}. Default password: {password} (your registered mobile number). Sign in here: {portal_url}. Please change your password after the first login.',
   },
   {
     key: 'outage',
@@ -175,7 +197,11 @@ export default function Notifications() {
       .replace(/\{plan\}/gi, 'Fiber 25')
       .replace(/\{amount\}/gi, '₱1,500.00')
       .replace(/\{due\}/gi, '2026-08-15')
-      .replace(/\{username\}/gi, 'juan.d');
+      .replace(/\{username\}/gi, 'juan.d')
+      .replace(/\{password\}/gi, '09171234567')
+      .replace(/\{default_password\}/gi, '09171234567')
+      .replace(/\{portal_url\}/gi, 'https://billing.example.com/portal')
+      .replace(/\{portal_link\}/gi, 'https://billing.example.com/portal');
 
   const smsProvider = String(settings?.sms_provider || 'isms').toLowerCase();
   const setSmsProvider = (provider: string) => {
@@ -265,7 +291,9 @@ export default function Notifications() {
                 {TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
               </select>
               <p className="text-xs text-slate-400 mt-1">
-                Tokens are personalized per subscriber: <code>{'{name}'}</code>, <code>{'{account}'}</code>, <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>.
+                Tokens: <code>{'{name}'}</code>, <code>{'{account}'}</code>, <code>{'{plan}'}</code>,{' '}
+                <code>{'{amount}'}</code>, <code>{'{due}'}</code>, <code>{'{password}'}</code> (default = mobile),{' '}
+                <code>{'{portal_url}'}</code>.
               </p>
             </FormField>
 
@@ -284,7 +312,7 @@ export default function Notifications() {
               <p className="text-xs text-slate-400">
                 Sample fill:{' '}
                 <code className="text-slate-600">
-                  {'{name}=Juan · {account}=1001 · {plan}=Fiber 25 · {amount}=₱1,500.00 · {due}=2026-08-15'}
+                  {'{name}=Juan · {account}=1001 · {plan}=Fiber 25 · {password}=0917… · {portal_url}=…/portal'}
                 </code>
               </p>
               {(channel === 'email' || channel === 'both') && (

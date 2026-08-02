@@ -129,6 +129,7 @@ import {
   publicPortalRouter,
   assertNapHasCapacity,
   ensureDefaultPortalCredentials,
+  notifyPortalActivationIfProvisioned,
 } from './ispOps.js';
 import { initTwingate, twingateRouter } from './twingate.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
@@ -1531,7 +1532,8 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
   );
   // Portal login defaults: account number + phone/contact (must change on first login).
   try {
-    ensureDefaultPortalCredentials(Number(insertedId));
+    const prov = ensureDefaultPortalCredentials(Number(insertedId));
+    notifyPortalActivationIfProvisioned(Number(insertedId), prov);
   } catch {
     /* optional — missing phone just skips portal provisioning */
   }
@@ -1624,7 +1626,8 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   // Keep / create portal credentials when account # + phone are available.
   try {
-    ensureDefaultPortalCredentials(id);
+    const prov = ensureDefaultPortalCredentials(id);
+    notifyPortalActivationIfProvisioned(id, prov);
   } catch {
     /* ignore */
   }
