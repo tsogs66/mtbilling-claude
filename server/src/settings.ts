@@ -99,7 +99,7 @@ settingsRouter.put('/settings/app', (req, res) => {
     cur[f] = v;
   }
   // Normalize theme values
-  const theme = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass', 'matrix'].includes(cur.theme)
+  const theme = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass', 'matrix', 'orbital'].includes(cur.theme)
     ? cur.theme
     : 'matrix';
   db.prepare(

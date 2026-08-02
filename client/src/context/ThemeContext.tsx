@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech' | 'blueglass' | 'matrix';
+export type ThemeId = 'light' | 'dark' | 'onepiece' | 'steampunk' | 'isptech' | 'blueglass' | 'matrix' | 'orbital';
 
-export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass', 'matrix'];
+export const THEME_IDS: ThemeId[] = ['light', 'dark', 'onepiece', 'steampunk', 'isptech', 'blueglass', 'matrix', 'orbital'];
 
 const STORAGE_KEY = 'mt_theme';
 /** Bump to re-apply Matrix Glass default when the panel look changes again. */
