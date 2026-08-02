@@ -32,12 +32,14 @@ type PortalAccount = {
   price?: number;
   portal_enabled: number;
   has_pin: number;
+  portal_must_change_password?: number;
 };
 
 const DEFAULT_SETTINGS: PortalSettings = {
   title: 'Subscriber Portal',
   subtitle: '',
-  helpText: 'Ask your ISP for portal access (account + PIN).',
+  helpText:
+    'Sign in with your account number and phone number (default password). You will set your own password after the first login.',
   welcomeText: '',
   showBalance: true,
   showInvoices: true,
@@ -55,9 +57,10 @@ export default function PortalAdmin() {
   const [settings, setSettings] = useState<PortalSettings>(DEFAULT_SETTINGS);
   const [busySettings, setBusySettings] = useState(false);
   const [toast, setToast] = useState('');
-  const [edit, setEdit] = useState<Partial<PortalAccount> & { pin?: string } | null>(null);
+  const [edit, setEdit] = useState<Partial<PortalAccount> & { password?: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState<'connecting' | 'live' | 'retry'>('connecting');
+  const [autoBusy, setAutoBusy] = useState(false);
 
   const show = (m: string) => {
     setToast(m);
@@ -150,7 +153,7 @@ export default function PortalAdmin() {
       email: edit.email,
       portal_enabled: !!edit.portal_enabled,
     };
-    if (edit.pin && String(edit.pin).trim()) body.pin = String(edit.pin).trim();
+    if (edit.password && String(edit.password).trim()) body.password = String(edit.password).trim();
     try {
       await api.put(`/client-portal/accounts/${edit.id}`, body);
       setEdit(null);
@@ -161,20 +164,30 @@ export default function PortalAdmin() {
     }
   };
 
-  const createAccount = async (form: { pppoe_user_id: string; pin: string; account_number: string }) => {
+  const createAccount = async (form: {
+    pppoe_user_id: string;
+    password: string;
+    account_number: string;
+    useDefaultPassword: boolean;
+  }) => {
     const id = Number(form.pppoe_user_id);
-    if (!id || !/^\d{4,8}$/.test(form.pin)) {
-      show('Select a subscriber and enter a 4–8 digit PIN');
+    if (!id) {
+      show('Select a subscriber');
       return;
     }
     try {
       await api.put(`/client-portal/accounts/${id}`, {
-        pin: form.pin,
         portal_enabled: true,
+        useDefaultPassword: form.useDefaultPassword,
+        ...(form.useDefaultPassword ? {} : { password: form.password }),
         ...(form.account_number.trim() ? { account_number: form.account_number.trim() } : {}),
       });
       setCreateOpen(false);
-      show('Portal access enabled');
+      show(
+        form.useDefaultPassword
+          ? 'Portal access enabled — default password is their phone number'
+          : 'Portal access enabled'
+      );
       loadAccounts();
     } catch (e: any) {
       show(e?.response?.data?.error || 'Could not enable portal');
@@ -182,13 +195,47 @@ export default function PortalAdmin() {
   };
 
   const disable = async (id: number) => {
-    if (!confirm('Disable portal access and clear PIN for this subscriber?')) return;
+    if (!confirm('Disable portal access and clear password for this subscriber?')) return;
     try {
       await api.post('/client-portal/disable', { pppoe_user_id: id });
       show('Portal disabled');
       loadAccounts();
     } catch (e: any) {
       show(e?.response?.data?.error || 'Failed');
+    }
+  };
+
+  const resetDefaultPassword = async (id: number) => {
+    if (!confirm('Reset portal password to the subscriber’s phone number? They must set a new password on next login.')) {
+      return;
+    }
+    try {
+      await api.post(`/client-portal/accounts/${id}/reset-default-password`);
+      show('Password reset to phone number');
+      loadAccounts();
+      setEdit(null);
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Could not reset password');
+    }
+  };
+
+  const autoProvision = async () => {
+    if (
+      !confirm(
+        'Auto-create portal logins for all subscribers with an account number and phone?\n\nUsername = account number\nDefault password = phone number (must change on first login)'
+      )
+    ) {
+      return;
+    }
+    setAutoBusy(true);
+    try {
+      const r = await api.post('/client-portal/auto-provision');
+      show(`Auto-created ${r.data?.created ?? 0} portal login(s)`);
+      loadAccounts();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Auto-create failed');
+    } finally {
+      setAutoBusy(false);
     }
   };
 
@@ -220,7 +267,7 @@ export default function PortalAdmin() {
     <Layout title="Subscriber Portal">
       <PageHeader
         title="Subscriber Portal"
-        description="Create and edit portal logins, set PINs, review plan-change requests, and customize /portal."
+        description="Portal logins auto-use account number + phone. Subscribers set their own password after first login."
         icon={Globe2}
       />
 
@@ -283,9 +330,14 @@ export default function PortalAdmin() {
           title="Portal accounts"
           icon={KeyRound}
           right={
-            <button type="button" className="btn-primary" onClick={() => setCreateOpen(true)}>
-              <Plus size={16} /> Enable access
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary" disabled={autoBusy} onClick={() => void autoProvision()}>
+                <KeyRound size={16} /> {autoBusy ? 'Creating…' : 'Auto-create all'}
+              </button>
+              <button type="button" className="btn-primary" onClick={() => setCreateOpen(true)}>
+                <Plus size={16} /> Enable access
+              </button>
+            </div>
           }
         >
           <Toolbar
@@ -308,10 +360,10 @@ export default function PortalAdmin() {
               </div>
             }
             right={
-              <p className="text-xs text-slate-500">
-                Login uses <span className="font-medium text-slate-700">account number</span> (or PPPoE username) + PIN.
-                Manage full subscriber records in{' '}
-                <Link to="/pppoe" className="text-brand-600 hover:underline">PPPoE</Link>.
+              <p className="text-xs text-slate-500 max-w-md text-right">
+                Default login: <span className="font-medium text-slate-700">account number</span> +{' '}
+                <span className="font-medium text-slate-700">phone</span>. After first login they set a new password.
+                Manage contacts in <Link to="/pppoe" className="text-brand-600 hover:underline">PPPoE</Link>.
               </p>
             }
           />
@@ -345,9 +397,14 @@ export default function PortalAdmin() {
                     </td>
                     <td className="px-3 py-2.5">
                       {a.portal_enabled ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                          On{a.has_pin ? '' : ' (no PIN)'}
-                        </span>
+                        <div className="space-y-1">
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                            On{a.has_pin ? '' : ' (no password)'}
+                          </span>
+                          {!!a.portal_must_change_password && (
+                            <div className="text-[11px] text-amber-700">Must change password</div>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-slate-400">Off</span>
                       )}
@@ -357,7 +414,7 @@ export default function PortalAdmin() {
                         type="button"
                         className="btn-ghost"
                         title="Edit"
-                        onClick={() => setEdit({ ...a, pin: '' })}
+                        onClick={() => setEdit({ ...a, password: '' })}
                       >
                         <Pencil size={14} />
                       </button>
@@ -569,13 +626,17 @@ export default function PortalAdmin() {
                 onChange={(e) => setEdit({ ...edit, email: e.target.value })}
               />
             </FormField>
-            <FormField label="New PIN (4–8 digits)" hint="Leave blank to keep current PIN">
+            <FormField
+              label="New password"
+              hint="Leave blank to keep current. Or reset to phone number below."
+            >
               <input
                 className="input"
-                inputMode="numeric"
-                value={edit.pin || ''}
-                onChange={(e) => setEdit({ ...edit, pin: e.target.value })}
-                placeholder={edit.has_pin ? '••••' : 'Set a PIN'}
+                type="password"
+                value={edit.password || ''}
+                onChange={(e) => setEdit({ ...edit, password: e.target.value })}
+                placeholder={edit.has_pin ? '••••••••' : 'Set a password'}
+                autoComplete="new-password"
               />
             </FormField>
             <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -586,6 +647,20 @@ export default function PortalAdmin() {
               />
               Portal access enabled
             </label>
+            {!!edit.portal_enabled && (
+              <button
+                type="button"
+                className="btn-secondary w-full"
+                onClick={() => edit.id && void resetDefaultPassword(edit.id)}
+              >
+                Reset password to phone number
+              </button>
+            )}
+            {!!edit.portal_must_change_password && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Subscriber must set a new password on next portal login.
+              </p>
+            )}
           </div>
         </Modal>
       )}
@@ -608,24 +683,34 @@ function EnablePortalModal({
 }: {
   accounts: PortalAccount[];
   onClose: () => void;
-  onSave: (form: { pppoe_user_id: string; pin: string; account_number: string }) => Promise<void>;
+  onSave: (form: {
+    pppoe_user_id: string;
+    password: string;
+    account_number: string;
+    useDefaultPassword: boolean;
+  }) => Promise<void>;
 }) {
   const [pppoe_user_id, setId] = useState('');
-  const [pin, setPin] = useState('');
+  const [password, setPassword] = useState('');
   const [account_number, setAccount] = useState('');
+  const [useDefaultPassword, setUseDefault] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [phonePreview, setPhonePreview] = useState('');
 
   const candidates = accounts.filter((a) => !a.portal_enabled);
 
   useEffect(() => {
     const row = accounts.find((a) => String(a.id) === pppoe_user_id);
-    if (row) setAccount(row.account_number || '');
+    if (row) {
+      setAccount(row.account_number || '');
+      setPhonePreview(String(row.contact || '').trim());
+    }
   }, [pppoe_user_id, accounts]);
 
   const save = async () => {
     setBusy(true);
     try {
-      await onSave({ pppoe_user_id, pin, account_number });
+      await onSave({ pppoe_user_id, password, account_number, useDefaultPassword });
     } finally {
       setBusy(false);
     }
@@ -639,8 +724,8 @@ function EnablePortalModal({
     >
       <div className="space-y-3">
         <p className="text-sm text-slate-500">
-          Share the account number and PIN with the subscriber. They sign in at{' '}
-          <code className="text-brand-600">/portal</code>.
+          Default login is <strong>account number</strong> + <strong>phone number</strong>. The subscriber sets a new
+          password after first sign-in at <code className="text-brand-600">/portal</code>.
         </p>
         <FormField label="Subscriber" required>
           <select className="input" value={pppoe_user_id} onChange={(e) => setId(e.target.value)}>
@@ -649,22 +734,38 @@ function EnablePortalModal({
               <option key={s.id} value={s.id}>
                 {s.customer_name || s.username}
                 {s.portal_enabled ? ' (already on)' : ''} — {s.account_number || s.username}
+                {s.contact ? ` · ${s.contact}` : ' · no phone'}
               </option>
             ))}
           </select>
         </FormField>
-        <FormField label="Account number" hint="Optional override; defaults to current value">
+        <FormField label="Account number" hint="Username for /portal">
           <input className="input" value={account_number} onChange={(e) => setAccount(e.target.value)} />
         </FormField>
-        <FormField label="PIN (4–8 digits)" required>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
           <input
-            className="input"
-            inputMode="numeric"
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            placeholder="1234"
+            type="checkbox"
+            checked={useDefaultPassword}
+            onChange={(e) => setUseDefault(e.target.checked)}
           />
-        </FormField>
+          Use phone number as default password
+        </label>
+        {useDefaultPassword ? (
+          <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+            Default password:{' '}
+            <span className="font-mono font-semibold text-slate-800">{phonePreview || '(add phone/contact first)'}</span>
+          </p>
+        ) : (
+          <FormField label="Custom password" required hint="At least 6 characters">
+            <input
+              className="input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </FormField>
+        )}
       </div>
     </Modal>
   );

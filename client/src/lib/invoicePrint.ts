@@ -1,5 +1,5 @@
 /**
- * A4 business printouts — elegant header using Company branding.
+ * A4 business printouts — high-contrast branding for readable print preview.
  */
 export type CompanyPrint = {
   name?: string | null;
@@ -45,64 +45,100 @@ function money(n: number): string {
   return `\u20b1${Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Shared A4 stylesheet — teal brand accent matching the panel. */
+/** Shared A4 stylesheet — dark ink on white for print-preview readability. */
 function printStyles(): string {
   return `
   @page { size: A4; margin: 12mm 14mm; }
   * { box-sizing: border-box; }
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
   body {
     font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    color: #0f172a;
-    font-size: 12.5px;
-    line-height: 1.45;
+    font-size: 13.5px;
+    line-height: 1.5;
     margin: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .brand-bar {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
     padding-bottom: 14px; margin-bottom: 18px;
-    border-bottom: 3px solid #0d9488;
+    border-bottom: 3px solid #0f766e;
   }
   .brand-left { display: flex; gap: 14px; align-items: flex-start; min-width: 0; }
   .logo {
     width: 56px; height: 56px; object-fit: contain; border-radius: 10px;
-    border: 1px solid #e2e8f0; background: #f8fafc; flex-shrink: 0;
+    border: 1px solid #cbd5e1; background: #f8fafc; flex-shrink: 0;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .logo-fallback {
-    width: 56px; height: 56px; border-radius: 10px; background: linear-gradient(135deg,#0d9488,#0ea5e9);
-    color: #fff; font-weight: 800; font-size: 18px; display: flex; align-items: center; justify-content: center;
+    width: 56px; height: 56px; border-radius: 10px; background: #0f766e;
+    color: #ffffff; font-weight: 800; font-size: 18px; display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .brand-name { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; color: #0f172a; margin: 0; }
-  .brand-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #0d9488; font-weight: 700; margin-top: 2px; }
-  .brand-meta { color: #64748b; font-size: 11px; margin-top: 4px; }
+  .brand-name { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; color: #0f172a !important; margin: 0; }
+  .brand-tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: #0f766e !important; font-weight: 800; margin-top: 2px; }
+  .brand-meta { color: #1e293b !important; font-size: 12px; margin-top: 4px; font-weight: 500; }
   .doc-title { text-align: right; }
-  .doc-title h2 { margin: 0; font-size: 22px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em; }
-  .doc-title .sub { color: #64748b; font-size: 11px; margin-top: 4px; }
-  .muted { color: #64748b; }
+  .doc-title h2 { margin: 0; font-size: 24px; font-weight: 800; color: #0f172a !important; letter-spacing: -0.02em; }
+  .doc-title .sub { color: #1e293b !important; font-size: 13px; margin-top: 4px; font-weight: 600; }
+  .muted { color: #334155 !important; }
   .badge {
-    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10px;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; background: #e2e8f0; margin-top: 6px;
+    display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 11px;
+    font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+    background: #e2e8f0; color: #0f172a !important; margin-top: 6px;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .badge.paid { background: #ccfbf1; color: #0f766e; }
-  .badge.overdue { background: #fee2e2; color: #991b1b; }
-  .badge.unpaid, .badge.partial, .badge.pending { background: #fef3c7; color: #92400e; }
+  .badge.paid { background: #99f6e4; color: #115e59 !important; }
+  .badge.overdue { background: #fecaca; color: #7f1d1d !important; }
+  .badge.unpaid, .badge.partial, .badge.pending { background: #fde68a; color: #78350f !important; }
   .grid2 { display: flex; gap: 32px; flex-wrap: wrap; margin-bottom: 16px; }
-  .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; font-weight: 700; }
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid #e2e8f0; }
-  th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; background: #f8fafc; }
-  .r { text-align: right; }
-  .totals { margin-top: 14px; width: 260px; margin-left: auto; }
-  .totals td { border: 0; padding: 4px 0; }
-  .totals .grand { font-size: 15px; font-weight: 800; border-top: 2px solid #0f172a; padding-top: 8px; color: #0d9488; }
-  .foot {
-    margin-top: 28px; padding-top: 12px; border-top: 1px solid #e2e8f0;
-    font-size: 10px; color: #94a3b8; display: flex; justify-content: space-between; gap: 12px;
+  .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: #334155 !important; font-weight: 800;
   }
-  .accent-strip { height: 4px; background: linear-gradient(90deg,#0d9488,#0ea5e9,#38bdf8); border-radius: 2px; margin-bottom: 16px; }
-  @media print { .no-print { display: none !important; } }
+  .value { color: #0f172a !important; font-weight: 600; }
+  .value-strong { color: #0f172a !important; font-weight: 800; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td {
+    text-align: left; padding: 10px 8px; border-bottom: 1px solid #cbd5e1;
+    color: #0f172a !important; font-size: 13px;
+  }
+  th {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: #1e293b !important; font-weight: 800; background: #f1f5f9;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .r { text-align: right; }
+  .totals { margin-top: 14px; width: 280px; margin-left: auto; }
+  .totals td { border: 0; padding: 5px 0; color: #0f172a !important; font-weight: 600; }
+  .totals .grand {
+    font-size: 16px; font-weight: 800; border-top: 2px solid #0f172a;
+    padding-top: 8px; color: #0f172a !important;
+  }
+  .section-title {
+    margin-top: 26px; margin-bottom: 0; font-size: 12px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #1e293b !important; font-weight: 800;
+  }
+  .foot {
+    margin-top: 28px; padding-top: 12px; border-top: 1px solid #cbd5e1;
+    font-size: 11px; color: #334155 !important; font-weight: 600;
+    display: flex; justify-content: space-between; gap: 12px;
+  }
+  .accent-strip {
+    height: 5px; background: #0f766e; border-radius: 2px; margin-bottom: 16px;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  @media print {
+    .no-print { display: none !important; }
+    body { color: #000000 !important; }
+    .brand-name, .doc-title h2, .value, .value-strong, th, td, .totals td, .totals .grand {
+      color: #000000 !important;
+    }
+  }
 `;
 }
 
@@ -163,8 +199,10 @@ function openPrintWindow(html: string, _title: string) {
   const iframe = document.createElement('iframe');
   iframe.id = 'mt-a4-print-frame';
   iframe.setAttribute('title', 'Print');
+  // Keep a readable on-screen size during render so print engines measure text correctly,
+  // then hide after print is triggered.
   iframe.style.cssText =
-    'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+    'position:fixed;right:0;bottom:0;width:794px;height:1123px;border:0;opacity:0.01;pointer-events:none;z-index:-1;';
   document.body.appendChild(iframe);
 
   const doc = iframe.contentDocument || iframe.contentWindow?.document;
@@ -254,13 +292,13 @@ export function buildInvoiceHtml(data: InvoicePrintData): string {
   <div class="grid2">
     <div>
       <div class="label">Bill to</div>
-      <div style="font-weight:700;font-size:15px;margin-top:2px">${esc(inv.customer_name || '—')}</div>
-      <div>Account #${esc(inv.account_number || '—')}</div>
+      <div class="value-strong" style="margin-top:2px">${esc(inv.customer_name || '—')}</div>
+      <div class="value">Account #${esc(inv.account_number || '—')}</div>
     </div>
     <div>
       <div class="label">Service period</div>
-      <div style="margin-top:2px">${esc(inv.period_start || '—')} → ${esc(inv.period_end || '—')}</div>
-      <div>Due date: <b>${esc(inv.due_date || '—')}</b></div>
+      <div class="value" style="margin-top:2px">${esc(inv.period_start || '—')} → ${esc(inv.period_end || '—')}</div>
+      <div class="value">Due date: <b>${esc(inv.due_date || '—')}</b></div>
     </div>
   </div>
   <table>
@@ -268,7 +306,7 @@ export function buildInvoiceHtml(data: InvoicePrintData): string {
     <tbody>
       <tr>
         <td>Internet service${inv.period_start ? ` (${esc(inv.period_start)} – ${esc(inv.period_end)})` : ''}</td>
-        <td class="r">${money(Number(inv.amount || 0))}</td>
+        <td class="r"><b>${money(Number(inv.amount || 0))}</b></td>
       </tr>
       ${inv.notes ? `<tr><td colspan="2" class="muted">${esc(inv.notes)}</td></tr>` : ''}
     </tbody>
@@ -280,7 +318,7 @@ export function buildInvoiceHtml(data: InvoicePrintData): string {
   </table>
   ${
     hist.length
-      ? `<h3 style="margin-top:26px;font-size:13px;letter-spacing:0.04em;text-transform:uppercase;color:#64748b">Payment history</h3>
+      ? `<h3 class="section-title">Payment history</h3>
   <table><thead><tr><th>Date</th><th>Method</th><th class="r">Amount</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>`
       : ''
   }
@@ -325,11 +363,11 @@ export function openSalesReportPrint(opts: {
 <style>${printStyles()}</style></head><body>
   ${businessHeader(company, opts.title, opts.rangeLabel)}
   ${opts.meta ? `<div class="muted" style="margin-bottom:8px">${esc(opts.meta)}</div>` : ''}
-  <div style="font-size:18px;font-weight:800;color:#0d9488;margin:8px 0 4px">Total ${money(opts.total)}</div>
+  <div style="font-size:18px;font-weight:800;color:#0f172a;margin:8px 0 4px">Total ${money(opts.total)}</div>
   <table><thead><tr><th>Period</th><th class="r">Amount</th></tr></thead><tbody>${bars || '<tr><td colspan="2" class="muted">No period totals</td></tr>'}</tbody></table>
   ${
     txRows
-      ? `<h3 style="margin-top:26px;font-size:13px;letter-spacing:0.04em;text-transform:uppercase;color:#64748b">Transactions</h3>
+      ? `<h3 class="section-title">Transactions</h3>
   <table><thead><tr><th>Date</th><th>Customer</th><th>Type</th><th class="r">Amount</th></tr></thead><tbody>${txRows}</tbody></table>`
       : ''
   }
