@@ -498,8 +498,16 @@ interface Client {
   price?: number | null;
 }
 
-/** Public subscriber portal URL for SMS/email templates. */
+/**
+ * Public subscriber portal address for SMS/email templates.
+ * Scheme (https://) is stripped so carriers are less likely to block the message as a link.
+ */
 function resolvePortalLink(): string {
+  const stripScheme = (u: string) =>
+    String(u || '')
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '');
   try {
     const app = db
       .prepare(
@@ -512,20 +520,18 @@ function resolvePortalLink(): string {
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url ||
           (app?.cf_tunnel_hostname
-            ? `https://${String(app.cf_tunnel_hostname).replace(/^https?:\/\//i, '')}`
+            ? String(app.cf_tunnel_hostname).replace(/^https?:\/\//i, '')
             : '')
         : '';
     const ngrok = app?.ngrok_status === 'running' ? app?.ngrok_url : '';
     for (const raw of [app?.public_base_url, process.env.PUBLIC_BASE_URL, cf, ngrok]) {
-      const base = String(raw || '')
-        .trim()
-        .replace(/\/+$/, '');
-      if (base) return `${base}/portal`;
+      const host = stripScheme(String(raw || ''));
+      if (host) return `${host}/portal`;
     }
   } catch {
     /* ignore */
   }
-  return '/portal';
+  return 'portal';
 }
 
 // Personalize template tokens with the recipient's own details.
@@ -533,7 +539,9 @@ function fillTemplate(text: string, client: Client, extras?: Record<string, stri
   if (!text) return text;
   const amount = client.price != null ? formatCurrency(Number(client.price)) : '';
   const password = extras?.password ?? extras?.default_password ?? String(client.contact || '').trim();
-  const portalUrl = extras?.portal_url ?? extras?.portal_link ?? resolvePortalLink();
+  const portalUrl = String(extras?.portal_url ?? extras?.portal_link ?? resolvePortalLink())
+    .trim()
+    .replace(/^https?:\/\//i, '');
   const map: Record<string, string> = {
     name: client.customer_name || client.username || '',
     account: client.account_number || '',
