@@ -549,6 +549,8 @@ export function migrate() {
     ['portal_session_days', 'INTEGER DEFAULT 7'],
     // Manual public portal link for SMS/notifications (scheme optional; leave blank to auto-detect)
     ['portal_link', 'TEXT'],
+    // Public /portal appearance: matrix | orbital
+    ['portal_theme', "TEXT DEFAULT 'matrix'"],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);

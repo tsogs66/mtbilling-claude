@@ -786,7 +786,7 @@ function portalSettingsRow() {
     .prepare(
       `SELECT portal_title, portal_subtitle, portal_help_text, portal_welcome_text,
               portal_show_balance, portal_show_invoices, portal_show_tickets, portal_show_company,
-              portal_session_days, portal_link,
+              portal_session_days, portal_link, portal_theme,
               public_base_url, ngrok_url, ngrok_status,
               cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
        FROM app_settings WHERE id = 1`
@@ -822,6 +822,7 @@ function portalSettingsRow() {
     sessionDays: Math.min(90, Math.max(1, Number(row?.portal_session_days) || 7)),
     portalLink: normalizePortalLink(row?.portal_link),
     autoPortalLink,
+    theme: row?.portal_theme === 'orbital' ? 'orbital' : 'matrix',
   };
 }
 
@@ -843,11 +844,13 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
   let sessionDays = Number(b.sessionDays);
   if (!Number.isFinite(sessionDays)) sessionDays = 7;
   sessionDays = Math.min(90, Math.max(1, Math.round(sessionDays)));
+  const themeRaw = String(b.theme ?? b.portalTheme ?? 'matrix').trim().toLowerCase();
+  const portalTheme = themeRaw === 'orbital' ? 'orbital' : 'matrix';
   db.prepare(
     `UPDATE app_settings SET
        portal_title = ?, portal_subtitle = ?, portal_help_text = ?, portal_welcome_text = ?,
        portal_show_balance = ?, portal_show_invoices = ?, portal_show_tickets = ?, portal_show_company = ?,
-       portal_session_days = ?, portal_link = ?
+       portal_session_days = ?, portal_link = ?, portal_theme = ?
      WHERE id = 1`
   ).run(
     title,
@@ -859,7 +862,8 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
     showTickets,
     showCompany,
     sessionDays,
-    portalLink || null
+    portalLink || null,
+    portalTheme
   );
   res.json(portalSettingsRow());
 });

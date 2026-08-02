@@ -3083,7 +3083,7 @@ html.portal-route .portal-matrix-veil::after {
   from { transform: translateY(0); }
   to { transform: translateY(4px); }
 }
-html.portal-route .subscriber-portal > *:not(.portal-matrix-canvas):not(.portal-matrix-veil) {
+html.portal-route .subscriber-portal > *:not(.portal-matrix-canvas):not(.matrix-rain-canvas):not(.portal-matrix-veil):not(.orbital-network-canvas):not(.portal-orbital-veil) {
   position: relative;
   z-index: 1;
 }
@@ -3324,4 +3324,69 @@ html.portal-route .portal-brand-glow {
   html.portal-route .subscriber-portal .portal-plan-glass::after {
     display: none;
   }
+}
+
+/* ── Portal Orbital Net variant (data-portal-theme=orbital) ── */
+html.portal-route[data-portal-theme='orbital'] {
+  --portal-void: #030b18;
+  --portal-void-deep: #020817;
+  --portal-glass: rgba(10, 28, 52, 0.58);
+  --portal-glass-strong: rgba(6, 18, 36, 0.78);
+  --portal-glass-border: rgba(125, 211, 252, 0.2);
+  --portal-glass-border-hot: rgba(249, 115, 22, 0.45);
+  --portal-orange: #f97316;
+  --portal-orange-soft: #fb923c;
+  --portal-orange-glow: rgba(249, 115, 22, 0.45);
+  --portal-matrix: #67e8f9;
+  --portal-text: #f8fafc;
+  --portal-muted: #e2e8f0;
+  --portal-dim: #cbd5e1;
+}
+html.portal-route[data-portal-theme='orbital'] .orbital-network-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.78;
+}
+html.portal-route[data-portal-theme='orbital'] .portal-orbital-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 50% at 18% 8%, rgba(249, 115, 22, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 45% at 88% 18%, rgba(34, 211, 238, 0.12), transparent 50%),
+    linear-gradient(180deg, rgba(2, 8, 23, 0.4) 0%, rgba(3, 11, 24, 0.58) 50%, rgba(2, 8, 23, 0.86) 100%);
+}
+html.portal-route[data-portal-theme='orbital'] .portal-glass-strong {
+  background:
+    linear-gradient(160deg, rgba(34, 211, 238, 0.1), rgba(255, 255, 255, 0.03)),
+    var(--portal-glass-strong);
+  border-color: rgba(103, 232, 249, 0.28);
+}
+html.portal-route[data-portal-theme='orbital'] .portal-plan-glass {
+  border-color: rgba(125, 211, 252, 0.2);
+  background:
+    linear-gradient(145deg, rgba(34, 211, 238, 0.1), rgba(255, 255, 255, 0.04)),
+    rgba(10, 28, 52, 0.55);
+}
+html.portal-route[data-portal-theme='orbital'] .portal-modal-panel {
+  background: linear-gradient(165deg, rgba(12, 32, 58, 0.94), rgba(4, 12, 28, 0.97));
+  border-color: rgba(103, 232, 249, 0.28);
+  box-shadow: 0 30px 80px -24px rgba(0, 0, 0, 0.8), 0 0 60px -30px rgba(34, 211, 238, 0.4);
+}
+html.portal-route[data-portal-theme='orbital'] .text-portal-muted {
+  color: #e2e8f0 !important;
+}
+html.portal-route[data-portal-theme='orbital'] .text-portal-dim {
+  color: #cbd5e1 !important;
+}
+html.portal-route[data-portal-theme='orbital'] .subscriber-portal .portal-field,
+html.portal-route[data-portal-theme='orbital'] .subscriber-portal input,
+html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
+  background: rgba(4, 12, 28, 0.72) !important;
+  border-color: rgba(125, 211, 252, 0.28) !important;
 }

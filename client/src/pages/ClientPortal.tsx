@@ -8,14 +8,23 @@ import { peso } from '../api';
 import { getApiBase } from '../config';
 import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
+import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
 import { PRODUCT_TITLE } from '../branding';
-import { usePortalInstall } from '../lib/portalInstall';
+import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
 import { subscribePortalLive } from '../lib/portalLive';
 import { openInvoicePrint } from '../lib/invoicePrint';
 
 const TOKEN_KEY = 'mt_portal_token';
 
-function PortalBackdrop() {
+function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
+  if (theme === 'orbital') {
+    return (
+      <>
+        <OrbitalNetwork />
+        <div className="portal-orbital-veil" aria-hidden="true" />
+      </>
+    );
+  }
   return (
     <>
       <MatrixRain />
@@ -33,6 +42,7 @@ type PortalSettings = {
   showInvoices?: boolean;
   showTickets?: boolean;
   showCompany?: boolean;
+  theme?: PortalThemeId;
 };
 
 type OutageServiceOpt = {
@@ -103,18 +113,20 @@ export default function ClientPortal() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotMsg, setForgotMsg] = useState('');
   const [forgotOk, setForgotOk] = useState(false);
-  const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
+  const portalTheme: PortalThemeId =
+    (me?.settings?.theme || pageSettings.theme) === 'orbital' ? 'orbital' : 'matrix';
+  const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall(portalTheme);
 
   const loadMe = async () => {
     if (!localStorage.getItem(TOKEN_KEY)) return;
     const data = await portalFetch('/public/portal/me');
     setMe(data);
-    if (data.settings) setPageSettings(data.settings);
+    if (data.settings) setPageSettings((prev: PortalSettings) => ({ ...prev, ...data.settings }));
   };
 
   useEffect(() => {
     portalFetch('/public/portal/settings')
-      .then((s) => setPageSettings(s || {}))
+      .then((s) => setPageSettings((prev) => ({ ...prev, ...(s || {}) })))
       .catch(() => undefined);
   }, []);
 
@@ -382,7 +394,7 @@ export default function ClientPortal() {
   if (!token || !me) {
     return (
       <div className="subscriber-portal subscriber-portal--login min-h-full flex flex-col items-center justify-center p-4 relative overflow-x-hidden">
-        <PortalBackdrop />
+        <PortalBackdrop theme={portalTheme} />
 
         <div className="relative z-[1] w-full max-w-md flex flex-col items-center gap-6">
           {!forgotOpen && (
@@ -587,7 +599,7 @@ export default function ClientPortal() {
   if (me.mustChangePassword) {
     return (
       <div className="subscriber-portal subscriber-portal--login relative min-h-full flex items-center justify-center p-6 overflow-hidden">
-        <PortalBackdrop />
+        <PortalBackdrop theme={portalTheme} />
         <form
           onSubmit={submitNewPassword}
           className="portal-glass portal-glass-strong relative z-[1] w-full max-w-md rounded-3xl p-8 space-y-5"
@@ -662,7 +674,7 @@ export default function ClientPortal() {
 
   return (
     <div className="subscriber-portal min-h-full flex flex-col">
-      <PortalBackdrop />
+      <PortalBackdrop theme={portalTheme} />
 
       <div className="subscriber-portal-hero relative z-[1]">
         <header className="max-w-3xl mx-auto px-4 pt-4 sm:pt-5 pb-6">
