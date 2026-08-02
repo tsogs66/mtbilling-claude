@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="isptech" style="color-scheme: dark">
+<html lang="en" data-theme="matrix" style="color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -10,7 +10,7 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#050a14" />
+    <meta name="theme-color" content="#020806" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,12 +21,12 @@
     <div id="root"></div>
     <script>
       try {
-        var migrated = localStorage.getItem('mt_theme_snapshot_v2');
+        var migrated = localStorage.getItem('mt_theme_matrix_v1');
         if (!migrated) {
-          localStorage.setItem('mt_theme_snapshot_v2', '1');
-          localStorage.setItem('mt_theme', 'isptech');
+          localStorage.setItem('mt_theme_matrix_v1', '1');
+          localStorage.setItem('mt_theme', 'matrix');
         }
-        var theme = localStorage.getItem('mt_theme') || 'isptech';
+        var theme = localStorage.getItem('mt_theme') || 'matrix';
         document.documentElement.setAttribute('data-theme', theme);
         document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
       } catch (e) {}

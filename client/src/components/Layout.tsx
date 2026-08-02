@@ -6,7 +6,9 @@ import Topbar from './Topbar';
 import BottomNav from './BottomNav';
 import NativeAppBridge from './NativeAppBridge';
 import AccessSplitBanner from './AccessSplitBanner';
+import { MatrixRain } from './portal/MatrixRain';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { isNativeApp } from '../config';
 
 type LayoutContextValue = {
@@ -38,9 +40,11 @@ export default function Layout({
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { canWrite, user } = useAuth();
+  const { theme } = useTheme();
   const readOnly = !!user && !canWrite && !allowWrite;
   const roleViewer = !!user?.readOnly && !!user?.licenseActivated;
   const nativeShell = isNativeApp();
+  const matrixTheme = theme === 'matrix';
 
   return (
     <LayoutContext.Provider
@@ -51,11 +55,18 @@ export default function Layout({
       }}
     >
       <div className="relative flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main snap-shell overflow-hidden">
-        <div className="snap-ambient pointer-events-none absolute inset-0 z-0" aria-hidden>
-          <span className="snap-orb snap-orb-a" />
-          <span className="snap-orb snap-orb-b" />
-          <span className="snap-grid" />
-        </div>
+        {matrixTheme ? (
+          <>
+            <MatrixRain />
+            <div className="matrix-panel-veil pointer-events-none absolute inset-0 z-0" aria-hidden />
+          </>
+        ) : (
+          <div className="snap-ambient pointer-events-none absolute inset-0 z-0" aria-hidden>
+            <span className="snap-orb snap-orb-a" />
+            <span className="snap-orb snap-orb-b" />
+            <span className="snap-grid" />
+          </div>
+        )}
         <NativeAppBridge />
         {sidebarOpen && !nativeShell && (
           <button

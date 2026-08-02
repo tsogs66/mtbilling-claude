@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown, RefreshCw, LogOut, Router as RouterIcon, Menu,
-  Sun, Moon, Anchor, Cog, Network, Palette,
+  Sun, Moon, Anchor, Cog, Network, Palette, Binary,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useRouterDevice } from '../context/RouterContext';
@@ -18,6 +18,7 @@ const THEMES: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] 
   { key: 'steampunk', label: 'Steampunk', Icon: Cog, hint: 'Brass, copper & engraved gears' },
   { key: 'isptech', label: 'Snapshot', Icon: Network, hint: 'Landing navy glass · orange + cyan' },
   { key: 'blueglass', label: 'Blue Glass', Icon: Palette, hint: 'Elegant sapphire glass · sky accents' },
+  { key: 'matrix', label: 'Matrix Glass', Icon: Binary, hint: 'Futuristic matrix rain · orange glass' },
 ];
 
 function ThemeIcon({ theme, size = 18 }: { theme: ThemeId; size?: number }) {
@@ -26,6 +27,7 @@ function ThemeIcon({ theme, size = 18 }: { theme: ThemeId; size?: number }) {
   if (theme === 'steampunk') return <Cog size={size} />;
   if (theme === 'isptech') return <Network size={size} />;
   if (theme === 'blueglass') return <Palette size={size} />;
+  if (theme === 'matrix') return <Binary size={size} />;
   if (theme === 'light') return <Sun size={size} />;
   return <Palette size={size} />;
 }

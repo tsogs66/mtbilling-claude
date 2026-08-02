@@ -1178,24 +1178,341 @@ body {
   font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
 }
 
+/* ── Matrix Glass theme (portal twin · orange brand · green rain) ── */
+[data-theme='matrix'] {
+  color-scheme: dark;
+  --brand: #f97316;
+  --brand-glow: rgba(249, 115, 22, 0.5);
+  --accent-cyan: #34d399;
+  --page-bg: #020806;
+  --page-fg: #f1f5f9;
+  --card-bg: rgba(8, 28, 22, 0.58);
+  --card-border: rgba(255, 255, 255, 0.12);
+  --modal-bg: rgba(4, 14, 12, 0.96);
+  --modal-border: rgba(249, 115, 22, 0.28);
+  --sidebar-bg: #010403;
+  --sidebar-fg: #cbd5e1;
+  --sidebar-border: rgba(52, 211, 153, 0.14);
+  --sidebar-muted: #94a3b8;
+  --sidebar-hover-bg: rgba(52, 211, 153, 0.08);
+  --sidebar-active-bg: rgba(249, 115, 22, 0.18);
+  --sidebar-active-fg: #fdba74;
+  --sidebar-icon-bg: rgba(4, 14, 12, 0.72);
+  --bottom-nav-bg: rgba(2, 8, 6, 0.94);
+  --bottom-nav-border: rgba(52, 211, 153, 0.14);
+  --bottom-nav-fg: #94a3b8;
+  --bottom-nav-active-fg: #fb923c;
+  --bottom-nav-sheet-bg: rgba(1, 4, 3, 0.98);
+  --topbar-bg: rgba(2, 8, 6, 0.62);
+  --topbar-border: rgba(255, 255, 255, 0.1);
+  --topbar-fg: #f1f5f9;
+  --topbar-muted: #cbd5e1;
+  --topbar-pill-bg: rgba(8, 28, 22, 0.7);
+  --topbar-pill-border: rgba(52, 211, 153, 0.22);
+  --topbar-pill-hover-border: rgba(249, 115, 22, 0.5);
+  --topbar-icon-hover-bg: rgba(249, 115, 22, 0.12);
+  --topbar-menu-bg: rgba(4, 14, 12, 0.97);
+  --topbar-menu-border: rgba(249, 115, 22, 0.22);
+  --topbar-divider: rgba(148, 163, 184, 0.14);
+  --topbar-avatar-bg: linear-gradient(145deg, #ea580c, #059669);
+  --topbar-avatar-fg: #fff7ed;
+}
+[data-theme='matrix'] .matrix-rain-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.55;
+}
+[data-theme='matrix'] .matrix-panel-veil {
+  background:
+    radial-gradient(ellipse 90% 70% at 12% -10%, rgba(249, 115, 22, 0.2), transparent 55%),
+    radial-gradient(ellipse 70% 55% at 95% 15%, rgba(16, 185, 129, 0.12), transparent 50%),
+    radial-gradient(ellipse 80% 50% at 50% 110%, rgba(249, 115, 22, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(1, 4, 3, 0.45) 0%, rgba(2, 8, 6, 0.55) 45%, rgba(1, 4, 3, 0.78) 100%);
+}
+[data-theme='matrix'] .matrix-panel-veil::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.1) 2px,
+    rgba(0, 0, 0, 0.1) 4px
+  );
+  opacity: 0.3;
+  pointer-events: none;
+}
+[data-theme='matrix'] body {
+  font-family: Manrope, 'Space Grotesk', system-ui, sans-serif;
+  background-color: #020806;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249, 115, 22, 0.16), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 90% 8%, rgba(52, 211, 153, 0.1), transparent 50%);
+  color: #f1f5f9;
+}
+[data-theme='matrix'] .theme-main,
+[data-theme='matrix'] .bg-slate-100,
+[data-theme='matrix'] .bg-mesh-light {
+  background-color: #020806 !important;
+  background-image: none !important;
+}
+[data-theme='matrix'] .theme-sidebar,
+[data-theme='matrix'] aside.theme-sidebar {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+    linear-gradient(180deg, rgba(1, 4, 3, 0.9) 0%, rgba(6, 22, 18, 0.88) 55%, rgba(2, 8, 6, 0.94) 100%) !important;
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow:
+    8px 0 40px -12px rgba(0, 0, 0, 0.7),
+    inset -1px 0 0 rgba(52, 211, 153, 0.06),
+    0 0 40px -20px rgba(249, 115, 22, 0.25);
+  color: #cbd5e1;
+}
+[data-theme='matrix'] .theme-sidebar-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.08), transparent);
+}
+[data-theme='matrix'] .theme-sidebar-section {
+  color: #94a3b8 !important;
+  letter-spacing: 0.14em;
+}
+[data-theme='matrix'] .theme-sidebar-link {
+  border-radius: 0.85rem;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+[data-theme='matrix'] .theme-sidebar-link:hover {
+  background: rgba(52, 211, 153, 0.08) !important;
+  color: #f1f5f9 !important;
+}
+[data-theme='matrix'] .theme-sidebar-link.is-active,
+[data-theme='matrix'] a.theme-sidebar-link.active {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(52, 211, 153, 0.08)) !important;
+  color: #fdba74 !important;
+  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.32), 0 8px 24px -16px rgba(249, 115, 22, 0.55);
+}
+[data-theme='matrix'] .theme-sidebar-banner {
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.14), rgba(52, 211, 153, 0.06));
+  color: #fdba74;
+  border-radius: 0.9rem;
+}
+[data-theme='matrix'] .theme-topbar {
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 40px -28px rgba(249, 115, 22, 0.35);
+}
+[data-theme='matrix'] .theme-topbar-title {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+[data-theme='matrix'] .theme-topbar-pill {
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+[data-theme='matrix'] .card,
+[data-theme='matrix'] .card-interactive,
+[data-theme='matrix'] .snap-tile {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(8, 28, 22, 0.55) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 0 0 1px rgba(52, 211, 153, 0.04) inset,
+    0 24px 60px -28px rgba(0, 0, 0, 0.7),
+    0 0 40px -22px rgba(249, 115, 22, 0.35);
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  color: #f1f5f9;
+  border-radius: 1.15rem;
+  transition:
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s ease,
+    border-color 0.28s ease;
+}
+[data-theme='matrix'] .card-interactive:hover {
+  border-color: rgba(249, 115, 22, 0.42) !important;
+  box-shadow:
+    0 24px 56px -22px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(249, 115, 22, 0.15) inset,
+    0 0 48px -18px rgba(249, 115, 22, 0.45);
+  transform: translateY(-2px);
+}
+[data-theme='matrix'] .card-header {
+  border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.06), transparent);
+}
+[data-theme='matrix'] .card-title {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  color: #f8fafc !important;
+}
+[data-theme='matrix'] .glass {
+  background: rgba(8, 28, 22, 0.55) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(20px);
+}
+[data-theme='matrix'] .theme-modal {
+  background: linear-gradient(165deg, rgba(12, 36, 28, 0.96), rgba(4, 14, 12, 0.98)) !important;
+  border-color: rgba(249, 115, 22, 0.28) !important;
+  box-shadow: 0 30px 80px -24px rgba(0, 0, 0, 0.85), 0 0 60px -30px rgba(249, 115, 22, 0.4);
+  color: #f1f5f9;
+  backdrop-filter: blur(28px) saturate(1.4);
+}
+[data-theme='matrix'] .theme-modal-header,
+[data-theme='matrix'] .theme-modal-footer {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(1, 4, 3, 0.45) !important;
+}
+[data-theme='matrix'] .theme-modal-backdrop {
+  background: rgba(0, 0, 0, 0.72) !important;
+  backdrop-filter: blur(8px);
+}
+[data-theme='matrix'] .btn-primary,
+[data-theme='matrix'] button.btn-primary {
+  background: linear-gradient(135deg, #fb923c, #f97316 55%, #ea580c) !important;
+  border: none;
+  color: #0a0f0d !important;
+  box-shadow:
+    0 12px 36px -12px rgba(249, 115, 22, 0.65),
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+[data-theme='matrix'] .btn-primary:hover,
+[data-theme='matrix'] button.btn-primary:hover {
+  filter: brightness(1.06);
+  box-shadow:
+    0 16px 44px -12px rgba(249, 115, 22, 0.75),
+    0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+  transform: translateY(-1px);
+}
+[data-theme='matrix'] .btn-secondary,
+[data-theme='matrix'] button.btn-secondary {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: #f1f5f9 !important;
+  backdrop-filter: blur(8px);
+}
+[data-theme='matrix'] .btn-secondary:hover,
+[data-theme='matrix'] button.btn-secondary:hover {
+  background: rgba(249, 115, 22, 0.12) !important;
+  border-color: rgba(249, 115, 22, 0.4) !important;
+  color: #fff !important;
+}
+[data-theme='matrix'] .input,
+[data-theme='matrix'] input.input,
+[data-theme='matrix'] select.input,
+[data-theme='matrix'] textarea.input {
+  background: rgba(2, 12, 10, 0.72) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+[data-theme='matrix'] .input:focus,
+[data-theme='matrix'] input.input:focus,
+[data-theme='matrix'] select.input:focus,
+[data-theme='matrix'] textarea.input:focus {
+  border-color: rgba(249, 115, 22, 0.65) !important;
+  box-shadow:
+    0 0 0 3px rgba(249, 115, 22, 0.25),
+    0 0 24px -8px rgba(249, 115, 22, 0.45) !important;
+}
+[data-theme='matrix'] .data-table thead tr {
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.1), rgba(4, 14, 12, 0.7)) !important;
+  color: #94a3b8 !important;
+}
+[data-theme='matrix'] .data-table th {
+  border-bottom-color: rgba(249, 115, 22, 0.2) !important;
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+  letter-spacing: 0.06em;
+}
+[data-theme='matrix'] .data-table td {
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+  color: #cbd5e1 !important;
+}
+[data-theme='matrix'] .table-scroll-touch {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(2, 12, 10, 0.35);
+  border-radius: 1rem;
+}
+[data-theme='matrix'] .text-slate-900,
+[data-theme='matrix'] .text-slate-800,
+[data-theme='matrix'] .text-slate-700 {
+  color: #f1f5f9 !important;
+}
+[data-theme='matrix'] .text-slate-600,
+[data-theme='matrix'] .text-slate-500 {
+  color: #cbd5e1 !important;
+}
+[data-theme='matrix'] .text-slate-400,
+[data-theme='matrix'] .text-slate-300 {
+  color: #e2e8f0 !important;
+}
+[data-theme='matrix'] .border-slate-200,
+[data-theme='matrix'] .border-slate-100 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+[data-theme='matrix'] .bg-white,
+[data-theme='matrix'] .bg-white\/90,
+[data-theme='matrix'] .bg-white\/95,
+[data-theme='matrix'] .bg-slate-50 {
+  background-color: rgba(8, 28, 22, 0.72) !important;
+}
+[data-theme='matrix'] .text-brand-600,
+[data-theme='matrix'] .text-brand-500,
+[data-theme='matrix'] .text-brand-400 {
+  color: #fb923c !important;
+}
+[data-theme='matrix'] .bg-brand-50,
+[data-theme='matrix'] .bg-brand-50\/30 {
+  background-color: rgba(249, 115, 22, 0.14) !important;
+}
+[data-theme='matrix'] .nav-active-indicator {
+  background: linear-gradient(180deg, #f97316, #34d399) !important;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.55);
+}
+[data-theme='matrix'] .font-display,
+[data-theme='matrix'] .theme-topbar-title,
+[data-theme='matrix'] h1,
+[data-theme='matrix'] h2,
+[data-theme='matrix'] h3 {
+  font-family: 'Space Grotesk', Manrope, system-ui, sans-serif;
+}
+[data-theme='matrix'] .theme-bottom-nav {
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 -8px 32px -16px rgba(0, 0, 0, 0.7), 0 0 40px -24px rgba(249, 115, 22, 0.3);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-theme='matrix'] .matrix-panel-veil::after {
+    display: none;
+  }
+}
 
 /* ── Global readability: muted text must stay legible on dark themes ── */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-muted,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-section,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-subtitle,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-menu-muted,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-user-meta,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-topbar-pill-label,
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .theme-sidebar-link:not(.is-active):not(.active) {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-sidebar-muted,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-sidebar-section,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-topbar-subtitle,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-topbar-menu-muted,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-sidebar-user-meta,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-topbar-pill-label,
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .theme-sidebar-link:not(.is-active):not(.active) {
   color: color-mix(in srgb, var(--page-fg, #f1f5f9) 78%, var(--sidebar-muted, #94a3b8)) !important;
   opacity: 1 !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .section-title {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .section-title {
   color: color-mix(in srgb, var(--page-fg, #f1f5f9) 86%, transparent) !important;
 }
 
 /* Catch-all slate / gray / zinc muted text + placeholders (light-theme utilities). */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(
     .text-slate-300, .text-slate-400, .text-slate-500, .text-slate-600,
     .text-gray-300, .text-gray-400, .text-gray-500, .text-gray-600,
@@ -1204,11 +1521,11 @@ body {
   ) {
   color: color-mix(in srgb, var(--page-fg, #f1f5f9) 88%, #94a3b8) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-slate-700, .text-slate-800, .text-slate-900, .text-gray-700, .text-gray-800, .text-gray-900, .text-zinc-700, .text-zinc-800, .text-zinc-900) {
   color: var(--page-fg, #f1f5f9) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(
     .placeholder\:text-slate-400::placeholder,
     .placeholder\:text-slate-500::placeholder,
@@ -1219,25 +1536,25 @@ body {
   color: color-mix(in srgb, var(--page-fg, #f1f5f9) 55%, transparent) !important;
   opacity: 1 !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .btn-ghost {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .btn-ghost {
   color: color-mix(in srgb, var(--page-fg, #f1f5f9) 82%, transparent) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .btn-ghost:hover {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .btn-ghost:hover {
   color: var(--page-fg, #f1f5f9) !important;
   background: color-mix(in srgb, var(--brand, #f97316) 12%, transparent) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .badge {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .badge {
   color: inherit;
 }
 
 /* Extra bg-white/bg-slate-50 opacity variants used around the app that the
    per-theme blocks above didn't catch — left as literal white they combine
    with the force-lightened .text-slate-* rules below to make text vanish. */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50, .bg-white\/40, .bg-white\/30,
       .bg-slate-50\/90, .bg-slate-50\/80, .bg-slate-50\/70, .bg-slate-50\/50, .bg-slate-50\/40,
       .bg-slate-100\/90, .bg-slate-100\/80):not(.theme-main):not(.bg-mesh-light),
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   .bg-slate-100:not(.theme-main):not(.bg-mesh-light) {
   background-color: color-mix(in srgb, var(--card-bg, #0f172a) 88%, #fff 12%) !important;
   background-image: none !important;
@@ -1249,66 +1566,66 @@ body {
    a still-light chip background with the *unrelated* forced-light slate text nearby,
    or leaves the status text itself (a mid/dark shade meant for a light chip) sitting
    on a background that never got re-tinted. Retint both halves consistently. */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-amber-50, .bg-amber-100) { background-color: color-mix(in srgb, #f59e0b 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-amber-600, .text-amber-700, .text-amber-800, .text-amber-900) { color: #fbbf24 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.border-amber-100, .border-amber-200) { border-color: color-mix(in srgb, #f59e0b 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-orange-50, .bg-orange-100) { background-color: color-mix(in srgb, #f97316 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-orange-600, .text-orange-700, .text-orange-800) { color: #fb923c !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-emerald-50, .bg-emerald-100) { background-color: color-mix(in srgb, #10b981 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-emerald-600, .text-emerald-700, .text-emerald-800, .text-emerald-900) { color: #34d399 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.border-emerald-100, .border-emerald-200) { border-color: color-mix(in srgb, #10b981 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-rose-50, .bg-rose-100) { background-color: color-mix(in srgb, #f43f5e 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-rose-600, .text-rose-700, .text-rose-800, .text-rose-900) { color: #fb7185 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.border-rose-100, .border-rose-200) { border-color: color-mix(in srgb, #f43f5e 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-sky-50, .bg-sky-100) { background-color: color-mix(in srgb, #0ea5e9 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-sky-600, .text-sky-700, .text-sky-800, .text-sky-900) { color: #38bdf8 !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.border-sky-100, .border-sky-200) { border-color: color-mix(in srgb, #0ea5e9 40%, var(--card-border, #334155)) !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-violet-50, .bg-violet-100) { background-color: color-mix(in srgb, #8b5cf6 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-violet-600, .text-violet-700, .text-violet-800) { color: #a78bfa !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-indigo-50, .bg-indigo-100) { background-color: color-mix(in srgb, #6366f1 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-indigo-600, .text-indigo-700, .text-indigo-800) { color: #818cf8 !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-cyan-50, .bg-cyan-100) { background-color: color-mix(in srgb, #06b6d4 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-cyan-600, .text-cyan-700, .text-cyan-800) { color: #22d3ee !important; }
 
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.bg-teal-50, .bg-teal-100) { background-color: color-mix(in srgb, #14b8a6 18%, var(--card-bg, #0f172a)) !important; }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'])
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix'])
   :is(.text-teal-600, .text-teal-700, .text-teal-800) { color: #2dd4bf !important; }
 
 /* Dashboard "license not activated" banner: bg-gradient-to-r from-amber-50 to-orange-50 */
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .from-amber-50 {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .from-amber-50 {
   --tw-gradient-from: color-mix(in srgb, #f59e0b 16%, var(--card-bg, #0f172a)) var(--tw-gradient-from-position) !important;
   --tw-gradient-to: color-mix(in srgb, #f59e0b 4%, var(--card-bg, #0f172a)) var(--tw-gradient-to-position) !important;
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
 }
-:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass']) .to-orange-50 {
+:is([data-theme='dark'], [data-theme='onepiece'], [data-theme='steampunk'], [data-theme='isptech'], [data-theme='blueglass'], [data-theme='matrix']) .to-orange-50 {
   --tw-gradient-to: color-mix(in srgb, #f97316 16%, var(--card-bg, #0f172a)) var(--tw-gradient-to-position) !important;
 }
 
@@ -1340,14 +1657,16 @@ body {
 [data-theme='onepiece'] .usage-user-btn.is-selected .usage-user-name,
 [data-theme='steampunk'] .usage-user-btn.is-selected .usage-user-name,
 [data-theme='isptech'] .usage-user-btn.is-selected .usage-user-name,
-[data-theme='blueglass'] .usage-user-btn.is-selected .usage-user-name {
+[data-theme='blueglass'] .usage-user-btn.is-selected .usage-user-name,
+[data-theme='matrix'] .usage-user-btn.is-selected .usage-user-name {
   color: var(--sidebar-active-fg, #fdba74) !important;
 }
 [data-theme='dark'] .data-table tbody tr:hover,
 [data-theme='onepiece'] .data-table tbody tr:hover,
 [data-theme='steampunk'] .data-table tbody tr:hover,
 [data-theme='isptech'] .data-table tbody tr:hover,
-[data-theme='blueglass'] .data-table tbody tr:hover {
+[data-theme='blueglass'] .data-table tbody tr:hover,
+[data-theme='matrix'] .data-table tbody tr:hover {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, transparent) !important;
 }
 [data-theme='dark'] .bg-brand-50,
@@ -1355,18 +1674,21 @@ body {
 [data-theme='steampunk'] .bg-brand-50,
 [data-theme='isptech'] .bg-brand-50,
 [data-theme='blueglass'] .bg-brand-50,
+[data-theme='matrix'] .bg-brand-50,
 [data-theme='dark'] .bg-brand-50\/30,
 [data-theme='onepiece'] .bg-brand-50\/30,
 [data-theme='steampunk'] .bg-brand-50\/30,
 [data-theme='isptech'] .bg-brand-50\/30,
-[data-theme='blueglass'] .bg-brand-50\/30 {
+[data-theme='blueglass'] .bg-brand-50\/30,
+[data-theme='matrix'] .bg-brand-50\/30 {
   background-color: color-mix(in srgb, var(--brand, #fb923c) 16%, transparent) !important;
 }
 [data-theme='dark'] .ring-brand-200,
 [data-theme='onepiece'] .ring-brand-200,
 [data-theme='steampunk'] .ring-brand-200,
 [data-theme='isptech'] .ring-brand-200,
-[data-theme='blueglass'] .ring-brand-200 {
+[data-theme='blueglass'] .ring-brand-200,
+[data-theme='matrix'] .ring-brand-200 {
   --tw-ring-color: color-mix(in srgb, var(--brand, #fb923c) 45%, transparent) !important;
 }
 
@@ -2417,6 +2739,7 @@ html.portal-route .subscriber-portal--login {
 }
 
 /* Matrix canvas + atmospheric overlays */
+html.portal-route .matrix-rain-canvas,
 html.portal-route .portal-matrix-canvas {
   position: fixed;
   inset: 0;
