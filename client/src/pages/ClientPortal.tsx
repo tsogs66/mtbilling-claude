@@ -156,7 +156,7 @@ async function portalFetch(path: string, opts: RequestInit = {}) {
   return data;
 }
 
-function statusTone(status?: string) {
+function statusTone(status?: string | null) {
   const s = String(status || '').toLowerCase();
   if (s === 'active' || s === 'paid') return 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-400/35';
   if (s === 'overdue' || s === 'suspended') return 'bg-rose-500/20 text-rose-300 ring-1 ring-rose-400/35';
