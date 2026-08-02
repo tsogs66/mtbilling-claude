@@ -2419,12 +2419,25 @@ html.portal-route .subscriber-portal .portal-light .text-emerald-600 {
 }
 html.portal-route .subscriber-portal .portal-light .bg-white,
 html.portal-route .subscriber-portal .portal-light .bg-white\/80,
-html.portal-route .subscriber-portal .portal-light .bg-white\/90 {
+html.portal-route .subscriber-portal .portal-light .bg-white\/90,
+html.portal-route .subscriber-portal .portal-light .bg-white\/95 {
   background-color: #ffffff !important;
 }
 html.portal-route .subscriber-portal .portal-light .bg-slate-50,
-html.portal-route .subscriber-portal .portal-light .bg-slate-50\/90 {
+html.portal-route .subscriber-portal .portal-light .bg-slate-50\/90,
+html.portal-route .subscriber-portal .portal-light .bg-slate-50\/80 {
   background-color: #f8fafc !important;
+}
+html.portal-route .subscriber-portal .portal-light .bg-slate-100 {
+  background-color: #f1f5f9 !important;
+}
+html.portal-route .subscriber-portal .portal-invoice-preview,
+html.portal-route .subscriber-portal .portal-invoice-preview * {
+  color: inherit;
+}
+html.portal-route .subscriber-portal .portal-invoice-preview {
+  background: #ffffff !important;
+  color: #0f172a !important;
 }
 html.portal-route .subscriber-portal .portal-light .border-slate-200,
 html.portal-route .subscriber-portal .portal-light .border-slate-100,

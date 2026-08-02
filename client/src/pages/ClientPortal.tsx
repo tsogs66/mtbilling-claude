@@ -66,7 +66,7 @@ function statusTone(status?: string) {
 export default function ClientPortal() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '');
   const [account, setAccount] = useState('');
-  const [pin, setPin] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [me, setMe] = useState<any>(null);
@@ -83,6 +83,10 @@ export default function ClientPortal() {
   const [planMsg, setPlanMsg] = useState('');
   const [invoiceBusy, setInvoiceBusy] = useState<number | null>(null);
   const [viewInvoice, setViewInvoice] = useState<any | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState('');
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall();
 
   const loadMe = async () => {
@@ -162,14 +166,35 @@ export default function ClientPortal() {
     try {
       const data = await portalFetch('/public/portal/login', {
         method: 'POST',
-        body: JSON.stringify({ account, pin }),
+        body: JSON.stringify({ account, password }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
       setToken(data.token);
+      setPassword('');
     } catch (err: any) {
       setError(err.message || 'Login failed');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const submitNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwMsg('');
+    setPwBusy(true);
+    try {
+      await portalFetch('/public/portal/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ password: newPassword, confirm: confirmPassword }),
+      });
+      setNewPassword('');
+      setConfirmPassword('');
+      setPwMsg('Password updated. Welcome to your portal.');
+      await loadMe();
+    } catch (err: any) {
+      setPwMsg(err.message || 'Could not update password');
+    } finally {
+      setPwBusy(false);
     }
   };
 
@@ -351,16 +376,15 @@ export default function ClientPortal() {
             />
           </label>
           <label className="block text-sm font-medium text-slate-300">
-            PIN
+            Password
             <input
               className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
               type="password"
-              inputMode="numeric"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
-              placeholder="4–8 digits"
+              placeholder="Phone number (default)"
             />
           </label>
           <button
@@ -425,6 +449,95 @@ export default function ClientPortal() {
     const newPortion = Math.round((newPrice / CYCLE) * remaining);
     return { consumed, remaining, oldPortion, newPortion, total: oldPortion + newPortion };
   };
+
+  if (me.mustChangePassword) {
+    return (
+      <div
+        className="subscriber-portal subscriber-portal--login relative min-h-full flex items-center justify-center p-6 overflow-hidden"
+        style={{ fontFamily: "Manrope, 'Space Grotesk', system-ui, sans-serif" }}
+      >
+        <div className="absolute inset-0 bg-slate-950" />
+        <div
+          className="absolute inset-0 opacity-90"
+          style={{
+            backgroundImage:
+              'radial-gradient(ellipse 80% 60% at 15% 10%, rgba(249,115,22,0.28), transparent 55%), radial-gradient(ellipse 70% 50% at 90% 20%, rgba(14,165,233,0.18), transparent 50%)',
+          }}
+        />
+        <form
+          onSubmit={submitNewPassword}
+          className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl shadow-2xl p-8 space-y-5"
+        >
+          <div className="text-center space-y-2">
+            <Logo size="md" variant="dark" />
+            <h1
+              className="text-2xl font-bold text-white tracking-tight"
+              style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+            >
+              Set your password
+            </h1>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              You signed in with the default password (your phone number). Choose a new password to continue.
+            </p>
+            {c?.accountNumber && (
+              <p className="text-xs text-slate-500 font-mono">Account {c.accountNumber}</p>
+            )}
+          </div>
+          {pwMsg && (
+            <div
+              className={`text-sm rounded-xl px-3 py-2 border ${
+                pwMsg.includes('updated')
+                  ? 'text-emerald-200 bg-emerald-500/15 border-emerald-400/20'
+                  : 'text-rose-200 bg-rose-500/15 border-rose-400/20'
+              }`}
+            >
+              {pwMsg}
+            </div>
+          )}
+          <label className="block text-sm font-medium text-slate-300">
+            New password
+            <input
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={6}
+              maxLength={64}
+              autoComplete="new-password"
+              placeholder="At least 6 characters"
+            />
+          </label>
+          <label className="block text-sm font-medium text-slate-300">
+            Confirm password
+            <input
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/50 text-white px-3 py-2.5 outline-none focus:border-orange-400/60 focus:ring-2 focus:ring-orange-400/20"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              minLength={6}
+              maxLength={64}
+              autoComplete="new-password"
+            />
+          </label>
+          <button
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold py-3 transition disabled:opacity-60"
+            disabled={pwBusy}
+          >
+            {pwBusy ? 'Saving…' : 'Save password & continue'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="w-full text-sm text-slate-400 hover:text-white py-1"
+          >
+            Sign out
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -875,84 +988,122 @@ function PortalInvoiceModal({
   return (
     <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
       <button type="button" className="absolute inset-0 bg-slate-950/60" onClick={onClose} aria-label="Close" />
-      <div className="portal-light relative w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl bg-white shadow-2xl max-h-[90dvh] overflow-y-auto text-slate-900">
-        <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-100 px-5 py-4 flex items-start justify-between gap-3">
+      <div
+        className="portal-light portal-invoice-preview relative w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[90dvh] overflow-y-auto"
+        style={{ background: '#ffffff', color: '#0f172a' }}
+      >
+        <div
+          className="sticky top-0 border-b px-5 py-4 flex items-start justify-between gap-3"
+          style={{ background: '#ffffff', borderColor: '#e2e8f0' }}
+        >
           <div>
-            <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Invoice</div>
+            <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: '#334155' }}>
+              Invoice
+            </div>
             <h3
-              className="text-xl font-bold text-slate-900 font-mono"
-              style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
+              className="text-xl font-bold font-mono"
+              style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif", color: '#0f172a' }}
             >
               {inv.number || '—'}
             </h3>
-            <span className="inline-block mt-1 text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
+            <span
+              className="inline-block mt-1 text-[11px] font-bold uppercase tracking-wide px-2.5 py-0.5 rounded-full capitalize"
+              style={{ background: '#e2e8f0', color: '#1e293b' }}
+            >
               {inv.status || 'unpaid'}
             </span>
           </div>
-          <button type="button" className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" onClick={onClose}>
+          <button
+            type="button"
+            className="p-2 rounded-lg"
+            style={{ color: '#334155' }}
+            onClick={onClose}
+            aria-label="Close invoice"
+          >
             <X size={18} />
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-4 space-y-4" style={{ color: '#0f172a' }}>
           {company.name && (
-            <div className="text-sm text-slate-600">
-              <div className="font-semibold text-slate-900">{company.name}</div>
-              {company.address && <div className="text-xs text-slate-500 mt-0.5">{company.address}</div>}
+            <div className="text-sm">
+              <div className="font-bold" style={{ color: '#0f172a' }}>{company.name}</div>
+              {company.address && (
+                <div className="text-sm mt-0.5" style={{ color: '#334155' }}>{company.address}</div>
+              )}
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Bill to</div>
-              <div className="font-semibold text-slate-900 mt-0.5">{inv.customer_name || '—'}</div>
-              <div className="text-xs text-slate-500 font-mono">#{inv.account_number || '—'}</div>
+            <div className="rounded-xl border p-3" style={{ borderColor: '#cbd5e1', background: '#f8fafc' }}>
+              <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: '#334155' }}>
+                Bill to
+              </div>
+              <div className="font-bold mt-0.5" style={{ color: '#0f172a' }}>{inv.customer_name || '—'}</div>
+              <div className="text-sm font-mono mt-0.5" style={{ color: '#1e293b' }}>
+                #{inv.account_number || '—'}
+              </div>
             </div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Period</div>
-              <div className="text-slate-800 mt-0.5">
+            <div className="rounded-xl border p-3" style={{ borderColor: '#cbd5e1', background: '#f8fafc' }}>
+              <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: '#334155' }}>
+                Period
+              </div>
+              <div className="mt-0.5 font-medium" style={{ color: '#0f172a' }}>
                 {inv.period_start || '—'} → {inv.period_end || '—'}
               </div>
-              <div className="text-xs text-slate-500 mt-0.5">Due {inv.due_date || '—'}</div>
+              <div className="text-sm mt-0.5 font-medium" style={{ color: '#1e293b' }}>
+                Due {inv.due_date || '—'}
+              </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 p-3">
-            <div className="flex justify-between text-sm py-1">
-              <span className="text-slate-600">Service charge</span>
-              <span className="font-medium tabular-nums">{peso(inv.amount)}</span>
+          <div className="rounded-xl border p-3" style={{ borderColor: '#94a3b8' }}>
+            <div className="flex justify-between text-sm py-1.5">
+              <span style={{ color: '#1e293b' }}>Service charge</span>
+              <span className="font-bold tabular-nums" style={{ color: '#0f172a' }}>{peso(inv.amount)}</span>
             </div>
-            <div className="flex justify-between text-sm py-1">
-              <span className="text-slate-600">Amount paid</span>
-              <span className="font-medium tabular-nums">{peso(inv.amount_paid)}</span>
+            <div className="flex justify-between text-sm py-1.5">
+              <span style={{ color: '#1e293b' }}>Amount paid</span>
+              <span className="font-bold tabular-nums" style={{ color: '#0f172a' }}>{peso(inv.amount_paid)}</span>
             </div>
-            <div className="flex justify-between text-base font-bold pt-2 mt-1 border-t border-slate-100">
-              <span>Balance due</span>
-              <span className={`tabular-nums ${balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+            <div
+              className="flex justify-between text-base font-bold pt-2.5 mt-1 border-t"
+              style={{ borderColor: '#cbd5e1' }}
+            >
+              <span style={{ color: '#0f172a' }}>Balance due</span>
+              <span
+                className="tabular-nums"
+                style={{ color: balance > 0 ? '#be123c' : '#047857' }}
+              >
                 {peso(balance)}
               </span>
             </div>
-            {inv.notes && <p className="text-xs text-slate-500 mt-2">{inv.notes}</p>}
+            {inv.notes && (
+              <p className="text-sm mt-2" style={{ color: '#334155' }}>{inv.notes}</p>
+            )}
           </div>
 
           {payments.length > 0 && (
             <div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-2">
+              <div className="text-[11px] uppercase tracking-wider font-bold mb-2" style={{ color: '#334155' }}>
                 Payment history
               </div>
               <ul className="space-y-1.5 text-sm">
                 {payments.map((p: any, i: number) => (
                   <li
                     key={p.id || i}
-                    className="flex justify-between gap-3 rounded-lg border border-slate-100 px-3 py-2"
+                    className="flex justify-between gap-3 rounded-lg border px-3 py-2.5"
+                    style={{ borderColor: '#cbd5e1', background: '#ffffff' }}
                   >
                     <div>
-                      <div className="capitalize text-slate-800">{p.method || 'Payment'}</div>
-                      <div className="text-[11px] text-slate-400">
+                      <div className="capitalize font-semibold" style={{ color: '#0f172a' }}>
+                        {p.method || 'Payment'}
+                      </div>
+                      <div className="text-xs font-medium mt-0.5" style={{ color: '#334155' }}>
                         {String(p.paid_at || p.created_at || '').replace('T', ' ').slice(0, 16)}
                       </div>
                     </div>
-                    <div className="font-semibold tabular-nums text-slate-900">{peso(p.amount)}</div>
+                    <div className="font-bold tabular-nums" style={{ color: '#0f172a' }}>{peso(p.amount)}</div>
                   </li>
                 ))}
               </ul>
@@ -960,17 +1111,22 @@ function PortalInvoiceModal({
           )}
         </div>
 
-        <div className="sticky bottom-0 bg-white border-t border-slate-100 px-5 py-3 flex gap-2">
+        <div
+          className="sticky bottom-0 border-t px-5 py-3 flex gap-2"
+          style={{ background: '#ffffff', borderColor: '#e2e8f0' }}
+        >
           <button
             type="button"
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-slate-700 font-semibold py-2.5 text-sm hover:bg-slate-50"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border font-bold py-2.5 text-sm"
+            style={{ borderColor: '#94a3b8', background: '#ffffff', color: '#0f172a' }}
             onClick={onClose}
           >
             Close
           </button>
           <button
             type="button"
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 text-sm"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl font-bold py-2.5 text-sm"
+            style={{ background: '#0f172a', color: '#ffffff' }}
             onClick={onPrint}
           >
             <Printer size={16} /> Print

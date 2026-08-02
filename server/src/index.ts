@@ -128,6 +128,7 @@ import {
   ispOpsRouter,
   publicPortalRouter,
   assertNapHasCapacity,
+  ensureDefaultPortalCredentials,
 } from './ispOps.js';
 import { initTwingate, twingateRouter } from './twingate.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
@@ -1528,7 +1529,14 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
     'pppoe',
     `Created ${row.service || 'pppoe'} user ${username} (acct ${account}) + MikroTik secret`
   );
-  return { ok: true, row };
+  // Portal login defaults: account number + phone/contact (must change on first login).
+  try {
+    ensureDefaultPortalCredentials(Number(insertedId));
+  } catch {
+    /* optional — missing phone just skips portal provisioning */
+  }
+  const refreshed = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(insertedId) as any;
+  return { ok: true, row: refreshed || row };
 }
 
 app.post('/api/pppoe/users', async (req, res) => {
@@ -1614,6 +1622,12 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   });
 
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  // Keep / create portal credentials when account # + phone are available.
+  try {
+    ensureDefaultPortalCredentials(id);
+  } catch {
+    /* ignore */
+  }
   const router = getRouterById(row.router_id);
   if (routerHasApi(router)) {
     try {

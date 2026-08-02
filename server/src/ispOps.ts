@@ -99,6 +99,73 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Default portal password = contact/phone as stored on the subscriber account. */
+export function defaultPortalPasswordFromContact(contact: string | null | undefined): string {
+  return String(contact || '').trim();
+}
+
+function validateChosenPortalPassword(password: string): string | null {
+  const pw = String(password || '');
+  if (pw.length < 6) return 'Password must be at least 6 characters';
+  if (pw.length > 64) return 'Password must be at most 64 characters';
+  if (/\s/.test(pw)) return 'Password cannot contain spaces';
+  return null;
+}
+
+/**
+ * Auto-create portal login: username = account number, password = phone/contact.
+ * Sets must-change so the subscriber picks their own password after first login.
+ * Idempotent unless `force` resets an existing default login.
+ */
+export function ensureDefaultPortalCredentials(
+  userId: number,
+  opts?: { force?: boolean }
+): { ok: boolean; error?: string; provisioned?: boolean; skipped?: boolean } {
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) return { ok: false, error: 'subscriber not found' };
+  const account = String(user.account_number || '').trim();
+  if (!account) return { ok: false, error: 'Account number required' };
+  const phone = defaultPortalPasswordFromContact(user.contact);
+  if (!phone) return { ok: false, error: 'Phone/contact number required for default portal password' };
+
+  const hasCreds = !!(user.portal_enabled && user.portal_pin_hash);
+  const mustChange = Number(user.portal_must_change_password) === 1;
+  if (hasCreds && !opts?.force) {
+    // Keep default password in sync with phone while they still must change it.
+    if (mustChange) {
+      const hash = bcrypt.hashSync(phone, 10);
+      db.prepare(
+        `UPDATE pppoe_users SET portal_pin_hash = ?, portal_must_change_password = 1, portal_enabled = 1 WHERE id = ?`
+      ).run(hash, userId);
+      return { ok: true, provisioned: true };
+    }
+    return { ok: true, skipped: true };
+  }
+
+  const hash = bcrypt.hashSync(phone, 10);
+  db.prepare(
+    `UPDATE pppoe_users SET portal_enabled = 1, portal_pin_hash = ?, portal_must_change_password = 1 WHERE id = ?`
+  ).run(hash, userId);
+  if (opts?.force) {
+    db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
+  }
+  return { ok: true, provisioned: true };
+}
+
+function backfillDefaultPortalCredentials() {
+  const rows = db
+    .prepare(
+      `SELECT id FROM pppoe_users
+       WHERE account_number IS NOT NULL AND TRIM(account_number) != ''
+         AND contact IS NOT NULL AND TRIM(contact) != ''
+         AND (portal_enabled = 0 OR portal_pin_hash IS NULL OR portal_pin_hash = '')`
+    )
+    .all() as { id: number }[];
+  for (const r of rows) {
+    ensureDefaultPortalCredentials(r.id);
+  }
+}
+
 function nextNumber(prefix: string, table: string, col: string): string {
   const ymd = todayISO().replace(/-/g, '');
   const like = `${prefix}-${ymd}-%`;
@@ -218,10 +285,18 @@ export function initIspOps() {
   for (const [col, type] of [
     ['portal_pin_hash', 'TEXT'],
     ['portal_enabled', 'INTEGER DEFAULT 0'],
+    ['portal_must_change_password', 'INTEGER DEFAULT 0'],
   ] as [string, string][]) {
     if (!columnExists('pppoe_users', col)) {
       db.exec(`ALTER TABLE pppoe_users ADD COLUMN ${col} ${type}`);
     }
+  }
+
+  // Auto-create portal logins (account # + phone) for subscribers that still lack one.
+  try {
+    backfillDefaultPortalCredentials();
+  } catch {
+    /* ignore migration hiccups */
   }
 
   // Merge new permission keys into built-in roles (idempotent).
@@ -613,7 +688,9 @@ function portalSettingsRow() {
   return {
     title: row?.portal_title || 'Subscriber Portal',
     subtitle: row?.portal_subtitle || '',
-    helpText: row?.portal_help_text || 'Ask your ISP for portal access (account + PIN).',
+    helpText:
+      row?.portal_help_text ||
+      'Sign in with your account number and phone number (default password). You will set your own password after the first login.',
     welcomeText: row?.portal_welcome_text || '',
     showBalance: row?.portal_show_balance !== 0,
     showInvoices: row?.portal_show_invoices !== 0,
@@ -652,22 +729,77 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
 
 ispOpsRouter.post('/client-portal/enable', (req, res) => {
   const userId = Number(req.body?.pppoe_user_id);
-  const pin = String(req.body?.pin || '').trim();
-  if (!userId || !/^\d{4,8}$/.test(pin)) {
-    return res.status(400).json({ error: 'pppoe_user_id and 4–8 digit PIN required' });
-  }
-  const user = db.prepare('SELECT id FROM pppoe_users WHERE id = ?').get(userId);
+  if (!userId) return res.status(400).json({ error: 'pppoe_user_id required' });
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   if (!user) return res.status(404).json({ error: 'subscriber not found' });
-  const hash = bcrypt.hashSync(pin, 10);
-  db.prepare('UPDATE pppoe_users SET portal_enabled = 1, portal_pin_hash = ? WHERE id = ?').run(hash, userId);
-  res.json({ ok: true, pppoe_user_id: userId, portal_enabled: true });
+
+  const password = String(req.body?.password || req.body?.pin || '').trim();
+  const useDefault =
+    req.body?.useDefaultPassword === true ||
+    req.body?.use_default_password === true ||
+    !password;
+
+  if (useDefault) {
+    const result = ensureDefaultPortalCredentials(userId, { force: true });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    return res.json({
+      ok: true,
+      pppoe_user_id: userId,
+      portal_enabled: true,
+      mustChangePassword: true,
+      defaultPassword: true,
+    });
+  }
+
+  const err = validateChosenPortalPassword(password);
+  if (err) return res.status(400).json({ error: err });
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare(
+    `UPDATE pppoe_users SET portal_enabled = 1, portal_pin_hash = ?, portal_must_change_password = 0 WHERE id = ?`
+  ).run(hash, userId);
+  res.json({ ok: true, pppoe_user_id: userId, portal_enabled: true, mustChangePassword: false });
 });
 
 ispOpsRouter.post('/client-portal/disable', (req, res) => {
   const userId = Number(req.body?.pppoe_user_id);
-  db.prepare('UPDATE pppoe_users SET portal_enabled = 0, portal_pin_hash = NULL WHERE id = ?').run(userId);
+  db.prepare(
+    `UPDATE pppoe_users SET portal_enabled = 0, portal_pin_hash = NULL, portal_must_change_password = 0 WHERE id = ?`
+  ).run(userId);
   db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
   res.json({ ok: true });
+});
+
+/** Bulk auto-create portal logins (account # + phone) for eligible subscribers. */
+ispOpsRouter.post('/client-portal/auto-provision', (_req, res) => {
+  const before = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM pppoe_users
+       WHERE portal_enabled = 1 AND portal_pin_hash IS NOT NULL AND portal_pin_hash != ''`
+    )
+    .get() as { n: number };
+  backfillDefaultPortalCredentials();
+  const after = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM pppoe_users
+       WHERE portal_enabled = 1 AND portal_pin_hash IS NOT NULL AND portal_pin_hash != ''`
+    )
+    .get() as { n: number };
+  res.json({ ok: true, created: Math.max(0, Number(after.n) - Number(before.n)), enabled: Number(after.n) });
+});
+
+ispOpsRouter.post('/client-portal/accounts/:id/reset-default-password', (req, res) => {
+  const id = Number(req.params.id);
+  const result = ensureDefaultPortalCredentials(id, { force: true });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  const updated = db
+    .prepare(
+      `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
+              portal_enabled, portal_must_change_password,
+              CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
+       FROM pppoe_users WHERE id = ?`
+    )
+    .get(id);
+  res.json(updated);
 });
 
 ispOpsRouter.get('/client-portal/accounts', (req, res) => {
@@ -676,7 +808,7 @@ ispOpsRouter.get('/client-portal/accounts', (req, res) => {
   let rows = db
     .prepare(
       `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
-              portal_enabled,
+              portal_enabled, portal_must_change_password,
               CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
        FROM pppoe_users
        ${enabledOnly ? 'WHERE portal_enabled = 1' : ''}
@@ -713,30 +845,62 @@ ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
   }
 
   let pinHash = user.portal_pin_hash;
-  if (b.pin !== undefined && b.pin !== null && String(b.pin).trim() !== '') {
-    const pin = String(b.pin).trim();
-    if (!/^\d{4,8}$/.test(pin)) {
-      return res.status(400).json({ error: 'PIN must be 4–8 digits' });
-    }
-    pinHash = bcrypt.hashSync(pin, 10);
+  let mustChange = Number(user.portal_must_change_password) === 1 ? 1 : 0;
+  const password = String(b.password ?? b.pin ?? '').trim();
+  const useDefault =
+    b.useDefaultPassword === true ||
+    b.use_default_password === true ||
+    b.resetDefaultPassword === true;
+
+  if (useDefault) {
+    const phone = defaultPortalPasswordFromContact(contact);
+    if (!phone) return res.status(400).json({ error: 'Phone/contact number required for default password' });
+    if (!account_number) return res.status(400).json({ error: 'Account number required' });
+    pinHash = bcrypt.hashSync(phone, 10);
+    mustChange = 1;
     portal_enabled = 1;
+  } else if (password) {
+    // Accept legacy 4–8 digit PIN or a chosen password (6–64).
+    if (!/^\d{4,8}$/.test(password)) {
+      const err = validateChosenPortalPassword(password);
+      if (err) return res.status(400).json({ error: err });
+    }
+    pinHash = bcrypt.hashSync(password, 10);
+    mustChange = b.mustChangePassword === true || b.must_change_password === true ? 1 : 0;
+    portal_enabled = 1;
+  } else if (portal_enabled && !pinHash) {
+    // Enabling without a password → default to phone.
+    const phone = defaultPortalPasswordFromContact(contact);
+    if (!phone) {
+      return res.status(400).json({ error: 'Set a password or add a phone/contact for the default login' });
+    }
+    if (!account_number) return res.status(400).json({ error: 'Account number required' });
+    pinHash = bcrypt.hashSync(phone, 10);
+    mustChange = 1;
   }
+
   if (!portal_enabled) {
     pinHash = null;
+    mustChange = 0;
     db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(id);
   }
 
   db.prepare(
     `UPDATE pppoe_users SET
        customer_name = ?, account_number = ?, contact = ?, email = ?,
-       portal_enabled = ?, portal_pin_hash = ?
+       portal_enabled = ?, portal_pin_hash = ?, portal_must_change_password = ?
      WHERE id = ?`
-  ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, id);
+  ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, mustChange, id);
+
+  // If still on the default password and phone changed, keep the hash in sync.
+  if (portal_enabled && mustChange === 1 && contact) {
+    ensureDefaultPortalCredentials(id);
+  }
 
   const updated = db
     .prepare(
       `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
-              portal_enabled,
+              portal_enabled, portal_must_change_password,
               CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
        FROM pppoe_users WHERE id = ?`
     )
@@ -1000,7 +1164,8 @@ function portalUserFromToken(token: string): any | null {
   const sess = db
     .prepare(
       `SELECT s.*, u.id AS uid, u.username, u.customer_name, u.account_number, u.status,
-              u.subscription_due, u.price, u.profile, u.contact, u.email, u.address
+              u.subscription_due, u.price, u.profile, u.contact, u.email, u.address,
+              u.portal_must_change_password
        FROM client_portal_sessions s
        JOIN pppoe_users u ON u.id = s.pppoe_user_id
        WHERE s.token = ? AND s.expires_at > datetime('now') AND u.portal_enabled = 1`
@@ -1009,14 +1174,25 @@ function portalUserFromToken(token: string): any | null {
   return sess || null;
 }
 
+function rejectIfMustChangePassword(sess: any, res: Response): boolean {
+  if (Number(sess?.portal_must_change_password) !== 1) return false;
+  res.status(403).json({
+    error: 'Please set a new password before using the portal',
+    mustChangePassword: true,
+  });
+  return true;
+}
+
 publicPortalRouter.get('/public/portal/settings', (_req, res) => {
   res.json(portalSettingsRow());
 });
 
 publicPortalRouter.post('/public/portal/login', (req, res) => {
   const account = String(req.body?.account || '').trim();
-  const pin = String(req.body?.pin || '').trim();
-  if (!account || !pin) return res.status(400).json({ error: 'Account number and PIN required' });
+  const password = String(req.body?.password || req.body?.pin || '').trim();
+  if (!account || !password) {
+    return res.status(400).json({ error: 'Account number and password required' });
+  }
   const user = db
     .prepare(
       `SELECT * FROM pppoe_users
@@ -1024,9 +1200,10 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
        LIMIT 1`
     )
     .get(account, account) as any;
-  if (!user?.portal_pin_hash || !bcrypt.compareSync(pin, user.portal_pin_hash)) {
-    return res.status(401).json({ error: 'Invalid account or PIN' });
+  if (!user?.portal_pin_hash || !bcrypt.compareSync(password, user.portal_pin_hash)) {
+    return res.status(401).json({ error: 'Invalid account or password' });
   }
+  const mustChangePassword = Number(user.portal_must_change_password) === 1;
   const settings = portalSettingsRow();
   const token = crypto.randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + settings.sessionDays * 864e5).toISOString();
@@ -1038,6 +1215,7 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
   res.json({
     token,
     expiresAt: expires,
+    mustChangePassword,
     customer: {
       name: user.customer_name || user.username,
       accountNumber: user.account_number,
@@ -1047,6 +1225,37 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
       price: user.price,
     },
   });
+});
+
+/** First login / forced password change — overwrites the default phone password. */
+publicPortalRouter.post('/public/portal/change-password', (req, res) => {
+  const token = String(req.headers['x-portal-token'] || req.body?.token || '');
+  const sess = portalUserFromToken(token);
+  if (!sess) return res.status(401).json({ error: 'Session expired' });
+
+  const password = String(req.body?.password || '').trim();
+  const confirm = String(req.body?.confirm || req.body?.confirmPassword || '').trim();
+  const err = validateChosenPortalPassword(password);
+  if (err) return res.status(400).json({ error: err });
+  if (password !== confirm) return res.status(400).json({ error: 'Passwords do not match' });
+
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(sess.uid) as any;
+  const defaultPw = defaultPortalPasswordFromContact(user?.contact);
+  if (defaultPw && password === defaultPw) {
+    return res.status(400).json({ error: 'Choose a new password different from your phone number' });
+  }
+  if (user?.portal_pin_hash && bcrypt.compareSync(password, user.portal_pin_hash)) {
+    return res.status(400).json({ error: 'Choose a new password different from your current password' });
+  }
+
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare(
+    `UPDATE pppoe_users SET portal_pin_hash = ?, portal_must_change_password = 0 WHERE id = ?`
+  ).run(hash, sess.uid);
+  // Keep this session; drop others.
+  db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ? AND token != ?').run(sess.uid, token);
+
+  res.json({ ok: true, mustChangePassword: false });
 });
 
 publicPortalRouter.get('/public/portal/me', (req, res) => {
@@ -1104,6 +1313,7 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
       )
       .get(sess.uid) || null,
     settings: portalSettingsRow(),
+    mustChangePassword: Number(sess.portal_must_change_password) === 1,
   });
 });
 
@@ -1112,6 +1322,7 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
   if (!sess) return res.status(401).json({ error: 'Session expired' });
+  if (rejectIfMustChangePassword(sess, res)) return;
 
   const existing = portalPaymentLinkForUser(sess.uid);
   if (existing && existing.status === 'pending') {
@@ -1173,6 +1384,7 @@ publicPortalRouter.get('/public/portal/invoices/:id', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.query.token || '');
   const sess = portalUserFromToken(token);
   if (!sess) return res.status(401).json({ error: 'Session expired' });
+  if (rejectIfMustChangePassword(sess, res)) return;
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid invoice' });
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
@@ -1211,6 +1423,7 @@ publicPortalRouter.post('/public/portal/plan-change', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
   if (!sess) return res.status(401).json({ error: 'Session expired' });
+  if (rejectIfMustChangePassword(sess, res)) return;
 
   const toPlan = String(req.body?.plan || req.body?.toPlan || '').trim();
   if (!toPlan) return res.status(400).json({ error: 'Select a plan' });
@@ -1290,6 +1503,7 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
   if (!sess) return res.status(401).json({ error: 'Session expired' });
+  if (rejectIfMustChangePassword(sess, res)) return;
   const description = String(req.body?.description || '').trim();
   const serviceSlugs = resolveOutageServiceSlugs(req.body?.serviceSlugs ?? req.body?.services);
   const type = String(req.body?.type || (serviceSlugs.length ? 'other' : 'repair'));
