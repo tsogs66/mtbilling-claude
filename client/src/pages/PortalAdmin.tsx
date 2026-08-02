@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Globe2, KeyRound, Pencil, Plus, Save, Search, Settings2, Users, ExternalLink, Zap, Check, X,
+  Binary, Satellite,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, FormField, Modal, ModalFooter, PageHeader, StatusBadge, Toolbar } from '../components/ui';
 import { api, peso } from '../api';
 import { subscribePortalLive } from '../lib/portalLive';
+
+type PortalThemeId = 'matrix' | 'orbital';
 
 type PortalSettings = {
   title: string;
@@ -22,6 +25,8 @@ type PortalSettings = {
   portalLink: string;
   /** Server-computed fallback when portalLink is blank */
   autoPortalLink?: string;
+  /** Public /portal appearance */
+  theme: PortalThemeId;
 };
 
 type PortalAccount = {
@@ -60,7 +65,13 @@ const DEFAULT_SETTINGS: PortalSettings = {
   sessionDays: 7,
   portalLink: '',
   autoPortalLink: '',
+  theme: 'matrix',
 };
+
+const PORTAL_THEMES: { key: PortalThemeId; label: string; hint: string; Icon: typeof Binary }[] = [
+  { key: 'matrix', label: 'Matrix Glass', hint: 'Current portal look · orange glass + matrix rain', Icon: Binary },
+  { key: 'orbital', label: 'Orbital Net', hint: 'Satellites & towers · optical signal routing', Icon: Satellite },
+];
 
 export default function PortalAdmin() {
   const [tab, setTab] = useState<'accounts' | 'plans' | 'settings'>('accounts');
@@ -96,7 +107,10 @@ export default function PortalAdmin() {
   const loadSettings = () =>
     api
       .get('/client-portal/settings')
-      .then((r) => setSettings({ ...DEFAULT_SETTINGS, ...r.data }))
+      .then((r) => {
+        const theme = r.data?.theme === 'orbital' ? 'orbital' : 'matrix';
+        setSettings({ ...DEFAULT_SETTINGS, ...r.data, theme });
+      })
       .catch(() => undefined);
 
   useEffect(() => {
@@ -149,7 +163,8 @@ export default function PortalAdmin() {
     setBusySettings(true);
     try {
       const r = await api.put('/client-portal/settings', settings);
-      setSettings({ ...DEFAULT_SETTINGS, ...r.data });
+      const theme = r.data?.theme === 'orbital' ? 'orbital' : 'matrix';
+      setSettings({ ...DEFAULT_SETTINGS, ...r.data, theme });
       show('Portal page settings saved');
     } catch (e: any) {
       show(e?.response?.data?.error || 'Could not save settings');
@@ -629,6 +644,43 @@ export default function PortalAdmin() {
                   {label}
                 </label>
               ))}
+            </div>
+            <div className="md:col-span-2 space-y-2">
+              <div className="text-sm font-medium text-slate-700">Portal theme</div>
+              <p className="text-xs text-slate-500">
+                Changes the look of the public subscriber portal at <code className="text-brand-600">/portal</code>.
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {PORTAL_THEMES.map(({ key, label, hint, Icon }) => {
+                  const active = settings.theme === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSettings({ ...settings, theme: key })}
+                      className={`flex items-start gap-3 rounded-xl border px-3.5 py-3 text-left transition ${
+                        active
+                          ? 'border-brand-500 bg-brand-50/40 ring-1 ring-brand-400/40'
+                          : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
+                      }`}
+                    >
+                      <span
+                        className={`mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg shrink-0 ${
+                          active ? 'bg-brand-500 text-white' : 'bg-white text-slate-500 border border-slate-200'
+                        }`}
+                      >
+                        <Icon size={18} />
+                      </span>
+                      <span className="min-w-0">
+                        <span className={`block text-sm font-semibold ${active ? 'text-brand-700' : 'text-slate-800'}`}>
+                          {label}
+                        </span>
+                        <span className="block text-xs text-slate-500 mt-0.5 leading-relaxed">{hint}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
           <div className="mt-4 flex justify-end">

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+export type PortalThemeId = 'matrix' | 'orbital';
+
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
@@ -21,14 +23,21 @@ function isIosSafari(): boolean {
   return iOS && webkit && !chrome;
 }
 
+function normalizePortalTheme(theme?: string | null): PortalThemeId {
+  return theme === 'orbital' ? 'orbital' : 'matrix';
+}
+
 /** Swap main manifest for the portal one while /portal is open. */
-export function usePortalManifest() {
+export function usePortalManifest(theme: PortalThemeId = 'matrix') {
+  const portalTheme = normalizePortalTheme(theme);
+
   useEffect(() => {
     const html = document.documentElement;
     html.classList.add('portal-route');
+    html.setAttribute('data-portal-theme', portalTheme);
 
     // Suspend panel themes (dark/isptech/blueglass…) so their remaps
-    // cannot override the portal matrix glass theme.
+    // cannot override the portal theme.
     const prevDataTheme = html.getAttribute('data-theme');
     html.removeAttribute('data-theme');
 
@@ -46,7 +55,7 @@ export function usePortalManifest() {
     html.style.setProperty('color-scheme', 'dark');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     const prevTheme = metaTheme?.getAttribute('content') || '';
-    metaTheme?.setAttribute('content', '#020806');
+    metaTheme?.setAttribute('content', portalTheme === 'orbital' ? '#030b18' : '#020806');
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/portal-sw.js').catch(() => undefined);
@@ -54,6 +63,7 @@ export function usePortalManifest() {
 
     return () => {
       html.classList.remove('portal-route');
+      html.removeAttribute('data-portal-theme');
       if (prevDataTheme) html.setAttribute('data-theme', prevDataTheme);
       else html.removeAttribute('data-theme');
       if (prevScheme) html.style.setProperty('color-scheme', prevScheme);
@@ -62,15 +72,15 @@ export function usePortalManifest() {
       else link.setAttribute('href', '/manifest.webmanifest');
       if (metaTheme && prevTheme) metaTheme.setAttribute('content', prevTheme);
     };
-  }, []);
+  }, [portalTheme]);
 }
 
-export function usePortalInstall() {
+export function usePortalInstall(theme: PortalThemeId = 'matrix') {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(isStandalone);
   const [iosHint, setIosHint] = useState(false);
 
-  usePortalManifest();
+  usePortalManifest(theme);
 
   useEffect(() => {
     if (isStandalone()) {
