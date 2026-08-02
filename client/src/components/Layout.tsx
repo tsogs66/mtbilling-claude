@@ -7,6 +7,7 @@ import BottomNav from './BottomNav';
 import NativeAppBridge from './NativeAppBridge';
 import AccessSplitBanner from './AccessSplitBanner';
 import { MatrixRain } from './portal/MatrixRain';
+import { OrbitalNetwork } from './themes/OrbitalNetwork';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { isNativeApp } from '../config';
@@ -45,6 +46,7 @@ export default function Layout({
   const roleViewer = !!user?.readOnly && !!user?.licenseActivated;
   const nativeShell = isNativeApp();
   const matrixTheme = theme === 'matrix';
+  const orbitalTheme = theme === 'orbital';
 
   return (
     <LayoutContext.Provider
@@ -59,6 +61,11 @@ export default function Layout({
           <>
             <MatrixRain />
             <div className="matrix-panel-veil pointer-events-none absolute inset-0 z-0" aria-hidden />
+          </>
+        ) : orbitalTheme ? (
+          <>
+            <OrbitalNetwork />
+            <div className="orbital-panel-veil pointer-events-none absolute inset-0 z-0" aria-hidden />
           </>
         ) : (
           <div className="snap-ambient pointer-events-none absolute inset-0 z-0" aria-hidden>
