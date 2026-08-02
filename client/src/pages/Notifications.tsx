@@ -293,7 +293,11 @@ export default function Notifications() {
               <p className="text-xs text-slate-400 mt-1">
                 Tokens: <code>{'{name}'}</code>, <code>{'{account}'}</code>, <code>{'{plan}'}</code>,{' '}
                 <code>{'{amount}'}</code>, <code>{'{due}'}</code>, <code>{'{password}'}</code> (default = mobile),{' '}
-                <code>{'{portal_url}'}</code>.
+                <code>{'{portal_url}'}</code>. Edit the portal link under{' '}
+                <a href="/subscriber-portal" className="text-brand-600 hover:underline">
+                  Subscriber Portal → Portal page
+                </a>
+                .
               </p>
             </FormField>
 

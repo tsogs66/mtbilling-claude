@@ -772,15 +772,40 @@ ispOpsRouter.delete('/finance/expenses/:id', (req, res) => {
 
 // ─── Client portal (staff) ──────────────────────────────────────────────────
 
+function normalizePortalLink(raw: unknown): string {
+  return String(raw || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+}
+
 function portalSettingsRow() {
   const row = db
     .prepare(
       `SELECT portal_title, portal_subtitle, portal_help_text, portal_welcome_text,
               portal_show_balance, portal_show_invoices, portal_show_tickets, portal_show_company,
-              portal_session_days
+              portal_session_days, portal_link,
+              public_base_url, ngrok_url, ngrok_status,
+              cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
        FROM app_settings WHERE id = 1`
     )
     .get() as any;
+  const cf =
+    row?.cf_tunnel_status === 'running'
+      ? row?.cf_tunnel_url ||
+        (row?.cf_tunnel_hostname
+          ? String(row.cf_tunnel_hostname).replace(/^https?:\/\//i, '')
+          : '')
+      : '';
+  const ngrok = row?.ngrok_status === 'running' ? row?.ngrok_url : '';
+  let autoPortalLink = '';
+  for (const raw of [row?.public_base_url, process.env.PUBLIC_BASE_URL, cf, ngrok]) {
+    const host = normalizePortalLink(raw);
+    if (host) {
+      autoPortalLink = `${host}/portal`;
+      break;
+    }
+  }
   return {
     title: row?.portal_title || 'Subscriber Portal',
     subtitle: row?.portal_subtitle || '',
@@ -793,6 +818,8 @@ function portalSettingsRow() {
     showTickets: row?.portal_show_tickets !== 0,
     showCompany: row?.portal_show_company !== 0,
     sessionDays: Math.min(90, Math.max(1, Number(row?.portal_session_days) || 7)),
+    portalLink: normalizePortalLink(row?.portal_link),
+    autoPortalLink,
   };
 }
 
@@ -806,6 +833,7 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
   const subtitle = String(b.subtitle ?? '').trim();
   const helpText = String(b.helpText ?? '').trim();
   const welcomeText = String(b.welcomeText ?? '').trim();
+  const portalLink = normalizePortalLink(b.portalLink ?? b.portal_link);
   const showBalance = b.showBalance === false || b.showBalance === 0 ? 0 : 1;
   const showInvoices = b.showInvoices === false || b.showInvoices === 0 ? 0 : 1;
   const showTickets = b.showTickets === false || b.showTickets === 0 ? 0 : 1;
@@ -817,9 +845,20 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
     `UPDATE app_settings SET
        portal_title = ?, portal_subtitle = ?, portal_help_text = ?, portal_welcome_text = ?,
        portal_show_balance = ?, portal_show_invoices = ?, portal_show_tickets = ?, portal_show_company = ?,
-       portal_session_days = ?
+       portal_session_days = ?, portal_link = ?
      WHERE id = 1`
-  ).run(title, subtitle || null, helpText || null, welcomeText || null, showBalance, showInvoices, showTickets, showCompany, sessionDays);
+  ).run(
+    title,
+    subtitle || null,
+    helpText || null,
+    welcomeText || null,
+    showBalance,
+    showInvoices,
+    showTickets,
+    showCompany,
+    sessionDays,
+    portalLink || null
+  );
   res.json(portalSettingsRow());
 });
 
