@@ -106,12 +106,19 @@ export function formatSmsMessage(message: string): string {
 }
 
 // Normalize a PH mobile number to international format for the SMS gateway.
-function normalizePhone(n: string): string {
+export function normalizePhone(n: string): string {
   const digits = (n || '').replace(/[^0-9]/g, '');
   if (digits.startsWith('63')) return digits;
   if (digits.startsWith('0')) return `63${digits.slice(1)}`;
   if (digits.startsWith('9') && digits.length === 10) return `63${digits}`;
   return digits;
+}
+
+/** Compare two phone numbers after PH normalization (09… / +63… / 9…). */
+export function phonesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizePhone(String(a || ''));
+  const nb = normalizePhone(String(b || ''));
+  return !!na && !!nb && na === nb;
 }
 
 function normalizePhoneE164(n: string): string {

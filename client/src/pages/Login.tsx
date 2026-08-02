@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCompany } from '../context/CompanyContext';
 import {
@@ -238,22 +238,35 @@ export default function Login() {
                 {label}
               </a>
             ))}
+            <Link
+              to="/portal"
+              className="ml-1 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3.5 py-1.5 font-medium text-slate-100 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <Globe2 size={15} />
+              Subscriber portal
+            </Link>
             <button
               type="button"
               onClick={openLogin}
               className="ml-2 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 font-semibold text-slate-950 shadow-[0_0_24px_-6px_rgba(249,115,22,0.65)] transition-transform hover:scale-[1.03] active:scale-[0.98]"
             >
-              Login
+              Staff login
               <ArrowRight size={16} />
             </button>
           </nav>
           <div className="flex md:hidden items-center gap-2">
+            <Link
+              to="/portal"
+              className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-sm font-medium text-slate-100"
+            >
+              Portal
+            </Link>
             <button
               type="button"
               onClick={openLogin}
               className="rounded-full bg-gradient-to-r from-orange-500 to-amber-400 px-3.5 py-1.5 text-sm font-semibold text-slate-950"
             >
-              Login
+              Staff
             </button>
             <button
               type="button"
@@ -281,6 +294,14 @@ export default function Login() {
                 {label}
               </a>
             ))}
+            <Link
+              to="/portal"
+              onClick={() => setMobileNav(false)}
+              className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-cyan-200 hover:bg-white/5"
+            >
+              <Globe2 size={16} />
+              Subscriber portal
+            </Link>
           </div>
         )}
       </header>
@@ -313,6 +334,13 @@ export default function Login() {
                   Open staff login
                   <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
                 </button>
+                <Link
+                  to="/portal"
+                  className="inline-flex items-center gap-2 rounded-2xl border border-cyan-400/30 bg-cyan-500/10 px-5 py-3 text-sm font-semibold text-cyan-100 backdrop-blur transition-colors hover:bg-cyan-500/20"
+                >
+                  <Globe2 size={16} />
+                  Subscriber portal
+                </Link>
                 <a
                   href="#snapshots"
                   className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-slate-100 backdrop-blur transition-colors hover:bg-white/10"
@@ -438,14 +466,23 @@ export default function Login() {
                   operator cockpit — so your team spends less time switching apps and more time keeping
                   subscribers online.
                 </p>
-                <button
-                  type="button"
-                  onClick={openLogin}
-                  className="mt-8 inline-flex items-center gap-2 rounded-2xl bg-white text-slate-950 px-5 py-3 text-sm font-bold transition-transform hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  Sign in to your panel
-                  <ArrowRight size={16} />
-                </button>
+                <div className="mt-8 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={openLogin}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-white text-slate-950 px-5 py-3 text-sm font-bold transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    Sign in to your panel
+                    <ArrowRight size={16} />
+                  </button>
+                  <Link
+                    to="/portal"
+                    className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10"
+                  >
+                    <Globe2 size={16} />
+                    Go to subscriber portal
+                  </Link>
+                </div>
               </div>
             </div>
           </div>
