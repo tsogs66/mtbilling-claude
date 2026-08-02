@@ -385,8 +385,9 @@ export default function ClientPortal() {
     }
   };
 
-  const title = pageSettings.title || 'Subscriber Portal';
-  const subtitle = pageSettings.subtitle || PRODUCT_TITLE;
+  const brandTitle = 'PANORTH';
+  const brandSubtitle = 'Internet Solutions';
+  const title = pageSettings.title?.trim() || brandTitle;
   const helpText =
     pageSettings.helpText ||
     'Sign in with your account number and password. First time: use your phone number, then set a new password.';
@@ -398,10 +399,11 @@ export default function ClientPortal() {
 
         <div className="relative z-[1] w-full max-w-md flex flex-col items-center gap-6">
           {!forgotOpen && (
-            <div className="text-center space-y-2 portal-brand-glow px-2">
-              <Logo size="lg" variant="dark" />
-              <p className="text-[11px] uppercase tracking-[0.28em] text-orange-300/90 font-semibold">
-                {PRODUCT_TITLE}
+            <div className="text-center space-y-2 portal-brand-glow px-2 flex flex-col items-center">
+              <Logo size="lg" variant="dark" showText={false} />
+              <h1 className="text-3xl font-bold text-white tracking-tight">{brandTitle}</h1>
+              <p className="text-sm text-orange-300/90 font-semibold tracking-wide">
+                {brandSubtitle}
               </p>
             </div>
           )}
@@ -476,8 +478,8 @@ export default function ClientPortal() {
               className="portal-glass portal-glass-strong w-full rounded-3xl p-5 sm:p-8 space-y-4 sm:space-y-5"
             >
               <div className="text-center space-y-1 mb-1">
-                <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">{title}</h1>
-                <p className="text-sm text-portal-muted">{subtitle}</p>
+                <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">Sign in</h2>
+                <p className="text-sm text-portal-muted">Access your {brandTitle} account</p>
               </div>
               {error && (
                 <div className="text-sm text-rose-200 bg-rose-500/15 border border-rose-400/25 rounded-xl px-3 py-2">
@@ -679,66 +681,62 @@ export default function ClientPortal() {
       <div className="subscriber-portal-hero relative z-[1]">
         <header className="max-w-3xl mx-auto px-4 pt-4 sm:pt-5 pb-6">
           <div className="portal-glass portal-glass-strong rounded-2xl p-4 sm:p-5">
-            <div className="flex items-start justify-between gap-2 sm:gap-3">
-              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                <div className="portal-brand-glow shrink-0">
-                  <Logo size="sm" variant="dark" />
+            {/* Top row: account (left) · brand (right) — no action buttons here to avoid mobile overlap */}
+            <div className="flex items-start justify-between gap-3 sm:gap-4">
+              <div className="min-w-0 flex-1 pr-1">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-orange-300 font-semibold">
+                  Subscriber portal
                 </div>
-                <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.2em] text-orange-300 font-semibold">
-                    {title}
-                  </div>
-                  <h1 className="text-lg sm:text-2xl font-bold tracking-tight truncate text-white">
-                    {c.name}
-                  </h1>
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-portal-muted">
-                    <span className="font-mono">{c.accountNumber || '—'}</span>
-                    <span className={`portal-chip capitalize ${statusTone(c.status)}`}>
-                      {c.status || '—'}
-                    </span>
-                  </div>
+                <h1 className="mt-1 text-lg sm:text-2xl font-bold tracking-tight text-white break-words">
+                  {c.name}
+                </h1>
+                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-portal-muted">
+                  <span className="font-mono">{c.accountNumber || '—'}</span>
+                  <span className={`portal-chip capitalize ${statusTone(c.status)}`}>
+                    {c.status || '—'}
+                  </span>
                 </div>
               </div>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5 shrink-0">
-                {showInstallButton && (
-                  <button
-                    type="button"
-                    onClick={() => void install()}
-                    className="portal-btn-ghost inline-flex items-center justify-center gap-1.5 text-sm shrink-0 rounded-lg px-2.5 py-2 min-h-[40px] border-orange-400/35 text-orange-200"
-                    title="Install PANORTH on this device"
-                  >
-                    <Download size={16} />
-                    <span className="hidden sm:inline">Install</span>
-                  </button>
-                )}
-                <button
-                  onClick={logout}
-                  className="portal-btn-ghost inline-flex items-center justify-center gap-1.5 text-sm shrink-0 rounded-lg px-2.5 py-2 min-h-[40px]"
-                >
-                  <LogOut size={16} />
-                  <span>Sign out</span>
-                </button>
+              <div className="portal-brand-glow shrink-0 flex flex-col items-end text-right max-w-[46%] sm:max-w-none">
+                <Logo size="sm" variant="dark" showText={false} />
+                <div className="mt-1.5 text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
+                  {brandTitle}
+                </div>
+                <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
+                  {brandSubtitle}
+                </div>
               </div>
             </div>
 
-            {showInstallButton && (
+            {/* Actions stacked below account/brand so they never collide on narrow screens */}
+            <div className="mt-4 space-y-2.5">
+              {showInstallButton && (
+                <button
+                  type="button"
+                  onClick={() => void install()}
+                  className="w-full flex items-center gap-3 rounded-2xl border border-orange-400/35 bg-orange-500/15 hover:bg-orange-500/25 px-4 py-3 text-left transition"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500 text-slate-950 shrink-0">
+                    <Download size={18} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold text-white text-sm">Install PANORTH to Home Screen</span>
+                    <span className="block text-xs text-portal-muted mt-0.5">
+                      Faster access — works offline for the login page.
+                    </span>
+                  </span>
+                  <ChevronRight size={18} className="text-orange-200 shrink-0" />
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => void install()}
-                className="mt-4 w-full flex items-center gap-3 rounded-2xl border border-orange-400/35 bg-orange-500/15 hover:bg-orange-500/25 px-4 py-3 text-left transition"
+                onClick={logout}
+                className="portal-btn-ghost w-full inline-flex items-center justify-center gap-1.5 text-sm rounded-xl px-3 py-2.5 min-h-[44px]"
               >
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500 text-slate-950 shrink-0">
-                  <Download size={18} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold text-white text-sm">Install PANORTH</span>
-                  <span className="block text-xs text-portal-muted mt-0.5">
-                    Add PANORTH to your home screen for faster access.
-                  </span>
-                </span>
-                <ChevronRight size={18} className="text-orange-200 shrink-0" />
+                <LogOut size={16} />
+                <span>Sign out</span>
               </button>
-            )}
+            </div>
 
             {s.welcomeText && (
               <p className="mt-4 text-sm text-portal-muted leading-relaxed border-l-2 border-orange-400/70 pl-3">

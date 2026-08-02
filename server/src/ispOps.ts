@@ -822,8 +822,8 @@ function portalSettingsRow() {
     }
   }
   return {
-    title: row?.portal_title || 'Subscriber Portal',
-    subtitle: row?.portal_subtitle || '',
+    title: row?.portal_title || 'PANORTH',
+    subtitle: row?.portal_subtitle || 'Internet Solutions',
     helpText:
       row?.portal_help_text ||
       'Sign in with your account number and password. First time: use your phone number, then set a new password. Forgot it? Request a temporary password by SMS.',
@@ -861,8 +861,8 @@ ispOpsRouter.post('/staff-notifications/read', (req, res) => {
 
 ispOpsRouter.put('/client-portal/settings', (req, res) => {
   const b = req.body || {};
-  const title = String(b.title ?? 'Subscriber Portal').trim() || 'Subscriber Portal';
-  const subtitle = String(b.subtitle ?? '').trim();
+  const title = String(b.title ?? 'PANORTH').trim() || 'PANORTH';
+  const subtitle = String(b.subtitle ?? 'Internet Solutions').trim();
   const helpText = String(b.helpText ?? '').trim();
   const welcomeText = String(b.welcomeText ?? '').trim();
   const portalLink = normalizePortalLink(b.portalLink ?? b.portal_link);

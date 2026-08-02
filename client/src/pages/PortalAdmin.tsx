@@ -53,8 +53,8 @@ function formatPortalLoginAt(raw?: string | null) {
 }
 
 const DEFAULT_SETTINGS: PortalSettings = {
-  title: 'Subscriber Portal',
-  subtitle: '',
+  title: 'PANORTH',
+  subtitle: 'Internet Solutions',
   helpText:
     'Sign in with your account number and password. First time: use your phone number, then set a new password. Forgot it? Request a temporary password by SMS.',
   welcomeText: '',

@@ -538,8 +538,8 @@ export function migrate() {
     // to the single-coupler + internal-1:N-PLC-fan-out model?
     ['fbtc_cassette_model_v2', 'INTEGER DEFAULT 0'],
     // Subscriber portal (/portal) page copy + feature toggles
-    ['portal_title', "TEXT DEFAULT 'Subscriber Portal'"],
-    ['portal_subtitle', 'TEXT'],
+    ['portal_title', "TEXT DEFAULT 'PANORTH'"],
+    ['portal_subtitle', "TEXT DEFAULT 'Internet Solutions'"],
     ['portal_help_text', "TEXT DEFAULT 'Ask your ISP for portal access (account + PIN).'"],
     ['portal_welcome_text', 'TEXT'],
     ['portal_show_balance', 'INTEGER DEFAULT 1'],
@@ -562,6 +562,27 @@ export function migrate() {
        map_default_lng = COALESCE(map_default_lng, 120.93887161534413)
      WHERE id = 1`
   ).run();
+  // One-time: adopt PANORTH / Internet Solutions portal brand when still on legacy defaults.
+  if (!columnExists('app_settings', 'portal_brand_v1')) {
+    db.exec(`ALTER TABLE app_settings ADD COLUMN portal_brand_v1 INTEGER DEFAULT 0`);
+  }
+  const brandMig = db
+    .prepare(`SELECT portal_brand_v1, portal_title, portal_subtitle FROM app_settings WHERE id = 1`)
+    .get() as { portal_brand_v1?: number; portal_title?: string; portal_subtitle?: string } | undefined;
+  if (brandMig && !brandMig.portal_brand_v1) {
+    const legacyTitle =
+      !brandMig.portal_title ||
+      brandMig.portal_title === 'Subscriber Portal' ||
+      brandMig.portal_title === 'Client Portal';
+    const legacySub = !brandMig.portal_subtitle || !String(brandMig.portal_subtitle).trim();
+    db.prepare(
+      `UPDATE app_settings SET
+         portal_title = CASE WHEN ? THEN 'PANORTH' ELSE portal_title END,
+         portal_subtitle = CASE WHEN ? THEN 'Internet Solutions' ELSE portal_subtitle END,
+         portal_brand_v1 = 1
+       WHERE id = 1`
+    ).run(legacyTitle ? 1 : 0, legacySub ? 1 : 0);
+  }
   if (!columnExists('routers', 'ssh_port')) {
     db.exec('ALTER TABLE routers ADD COLUMN ssh_port INTEGER DEFAULT 22');
   }
