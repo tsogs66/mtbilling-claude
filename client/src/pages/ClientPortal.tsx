@@ -543,11 +543,11 @@ export default function ClientPortal() {
                 onClick={() => void install()}
                 className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 hover:bg-white/15 text-white font-semibold py-3.5 min-h-[48px] transition"
               >
-                <Download size={18} /> Install app
+                <Download size={18} /> Install PANORTH
               </button>
             )}
             {installed && (
-              <p className="text-xs text-emerald-300 text-center">Installed on this device</p>
+              <p className="text-xs text-emerald-300 text-center">PANORTH installed on this device</p>
             )}
             <p className="text-xs text-slate-300 text-center leading-relaxed">{helpText}</p>
             {iosHint && <IosInstallHint onClose={dismissIosHint} />}
@@ -728,8 +728,8 @@ export default function ClientPortal() {
                   type="button"
                   onClick={() => void install()}
                   className="inline-flex items-center justify-center gap-1.5 text-sm text-orange-200 hover:text-white shrink-0 rounded-lg px-2.5 py-2 min-h-[40px] bg-orange-500/20 hover:bg-orange-500/30 ring-1 ring-orange-400/40 transition"
-                  title="Install Subscriber Portal on this device"
-                >
+                  title="Install PANORTH on this device"
+                  >
                   <Download size={16} />
                   <span className="hidden xs:inline sm:inline">Install</span>
                 </button>
@@ -754,9 +754,9 @@ export default function ClientPortal() {
                 <Download size={18} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block font-semibold text-white text-sm">Install Subscriber Portal</span>
+                <span className="block font-semibold text-white text-sm">Install PANORTH</span>
                 <span className="block text-xs text-slate-300 mt-0.5">
-                  Add to your home screen for faster access — works offline for the login page.
+                  Add PANORTH to your home screen for faster access — works offline for the login page.
                 </span>
               </span>
               <ChevronRight size={18} className="text-orange-200 shrink-0" />
@@ -1350,9 +1350,9 @@ function IosInstallHint({ onClose }: { onClose: () => void }) {
               className="text-lg font-bold text-slate-900"
               style={{ fontFamily: "'Space Grotesk', Manrope, sans-serif" }}
             >
-              Install on iPhone
+              Install PANORTH
             </h3>
-            <p className="text-sm text-slate-600 mt-1">Add Subscriber Portal to your Home Screen.</p>
+            <p className="text-sm text-slate-600 mt-1">Add PANORTH to your Home Screen.</p>
           </div>
           <button type="button" className="p-2 rounded-lg hover:bg-slate-100 text-slate-400" onClick={onClose}>
             <X size={18} />

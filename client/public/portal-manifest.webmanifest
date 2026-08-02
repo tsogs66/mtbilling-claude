@@ -1,8 +1,8 @@
 {
   "id": "/portal",
-  "name": "Subscriber Portal",
-  "short_name": "Portal",
-  "description": "Check balance, pay bills, and request support",
+  "name": "PANORTH",
+  "short_name": "PANORTH",
+  "description": "PANORTH subscriber portal — check balance, pay bills, and request support",
   "start_url": "/portal",
   "scope": "/",
   "display": "standalone",
