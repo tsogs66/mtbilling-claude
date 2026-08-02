@@ -34,7 +34,7 @@ function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   );
 }
 
-/** Account meta (left) + logo sized exactly to that block’s height + PANORTH text (right). */
+/** Account meta (left) + logo sized to that block + brand text; Sign out under brand (right). */
 function PortalAccountBrandRow({
   name,
   accountNumber,
@@ -43,6 +43,7 @@ function PortalAccountBrandRow({
   logoAlt,
   brandTitle,
   brandSubtitle,
+  onSignOut,
 }: {
   name: string;
   accountNumber?: string | null;
@@ -51,6 +52,7 @@ function PortalAccountBrandRow({
   logoAlt: string;
   brandTitle: string;
   brandSubtitle: string;
+  onSignOut: () => void;
 }) {
   const accountMetaRef = useRef<HTMLDivElement | null>(null);
   const [logoPx, setLogoPx] = useState(0);
@@ -85,30 +87,40 @@ function PortalAccountBrandRow({
           </span>
         </div>
       </div>
-      <div className="portal-brand-glow shrink-0 flex items-center gap-2 sm:gap-2.5 max-w-[52%] sm:max-w-[50%]">
-        <div
-          className="rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
-          style={
-            logoPx > 0
-              ? { width: logoPx, height: logoPx }
-              : { width: '4.25rem', height: '4.25rem', visibility: 'hidden' as const }
-          }
-          title={brandTitle}
+      <div className="shrink-0 flex flex-col items-end gap-1.5 max-w-[52%] sm:max-w-[50%]">
+        <div className="portal-brand-glow flex items-center gap-2 sm:gap-2.5">
+          <div
+            className="rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-black/5 shrink-0"
+            style={
+              logoPx > 0
+                ? { width: logoPx, height: logoPx }
+                : { width: '4.25rem', height: '4.25rem', visibility: 'hidden' as const }
+            }
+            title={brandTitle}
+          >
+            <img
+              src={logoSrc}
+              alt={logoAlt}
+              className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
+            />
+          </div>
+          <div className="min-w-0 text-left">
+            <div className="text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
+              {brandTitle}
+            </div>
+            <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
+              {brandSubtitle}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="portal-btn-ghost inline-flex items-center justify-end gap-1.5 text-xs sm:text-sm rounded-lg px-2.5 py-1.5 text-portal-dim hover:text-white"
         >
-          <img
-            src={logoSrc}
-            alt={logoAlt}
-            className="h-full w-full object-contain object-center p-1.5 rounded-[inherit]"
-          />
-        </div>
-        <div className="min-w-0 text-left">
-          <div className="text-base sm:text-xl font-bold text-white tracking-tight leading-tight">
-            {brandTitle}
-          </div>
-          <div className="text-[11px] sm:text-xs text-orange-300/90 font-semibold tracking-wide leading-snug">
-            {brandSubtitle}
-          </div>
-        </div>
+          <LogOut size={14} />
+          <span>Sign out</span>
+        </button>
       </div>
     </div>
   );
@@ -772,11 +784,11 @@ export default function ClientPortal() {
               logoAlt={company.name || brandCompany?.name || brandTitle}
               brandTitle={brandTitle}
               brandSubtitle={brandSubtitle}
+              onSignOut={logout}
             />
 
-            {/* Actions stacked below account/brand so they never collide on narrow screens */}
-            <div className="mt-4 space-y-2.5">
-              {showInstallButton && (
+            {showInstallButton && (
+              <div className="mt-4">
                 <button
                   type="button"
                   onClick={() => void install()}
@@ -793,16 +805,8 @@ export default function ClientPortal() {
                   </span>
                   <ChevronRight size={18} className="text-orange-200 shrink-0" />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={logout}
-                className="portal-btn-ghost w-full inline-flex items-center justify-center gap-1.5 text-sm rounded-xl px-3 py-2.5 min-h-[44px]"
-              >
-                <LogOut size={16} />
-                <span>Sign out</span>
-              </button>
-            </div>
+              </div>
+            )}
 
             {s.welcomeText && (
               <p className="mt-4 text-sm text-portal-muted leading-relaxed border-l-2 border-orange-400/70 pl-3">
