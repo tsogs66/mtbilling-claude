@@ -74,7 +74,15 @@ const PORTAL_THEMES: { key: PortalThemeId; label: string; hint: string; Icon: ty
 ];
 
 export default function PortalAdmin() {
-  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings'>('accounts');
+  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings'>(() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get('tab');
+      if (t === 'plans' || t === 'settings' || t === 'accounts') return t;
+    } catch {
+      /* ignore */
+    }
+    return 'accounts';
+  });
   const [accounts, setAccounts] = useState<PortalAccount[]>([]);
   const [planRequests, setPlanRequests] = useState<any[]>([]);
   const [q, setQ] = useState('');

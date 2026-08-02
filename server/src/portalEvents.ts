@@ -2,7 +2,12 @@ import { EventEmitter } from 'events';
 import type { Response } from 'express';
 
 export type PortalLiveEvent = {
-  type: 'plan_change' | 'ticket' | 'ping';
+  type:
+    | 'plan_change'
+    | 'ticket'
+    | 'ping'
+    | 'payment_link_created'
+    | 'payment_submitted';
   action?: 'created' | 'accepted' | 'rejected' | 'updated';
   /** PPPoE user id — portal clients filter to themselves; staff see all. */
   pppoeUserId?: number | null;
