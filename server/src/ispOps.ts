@@ -72,7 +72,7 @@ function listBillingPlansPublic() {
 function portalPaymentLinkForUser(userId: number) {
   const row = db
     .prepare(
-      `SELECT id, token, amount, months, status, expires_at, pay_channel, submitted_at, external_ref
+      `SELECT id, token, amount, months, status, expires_at, pay_channel, submitted_at, external_ref, created_by
        FROM payment_links
        WHERE pppoe_user_id = ?
          AND status IN ('pending', 'submitted', 'rejected')
@@ -93,6 +93,7 @@ function portalPaymentLinkForUser(userId: number) {
     payChannel: row.pay_channel || null,
     submittedAt: row.submitted_at || null,
     externalRef: row.external_ref || null,
+    createdBy: row.created_by || 'admin',
   };
 }
 
@@ -355,6 +356,7 @@ export function initIspOps() {
     ['portal_pin_hash', 'TEXT'],
     ['portal_enabled', 'INTEGER DEFAULT 0'],
     ['portal_must_change_password', 'INTEGER DEFAULT 0'],
+    ['portal_last_login_at', 'TEXT'],
   ] as [string, string][]) {
     if (!columnExists('pppoe_users', col)) {
       db.exec(`ALTER TABLE pppoe_users ADD COLUMN ${col} ${type}`);
@@ -944,12 +946,16 @@ ispOpsRouter.get('/client-portal/accounts', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   let rows = db
     .prepare(
-      `SELECT id, username, customer_name, account_number, status, contact, email, profile, price,
-              portal_enabled, portal_must_change_password,
-              CASE WHEN portal_pin_hash IS NOT NULL AND portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin
-       FROM pppoe_users
-       ${enabledOnly ? 'WHERE portal_enabled = 1' : ''}
-       ORDER BY COALESCE(customer_name, username)`
+      `SELECT u.id, u.username, u.customer_name, u.account_number, u.status, u.contact, u.email, u.profile, u.price,
+              u.portal_enabled, u.portal_must_change_password, u.portal_last_login_at,
+              CASE WHEN u.portal_pin_hash IS NOT NULL AND u.portal_pin_hash != '' THEN 1 ELSE 0 END AS has_pin,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM client_portal_sessions s
+                WHERE s.pppoe_user_id = u.id AND s.expires_at > datetime('now')
+              ) THEN 1 ELSE 0 END AS portal_session_active
+       FROM pppoe_users u
+       ${enabledOnly ? 'WHERE u.portal_enabled = 1' : ''}
+       ORDER BY COALESCE(u.customer_name, u.username)`
     )
     .all() as any[];
   if (q) {
@@ -1343,11 +1349,13 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
   const settings = portalSettingsRow();
   const token = crypto.randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + settings.sessionDays * 864e5).toISOString();
+  const nowIso = new Date().toISOString();
   db.prepare(`INSERT INTO client_portal_sessions (token, pppoe_user_id, expires_at) VALUES (?, ?, ?)`).run(
     token,
     user.id,
     expires
   );
+  db.prepare(`UPDATE pppoe_users SET portal_last_login_at = ? WHERE id = ?`).run(nowIso, user.id);
   res.json({
     token,
     expiresAt: expires,
@@ -1560,7 +1568,11 @@ publicPortalRouter.get('/public/portal/me', (req, res) => {
   });
 });
 
-/** Return existing active pay link, or create one when the subscriber has a balance due. */
+/**
+ * Return existing active pay link, or create one from the subscriber side
+ * (reverse of admin creating a payment-link entry). Always allowed so they can
+ * send payment details even when no admin link exists yet.
+ */
 publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
   const token = String(req.headers['x-portal-token'] || req.body?.token || '');
   const sess = portalUserFromToken(token);
@@ -1568,10 +1580,7 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
   if (rejectIfMustChangePassword(sess, res)) return;
 
   const existing = portalPaymentLinkForUser(sess.uid);
-  if (existing && existing.status === 'pending') {
-    return res.json({ paymentLink: existing, created: false });
-  }
-  if (existing && existing.status === 'submitted') {
+  if (existing && (existing.status === 'pending' || existing.status === 'submitted')) {
     return res.json({ paymentLink: existing, created: false });
   }
 
@@ -1582,13 +1591,19 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
        WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
     )
     .get(sess.uid) as { bal: number };
+  const bal = Number(balanceRow?.bal) || 0;
   const price = Number(sess.price) || 0;
-  if ((Number(balanceRow?.bal) || 0) <= 0 && price <= 0 && !existing) {
-    return res.status(400).json({ error: 'No balance due — ask your ISP if you need a payment link' });
-  }
+  const months = Math.max(1, Math.floor(Number(req.body?.months) || 1));
+  const amountRaw = req.body?.amount != null ? Number(req.body.amount) : NaN;
+  const amount = Number.isFinite(amountRaw) && amountRaw > 0 ? amountRaw : bal > 0 ? bal : price * months;
 
   try {
-    const created = ensureFreshPayLink(sess.uid);
+    // Subscriber-initiated entry — shows up on Payment Links like an admin create, tagged portal.
+    const created = ensureFreshPayLink(sess.uid, undefined, {
+      createdBy: 'portal',
+      months,
+      amount: amount > 0 ? amount : price > 0 ? price * months : amount,
+    });
     const paymentLink = portalPaymentLinkForUser(sess.uid) || {
       path: created.path,
       url: created.url,
@@ -1599,6 +1614,7 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
       payChannel: null,
       submittedAt: null,
       externalRef: null,
+      createdBy: 'portal',
     };
     res.json({ paymentLink, created: true });
   } catch (e: any) {
