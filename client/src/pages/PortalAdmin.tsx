@@ -18,6 +18,10 @@ type PortalSettings = {
   showTickets: boolean;
   showCompany: boolean;
   sessionDays: number;
+  /** Manual public portal link for SMS (no https://). Blank = auto-detect. */
+  portalLink: string;
+  /** Server-computed fallback when portalLink is blank */
+  autoPortalLink?: string;
 };
 
 type PortalAccount = {
@@ -46,6 +50,8 @@ const DEFAULT_SETTINGS: PortalSettings = {
   showTickets: true,
   showCompany: true,
   sessionDays: 7,
+  portalLink: '',
+  autoPortalLink: '',
 };
 
 export default function PortalAdmin() {
@@ -518,6 +524,24 @@ export default function PortalAdmin() {
             Company name and pay numbers still come from Company settings.
           </p>
           <div className="grid md:grid-cols-2 gap-4">
+            <FormField
+              label="Portal link"
+              hint="Used in SMS / notifications as {portal_url}. Leave blank to auto-detect from Public URL / Cloudflare. Prefer without https://"
+            >
+              <input
+                className="input font-mono text-sm"
+                value={settings.portalLink}
+                onChange={(e) => setSettings({ ...settings, portalLink: e.target.value })}
+                placeholder={settings.autoPortalLink || 'billing.example.com/portal'}
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Effective link:{' '}
+                <code className="text-slate-600">
+                  {settings.portalLink?.trim() || settings.autoPortalLink || 'portal'}
+                </code>
+                {!settings.portalLink?.trim() && settings.autoPortalLink ? ' (auto)' : ''}
+              </p>
+            </FormField>
             <FormField label="Login title">
               <input
                 className="input"

@@ -511,11 +511,14 @@ function resolvePortalLink(): string {
   try {
     const app = db
       .prepare(
-        `SELECT public_base_url, ngrok_url, ngrok_status,
+        `SELECT portal_link, public_base_url, ngrok_url, ngrok_status,
                 cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
          FROM app_settings WHERE id = 1`
       )
       .get() as any;
+    // Manual override from Subscriber Portal → Portal page settings
+    const manual = stripScheme(app?.portal_link);
+    if (manual) return manual;
     const cf =
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url ||
