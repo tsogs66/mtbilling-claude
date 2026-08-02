@@ -64,8 +64,20 @@ harden_cloudflared_unit() {
       changed=1
     fi
   fi
+  if ! grep -qE '^\s*TimeoutStopSec=' "$unit_path" 2>/dev/null; then
+    if grep -qE '^\s*\[Service\]' "$unit_path" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a TimeoutStopSec=8' "$unit_path"
+      changed=1
+    fi
+  fi
+  if ! grep -qE '^\s*KillMode=' "$unit_path" 2>/dev/null; then
+    if grep -qE '^\s*\[Service\]' "$unit_path" 2>/dev/null; then
+      sed -i '/^\s*\[Service\]/a KillMode=mixed' "$unit_path"
+      changed=1
+    fi
+  fi
   if [[ "$changed" == "1" ]]; then
-    log "Hardened cloudflared-mt-billing.service (Restart=always)"
+    log "Hardened cloudflared-mt-billing.service (Restart=always, fast stop)"
     systemctl daemon-reload 2>/dev/null || true
   fi
 }

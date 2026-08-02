@@ -411,6 +411,15 @@ write_unit() {
   printf 'TUNNEL_TOKEN=%s\n' "$TOKEN" >"$ENV_TOKEN_FILE"
   chmod 600 "$ENV_TOKEN_FILE"
 
+  # Prefer HTTP/2 when QUIC/UDP is flaky (common behind ISP CGNAT / pfSense).
+  # Override with /etc/mt-billing/cloudflared.protocol containing "quic" if needed.
+  local proto_file="${CONF_DIR}/cloudflared.protocol"
+  local proto="http2"
+  if [[ -f "$proto_file" ]]; then
+    proto="$(tr -d '[:space:]' <"$proto_file" | tr '[:upper:]' '[:lower:]')"
+    [[ "$proto" == "quic" || "$proto" == "http2" || "$proto" == "auto" ]] || proto="http2"
+  fi
+
   cat >"$WRAPPER" <<WRAP
 #!/bin/bash
 set -euo pipefail
@@ -419,9 +428,24 @@ if [[ -z "\$TOKEN" || "\$TOKEN" != eyJ* ]]; then
   echo "cloudflared-mt-billing: missing/invalid token in ${TOKEN_FILE}" >&2
   exit 1
 fi
-exec '${bin}' tunnel --no-autoupdate run --token "\$TOKEN"
+PROTO="${proto}"
+# http2 avoids QUIC UDP-buffer / NAT drops that show up as Error 1033 flaps
+EXTRA=()
+if [[ "\$PROTO" == "http2" || "\$PROTO" == "quic" ]]; then
+  EXTRA+=(--protocol "\$PROTO")
+fi
+exec '${bin}' tunnel --no-autoupdate "\${EXTRA[@]}" run --token "\$TOKEN"
 WRAP
   chmod 700 "$WRAPPER"
+
+  # Raise UDP buffers so QUIC (if used) does not starve; harmless for http2
+  mkdir -p /etc/sysctl.d
+  cat >/etc/sysctl.d/99-mt-billing-cloudflared.conf <<'SYS'
+# Cloudflare Tunnel (cloudflared) QUIC — avoid "failed to sufficiently increase receive buffer"
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+SYS
+  sysctl --system >/dev/null 2>&1 || sysctl -p /etc/sysctl.d/99-mt-billing-cloudflared.conf >/dev/null 2>&1 || true
 
   cat >"$UNIT_PATH" <<EOF
 [Unit]
@@ -433,10 +457,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-# always: recover from crashes / StartLimitHit that otherwise leave CF at 502 Host Error
+# always: recover from crashes / StartLimitHit that otherwise leave CF at 502/1033
 Restart=always
-RestartSec=5
+RestartSec=3
 StartLimitIntervalSec=0
+# Fast stop — long graceful shutdown left the hostname at Error 1033 for ~30s
+TimeoutStopSec=8
+KillMode=mixed
+KillSignal=SIGTERM
 # Prefer wrapper (reads token file); EnvironmentFile is a backup for TUNNEL_TOKEN
 EnvironmentFile=-${ENV_TOKEN_FILE}
 ExecStart=${WRAPPER}
