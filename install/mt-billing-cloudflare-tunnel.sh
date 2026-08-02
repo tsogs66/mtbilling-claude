@@ -579,10 +579,21 @@ do_apply() {
   if [[ "$FROM_DB" == "1" ]]; then
     read_from_db
   fi
+  # Bare `apply` with no --token: reuse the already-installed connector token / DB.
+  if [[ -z "$TOKEN" && -s "$TOKEN_FILE" ]]; then
+    TOKEN="$(tr -d '\r\n\t ' <"$TOKEN_FILE" || true)"
+    log_info "Using existing token from ${TOKEN_FILE}"
+  fi
+  if [[ -z "$TOKEN" && -f "$DB_PATH" ]]; then
+    read_from_db || true
+  fi
+  if [[ -z "$HOSTNAME" && -s "${CONF_DIR}/cloudflared.hostname" ]]; then
+    HOSTNAME="$(tr -d '\r\n\t ' <"${CONF_DIR}/cloudflared.hostname" || true)"
+  fi
   TOKEN="$(sanitize_token "${TOKEN}")"
   HOSTNAME="$(normalize_host "${HOSTNAME}")"
   if [[ -z "$TOKEN" ]]; then
-    log_err "Missing tunnel token. Pass --token or save it in System Settings and use --from-db."
+    log_err "Missing tunnel token. Pass --token, --token-file /etc/mt-billing/cloudflared.token, or --from-db."
     exit 1
   fi
   if ! validate_token "$TOKEN"; then
@@ -600,6 +611,10 @@ do_apply() {
   fi
 
   db_exec "UPDATE app_settings SET cf_tunnel_token = '${TOKEN//\'/\'\'}', cf_tunnel_hostname = '${HOSTNAME//\'/\'\'}', cf_tunnel_port = ${LOCAL_PORT:-80} WHERE id = 1;"
+  if [[ -n "$HOSTNAME" ]]; then
+    printf '%s\n' "$HOSTNAME" >"${CONF_DIR}/cloudflared.hostname"
+    chmod 644 "${CONF_DIR}/cloudflared.hostname" 2>/dev/null || true
+  fi
 
   install_cloudflared
   write_unit
