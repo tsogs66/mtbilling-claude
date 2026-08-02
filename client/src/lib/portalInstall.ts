@@ -27,6 +27,11 @@ export function usePortalManifest() {
     const html = document.documentElement;
     html.classList.add('portal-route');
 
+    // Suspend panel themes (dark/isptech/blueglass…) so their slate/white remaps
+    // cannot wash out portal light sections on mobile.
+    const prevDataTheme = html.getAttribute('data-theme');
+    html.removeAttribute('data-theme');
+
     const link =
       document.querySelector<HTMLLinkElement>('link[rel="manifest"]') ||
       (() => {
@@ -49,6 +54,8 @@ export function usePortalManifest() {
 
     return () => {
       html.classList.remove('portal-route');
+      if (prevDataTheme) html.setAttribute('data-theme', prevDataTheme);
+      else html.removeAttribute('data-theme');
       if (prevScheme) html.style.setProperty('color-scheme', prevScheme);
       else html.style.removeProperty('color-scheme');
       if (prev) link.setAttribute('href', prev);

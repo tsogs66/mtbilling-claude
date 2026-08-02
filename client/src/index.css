@@ -2365,12 +2365,14 @@ body {
 /* ── Subscriber portal (/portal) ───────────────────────────────────────────
    Panel shell locks body/#root overflow for the staff Layout scroller.
    Public portal is outside Layout, so enable #root scrolling while mounted.
-   Dark themes also remap slate/white utilities for the panel — restore
-   readable dark-on-light contrast inside .subscriber-portal content. */
+   Also isolate from panel themes (data-theme suspended in portalInstall) and
+   force high-contrast text on both hero (light-on-dark) and body (dark-on-light). */
 html.portal-route,
 html.portal-route body {
   height: 100%;
   overflow: hidden;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
 }
 html.portal-route #root {
   height: 100%;
@@ -2379,22 +2381,30 @@ html.portal-route #root {
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
-  background: #f1f5f9;
-  color: #0f172a;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 html.portal-route .subscriber-portal {
   min-height: 100%;
-  color: #0f172a;
+  min-height: 100dvh;
+  color: #0f172a !important;
+  background: #f1f5f9 !important;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 html.portal-route .subscriber-portal--login {
-  background: #020617;
-  color: #e2e8f0;
+  background: #020617 !important;
+  color: #f1f5f9 !important;
   min-height: 100%;
+  min-height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
 }
 
-/* Undo dark/isptech remaps on light portal panels only (not login/hero). */
+/* Light panels: dark text, solid surfaces — readable on phones outdoors */
 html.portal-route .subscriber-portal .portal-light {
-  color: #0f172a;
+  color: #0f172a !important;
 }
 html.portal-route .subscriber-portal .portal-light .text-slate-900,
 html.portal-route .subscriber-portal .portal-light .text-slate-800,
@@ -2403,21 +2413,22 @@ html.portal-route .subscriber-portal .portal-light .text-slate-700 {
 }
 html.portal-route .subscriber-portal .portal-light .text-slate-600,
 html.portal-route .subscriber-portal .portal-light .text-slate-500 {
-  color: #475569 !important;
+  color: #334155 !important; /* was #475569 — bump for mobile glare */
 }
 html.portal-route .subscriber-portal .portal-light .text-slate-400 {
-  color: #64748b !important;
+  color: #475569 !important; /* was #64748b — secondary labels */
 }
 html.portal-route .subscriber-portal .portal-light .text-rose-600 {
-  color: #e11d48 !important;
+  color: #be123c !important;
 }
 html.portal-route .subscriber-portal .portal-light .text-orange-600 {
-  color: #ea580c !important;
+  color: #c2410c !important;
 }
 html.portal-route .subscriber-portal .portal-light .text-emerald-600 {
-  color: #059669 !important;
+  color: #047857 !important;
 }
 html.portal-route .subscriber-portal .portal-light .bg-white,
+html.portal-route .subscriber-portal .portal-light .bg-white\/70,
 html.portal-route .subscriber-portal .portal-light .bg-white\/80,
 html.portal-route .subscriber-portal .portal-light .bg-white\/90,
 html.portal-route .subscriber-portal .portal-light .bg-white\/95 {
@@ -2441,8 +2452,9 @@ html.portal-route .subscriber-portal .portal-invoice-preview {
 }
 html.portal-route .subscriber-portal .portal-light .border-slate-200,
 html.portal-route .subscriber-portal .portal-light .border-slate-100,
-html.portal-route .subscriber-portal .portal-light .border-slate-50 {
-  border-color: #e2e8f0 !important;
+html.portal-route .subscriber-portal .portal-light .border-slate-50,
+html.portal-route .subscriber-portal .portal-light .border-slate-200\/80 {
+  border-color: #cbd5e1 !important;
 }
 html.portal-route .subscriber-portal .portal-light .from-orange-50 {
   --tw-gradient-from: #fff7ed !important;
@@ -2457,53 +2469,96 @@ html.portal-route .subscriber-portal .portal-field,
 html.portal-route .subscriber-portal input.portal-field,
 html.portal-route .subscriber-portal textarea.portal-field {
   background: #ffffff !important;
-  border-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
   color: #0f172a !important;
   box-shadow: none !important;
+  font-size: 16px !important; /* prevent iOS zoom-on-focus */
+  min-height: 44px;
+}
+html.portal-route .subscriber-portal textarea.portal-field {
+  min-height: 96px;
 }
 html.portal-route .subscriber-portal .portal-field::placeholder {
-  color: #94a3b8 !important;
+  color: #64748b !important;
+  opacity: 1 !important;
 }
 html.portal-route .subscriber-portal .portal-field:focus {
-  border-color: #fb923c !important;
-  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2) !important;
+  border-color: #ea580c !important;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.25) !important;
 }
 
-/* Hero / login keep light-on-dark text */
+/* Hero / login: bright light-on-dark (include slate-500 which was missing) */
+html.portal-route .subscriber-portal-hero,
+html.portal-route .subscriber-portal--login {
+  color: #f8fafc !important;
+}
 html.portal-route .subscriber-portal-hero .text-white,
 html.portal-route .subscriber-portal--login .text-white {
   color: #ffffff !important;
 }
 html.portal-route .subscriber-portal-hero .text-slate-300,
+html.portal-route .subscriber-portal-hero .text-slate-300\/95,
 html.portal-route .subscriber-portal-hero .text-slate-400,
+html.portal-route .subscriber-portal-hero .text-slate-500,
 html.portal-route .subscriber-portal--login .text-slate-300,
 html.portal-route .subscriber-portal--login .text-slate-400,
 html.portal-route .subscriber-portal--login .text-slate-500 {
-  color: #cbd5e1 !important;
+  color: #e2e8f0 !important;
 }
 html.portal-route .subscriber-portal-hero .text-orange-300\/90,
 html.portal-route .subscriber-portal-hero .text-orange-200,
-html.portal-route .subscriber-portal--login .text-orange-300\/90 {
+html.portal-route .subscriber-portal-hero .text-orange-300,
+html.portal-route .subscriber-portal--login .text-orange-300\/90,
+html.portal-route .subscriber-portal--login .text-orange-300,
+html.portal-route .subscriber-portal--login .text-orange-200 {
   color: #fdba74 !important;
 }
-html.portal-route .subscriber-portal-hero .text-rose-300 {
+html.portal-route .subscriber-portal-hero .text-rose-300,
+html.portal-route .subscriber-portal--login .text-rose-200 {
   color: #fda4af !important;
 }
-html.portal-route .subscriber-portal-hero .text-emerald-300 {
+html.portal-route .subscriber-portal-hero .text-emerald-300,
+html.portal-route .subscriber-portal--login .text-emerald-300\/90,
+html.portal-route .subscriber-portal--login .text-emerald-200 {
   color: #6ee7b7 !important;
 }
 html.portal-route .subscriber-portal-hero .bg-white\/5 {
-  background-color: rgba(255, 255, 255, 0.05) !important;
+  background-color: rgba(255, 255, 255, 0.1) !important; /* clearer cards on phones */
+}
+html.portal-route .subscriber-portal-hero .border-white\/10 {
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+html.portal-route .subscriber-portal--login input {
+  font-size: 16px !important;
+  min-height: 46px;
+  color: #ffffff !important;
+}
+html.portal-route .subscriber-portal--login input::placeholder {
+  color: #94a3b8 !important;
+  opacity: 1 !important;
 }
 
-/* Glass plan cards */
+/* Mobile-friendly section cards + touch targets */
+@media (max-width: 640px) {
+  html.portal-route .subscriber-portal .portal-light > section,
+  html.portal-route .subscriber-portal main.portal-light > section {
+    padding: 1rem !important;
+    border-radius: 1rem !important;
+  }
+  html.portal-route .subscriber-portal-hero header {
+    padding-top: max(0.75rem, env(safe-area-inset-top, 0));
+  }
+}
+
+/* Glass plan cards — denser fill so text stays readable on mobile LCDs */
 html.portal-route .subscriber-portal .portal-plan-glass {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  border: 1px solid #cbd5e1;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(248, 250, 252, 0.55)),
-    radial-gradient(ellipse 80% 60% at 10% 0%, rgba(249, 115, 22, 0.12), transparent 55%);
+    linear-gradient(145deg, #ffffff, #f8fafc),
+    radial-gradient(ellipse 80% 60% at 10% 0%, rgba(249, 115, 22, 0.1), transparent 55%);
+  color: #0f172a;
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   box-shadow: 0 8px 24px -18px rgba(15, 23, 42, 0.35);
