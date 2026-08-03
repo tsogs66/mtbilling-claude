@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
   Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
@@ -1275,8 +1276,10 @@ function PortalInvoiceModal({
   const payments = data.payments || data.history || [];
   const company = data.company || {};
 
-  return (
-    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
+  // Portal to body: `.subscriber-portal > *` CSS forces `position:relative`, which
+  // overrides Tailwind `fixed` and makes the View invoice overlay a no-op on-screen.
+  return createPortal(
+    <div className="portal-modal-root fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
       <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-label="Close" />
       <div className="portal-modal-panel portal-invoice-preview relative w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[90dvh] overflow-y-auto">
         <div className="sticky top-0 border-b border-white/10 px-5 py-4 flex items-start justify-between gap-3 bg-[rgba(4,14,12,0.92)] backdrop-blur-xl">
@@ -1398,13 +1401,14 @@ function PortalInvoiceModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
 function IosInstallHint({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
+  return createPortal(
+    <div className="portal-modal-root fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
       <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-label="Close" />
       <div className="portal-modal-panel relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 sm:p-6">
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -1446,6 +1450,7 @@ function IosInstallHint({ onClose }: { onClose: () => void }) {
           Got it
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
