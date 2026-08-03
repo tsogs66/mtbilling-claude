@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
-  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft,
+  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft, Banknote,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 import { getApiBase } from '../config';
 
-type Channel = 'gcash' | 'maya' | '';
+type Channel = 'gcash' | 'maya' | 'cash' | '';
 
 function parseMoneyToken(raw: string): number | null {
   const n = Number(String(raw).replace(/,/g, '').replace(/[^\d.]/g, ''));
@@ -259,6 +259,7 @@ export default function SubscriberPay() {
   const [busy, setBusy] = useState(false);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [channel, setChannel] = useState<Channel>('');
+  const [merchantId, setMerchantId] = useState<number | null>(null);
   const [ref, setRef] = useState('');
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [ocrHints, setOcrHints] = useState<string[]>([]);
@@ -283,7 +284,8 @@ export default function SubscriberPay() {
         if (!r.ok) throw new Error(j.error || 'Not found');
         setData(j);
         dueAmountRef.current = Number(j.amount || 0);
-        if (j.payChannel === 'gcash' || j.payChannel === 'maya') setChannel(j.payChannel);
+        if (j.payChannel === 'gcash' || j.payChannel === 'maya' || j.payChannel === 'cash') setChannel(j.payChannel);
+        if (j.merchantId) setMerchantId(Number(j.merchantId));
         if (j.externalRef) setRef(j.externalRef);
       })
       .catch((e) => setError(e.message || 'Could not load payment link'));
@@ -451,10 +453,14 @@ export default function SubscriberPay() {
 
   const submit = async () => {
     if (!channel) {
-      setError('Select GCash or Maya.');
+      setError('Select GCash, Maya, or Cash.');
       return;
     }
-    if (!ref.trim() || ref.trim().length < 4) {
+    if (channel === 'cash' && !merchantId) {
+      setError('Select the merchant where you paid cash.');
+      return;
+    }
+    if (channel !== 'cash' && (!ref.trim() || ref.trim().length < 4)) {
       setError('Enter your transaction / reference number (required).');
       return;
     }
@@ -483,9 +489,10 @@ export default function SubscriberPay() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channel,
-          reference: ref.trim(),
-          screenshot,
-          ocrAmount: ocrAmount ?? undefined,
+          reference: channel === 'cash' ? (ref.trim() || undefined) : ref.trim(),
+          screenshot: channel === 'cash' ? null : screenshot,
+          ocrAmount: channel === 'cash' ? undefined : (ocrAmount ?? undefined),
+          merchantId: channel === 'cash' ? merchantId : undefined,
         }),
       });
       const j = await r.json();
@@ -530,23 +537,27 @@ export default function SubscriberPay() {
   const expired = data.status === 'expired';
   const rejected = data.status === 'rejected';
   const company = data.company || {};
+  const merchants: { id: number; name: string; photo?: string | null; address?: string | null; notes?: string | null }[] =
+    data.merchants || [];
+  const selectedMerchant = merchants.find((m) => m.id === merchantId) || null;
   const accountHint = channel === 'gcash' ? company.gcashNumber : channel === 'maya' ? company.mayaNumber : null;
   const merchantQr =
     channel === 'gcash'
       ? company.gcashQr || company.paymentQr
       : channel === 'maya'
         ? company.mayaQr || company.paymentQr
-        : company.gcashQr || company.mayaQr || company.paymentQr || null;
+        : null;
   const qrLabel = channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Payment';
   const dueAmount = Number(data.amount || 0);
   const amountCoversDue = ocrAmount != null && ocrAmount + 0.05 >= dueAmount;
   const hasManualRef = ref.trim().length >= 4;
-  // No receipt → submit with manual reference only.
-  // With receipt → amount must be readable and ≥ amount due.
+  // Cash: merchant required. E-wallet: reference required; receipt optional with amount check.
   const canSubmit =
-    Boolean(channel) &&
-    hasManualRef &&
-    (!screenshot || (!ocrBusy && ocrAmount != null && amountCoversDue));
+    channel === 'cash'
+      ? Boolean(merchantId)
+      : Boolean(channel) &&
+        hasManualRef &&
+        (!screenshot || (!ocrBusy && ocrAmount != null && amountCoversDue));
 
   return (
     <div className="h-full min-h-[100dvh] relative overflow-x-hidden overflow-y-auto">
@@ -624,41 +635,26 @@ export default function SubscriberPay() {
 
             {!paid && !expired && !submitted && (
               <>
-                {/* Channel select — sliding GCash / Maya */}
+                {/* Channel select — GCash / Maya / Cash */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Pay with</div>
-                  <div
-                    className="relative grid grid-cols-2 rounded-2xl bg-slate-100 p-1"
-                    role="tablist"
-                    aria-label="Payment wallet"
-                  >
-                    <span
-                      aria-hidden
-                      className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-xl shadow-sm transition-all duration-300 ease-out ${
-                        channel === 'maya'
-                          ? 'left-[calc(50%+2px)] bg-[#00D632]'
-                          : channel === 'gcash'
-                            ? 'left-1 bg-[#007DFE]'
-                            : 'left-1 bg-transparent shadow-none'
-                      }`}
-                    />
+                  <div className="grid grid-cols-3 gap-2" role="tablist" aria-label="Payment method">
                     <button
                       type="button"
                       role="tab"
                       aria-selected={channel === 'gcash'}
                       onClick={() => {
                         setChannel('gcash');
+                        setMerchantId(null);
                         setCopied(false);
                       }}
-                      className="relative z-10 flex items-center justify-center rounded-xl px-2 py-2.5 focus:outline-none"
+                      className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl border px-2 py-3 transition ${
+                        channel === 'gcash'
+                          ? 'border-sky-400 bg-sky-50 ring-2 ring-sky-400/40'
+                          : 'border-slate-200 bg-slate-50 hover:bg-white'
+                      }`}
                     >
-                      <img
-                        src="/wallets/gcash.svg"
-                        alt="GCash"
-                        className={`h-9 w-auto max-w-[7.5rem] rounded-lg transition ${
-                          channel === 'gcash' ? 'ring-2 ring-white/80 shadow-sm' : 'opacity-80'
-                        }`}
-                      />
+                      <img src="/wallets/gcash.svg" alt="GCash" className="h-8 w-auto max-w-full" />
                     </button>
                     <button
                       type="button"
@@ -666,20 +662,38 @@ export default function SubscriberPay() {
                       aria-selected={channel === 'maya'}
                       onClick={() => {
                         setChannel('maya');
+                        setMerchantId(null);
                         setCopied(false);
                       }}
-                      className="relative z-10 flex items-center justify-center rounded-xl px-2 py-2.5 focus:outline-none"
+                      className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl border px-2 py-3 transition ${
+                        channel === 'maya'
+                          ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-400/40'
+                          : 'border-slate-200 bg-slate-50 hover:bg-white'
+                      }`}
                     >
-                      <img
-                        src="/wallets/maya.svg"
-                        alt="Maya"
-                        className={`h-9 w-auto max-w-[7.5rem] rounded-lg transition ${
-                          channel === 'maya' ? 'ring-2 ring-white/80 shadow-sm' : 'opacity-80'
-                        }`}
-                      />
+                      <img src="/wallets/maya.svg" alt="Maya" className="h-8 w-auto max-w-full" />
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={channel === 'cash'}
+                      onClick={() => {
+                        setChannel('cash');
+                        setScreenshot(null);
+                        setOcrAmount(null);
+                        setCopied(false);
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 rounded-2xl border px-2 py-3 transition ${
+                        channel === 'cash'
+                          ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-400/40'
+                          : 'border-slate-200 bg-slate-50 hover:bg-white'
+                      }`}
+                    >
+                      <Banknote size={22} className={channel === 'cash' ? 'text-amber-700' : 'text-slate-500'} />
+                      <span className={`text-xs font-bold ${channel === 'cash' ? 'text-amber-800' : 'text-slate-600'}`}>Cash</span>
                     </button>
                   </div>
-                  {accountHint && (
+                  {accountHint && channel !== 'cash' && (
                     <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                       <span className="text-xs text-slate-500 shrink-0">Send to</span>
                       <span className="font-mono text-sm font-semibold text-slate-800 truncate flex-1">{accountHint}</span>
@@ -696,8 +710,65 @@ export default function SubscriberPay() {
                   )}
                 </div>
 
-                {/* Merchant QR — zoom + download + scan line */}
-                {merchantQr && (
+                {channel === 'cash' && (
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
+                      Pay cash at merchant
+                    </div>
+                    {merchants.length === 0 ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+                        No cash merchants configured yet. Ask your ISP to add merchants under Subscriber Portal → Payments.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {merchants.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => setMerchantId(m.id)}
+                            className={`w-full text-left flex items-start gap-3 rounded-2xl border px-3 py-2.5 transition ${
+                              merchantId === m.id
+                                ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-400/30'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                          >
+                            <div className="h-14 w-14 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center">
+                              {m.photo ? (
+                                <img src={m.photo} alt="" className="h-full w-full object-cover" />
+                              ) : (
+                                <Banknote size={20} className="text-slate-300" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold text-slate-800">{m.name}</div>
+                              {m.address && <div className="text-xs text-slate-500 mt-0.5">{m.address}</div>}
+                              {m.notes && <div className="text-xs text-slate-400 mt-0.5 line-clamp-2">{m.notes}</div>}
+                            </div>
+                            {merchantId === m.id && (
+                              <Check size={18} className="text-amber-600 shrink-0 mt-1" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {selectedMerchant?.photo && (
+                      <div className="mt-3 flex flex-col items-center gap-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Merchant photo</div>
+                        <img
+                          src={selectedMerchant.photo}
+                          alt={selectedMerchant.name}
+                          className="w-full max-h-56 object-contain rounded-2xl border border-slate-200 bg-white p-2"
+                        />
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-500 mt-3 leading-relaxed">
+                      Pay the exact amount in cash at the selected merchant, then submit. Your ISP will confirm and restore service.
+                    </p>
+                  </div>
+                )}
+
+                {/* Merchant QR — zoom + download + scan line (GCash / Maya) */}
+                {channel !== 'cash' && merchantQr && (
                   <div className="flex flex-col items-center gap-2 py-1">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       {qrLabel}
@@ -737,13 +808,15 @@ export default function SubscriberPay() {
                     </div>
                   </div>
                 )}
-                {!merchantQr && channel && (
+                {!merchantQr && channel && channel !== 'cash' && (
                   <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-                    No {channel === 'maya' ? 'Maya' : 'GCash'} QR uploaded yet. Your ISP should add it under Company settings.
+                    No {channel === 'maya' ? 'Maya' : 'GCash'} QR uploaded yet. Your ISP should add it under Subscriber Portal → Payments.
                     {accountHint ? <> Meanwhile send to <span className="font-mono font-semibold">{accountHint}</span>.</> : null}
                   </div>
                 )}
 
+                {channel !== 'cash' && (
+                  <>
                 {/* Reference */}
                 <label className="block">
                   <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -924,27 +997,39 @@ export default function SubscriberPay() {
                   <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">{error}</div>
                 )}
 
+                  </>
+                )}
+
                 <button
                   type="button"
-                  disabled={busy || (Boolean(screenshot) && ocrBusy) || !canSubmit}
+                  disabled={busy || (channel !== 'cash' && Boolean(screenshot) && ocrBusy) || !canSubmit}
                   onClick={submit}
                   className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-semibold py-3.5 shadow-lg shadow-sky-600/25 disabled:opacity-60 transition"
                 >
                   {busy
                     ? 'Submitting…'
-                    : screenshot && ocrBusy
+                    : channel !== 'cash' && screenshot && ocrBusy
                       ? 'Reading receipt…'
                       : !channel
-                        ? 'Select GCash or Maya'
-                        : !hasManualRef
-                          ? 'Enter reference / transaction no.'
-                          : screenshot && !amountCoversDue
-                            ? 'Receipt amount must cover amount due'
-                            : 'Submit payment for review'}
+                        ? 'Select GCash, Maya, or Cash'
+                        : channel === 'cash' && !merchantId
+                          ? 'Select a cash merchant'
+                          : channel !== 'cash' && !hasManualRef
+                            ? 'Enter reference / transaction no.'
+                            : channel !== 'cash' && screenshot && !amountCoversDue
+                              ? 'Receipt amount must cover amount due'
+                              : channel === 'cash'
+                                ? 'Submit cash payment for review'
+                                : 'Submit payment for review'}
                 </button>
-                {!screenshot && (
+                {channel !== 'cash' && !screenshot && (
                   <p className="text-[11px] text-center text-slate-400 -mt-2">
                     You can submit with just the reference number — receipt photo is optional
+                  </p>
+                )}
+                {channel === 'cash' && (
+                  <p className="text-[11px] text-center text-slate-400 -mt-2">
+                    Select the merchant where you paid, then submit for ISP confirmation
                   </p>
                 )}
                 <p className="text-[11px] text-center text-slate-400 flex items-center justify-center gap-1">

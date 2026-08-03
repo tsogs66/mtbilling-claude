@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Globe2, KeyRound, Pencil, Plus, Save, Search, Settings2, Users, ExternalLink, Zap, Check, X,
-  Binary, Satellite,
+  Binary, Satellite, Wallet,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, FormField, Modal, ModalFooter, PageHeader, StatusBadge, Toolbar } from '../components/ui';
 import { api, peso } from '../api';
 import { subscribePortalLive } from '../lib/portalLive';
+import { PortalPaymentsPanel } from '../components/portal/PortalPaymentsPanel';
 
 type PortalThemeId = 'matrix' | 'orbital';
 
@@ -195,10 +196,10 @@ function PortalRequestsPanel() {
 }
 
 export default function PortalAdmin() {
-  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings' | 'requests'>(() => {
+  const [tab, setTab] = useState<'accounts' | 'plans' | 'settings' | 'requests' | 'payments'>(() => {
     try {
       const t = new URLSearchParams(window.location.search).get('tab');
-      if (t === 'plans' || t === 'settings' || t === 'accounts' || t === 'requests') return t;
+      if (t === 'plans' || t === 'settings' || t === 'accounts' || t === 'requests' || t === 'payments') return t;
     } catch {
       /* ignore */
     }
@@ -463,6 +464,13 @@ export default function PortalAdmin() {
         </button>
         <button
           type="button"
+          className={tab === 'payments' ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => setTab('payments')}
+        >
+          <Wallet size={16} /> Payments
+        </button>
+        <button
+          type="button"
           className={tab === 'settings' ? 'btn-primary' : 'btn-secondary'}
           onClick={() => setTab('settings')}
         >
@@ -697,6 +705,8 @@ export default function PortalAdmin() {
       )}
 
       {tab === 'requests' && <PortalRequestsPanel />}
+
+      {tab === 'payments' && <PortalPaymentsPanel onToast={show} />}
 
       {tab === 'settings' && (
         <Card title="Portal page settings" icon={Settings2}>

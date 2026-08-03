@@ -107,6 +107,13 @@ import {
   startRouterSyncScheduler,
 } from './billing.js';
 import {
+  initPaymentMerchants,
+  listPaymentMerchants,
+  createPaymentMerchant,
+  updatePaymentMerchant,
+  deletePaymentMerchant,
+} from './paymentMerchants.js';
+import {
   startUsageScheduler,
   getFairUseSettings,
   updateFairUseSettings,
@@ -425,6 +432,7 @@ app.post('/api/public/pay/:token/submit', (req, res) => {
       channel: String(req.body?.channel || ''),
       reference: String(req.body?.reference || req.body?.external_ref || ''),
       proofImage: req.body?.screenshot || req.body?.proofImage || null,
+      merchantId: req.body?.merchantId != null ? Number(req.body.merchantId) : null,
     });
     res.json(result);
   } catch (e: any) {
@@ -1971,6 +1979,51 @@ app.get('/api/payment-links', (_req, res) => {
     source: resolved.source,
     warning: resolved.warning || null,
   });
+});
+
+/** Cash collection merchants (managed from Subscriber Portal admin). */
+app.get('/api/payment-merchants', (_req, res) => {
+  initPaymentMerchants();
+  res.json({ merchants: listPaymentMerchants() });
+});
+
+app.post('/api/payment-merchants', (req, res) => {
+  try {
+    const merchant = createPaymentMerchant({
+      name: String(req.body?.name || ''),
+      photo: req.body?.photo ?? null,
+      address: req.body?.address ?? null,
+      notes: req.body?.notes ?? null,
+      active: req.body?.active !== false && req.body?.active !== 0,
+      sortOrder: req.body?.sortOrder != null ? Number(req.body.sortOrder) : undefined,
+    });
+    res.status(201).json({ merchant });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not create merchant' });
+  }
+});
+
+app.put('/api/payment-merchants/:id', (req, res) => {
+  try {
+    const merchant = updatePaymentMerchant(Number(req.params.id), {
+      name: req.body?.name,
+      photo: req.body?.photo,
+      address: req.body?.address,
+      notes: req.body?.notes,
+      active: req.body?.active,
+      sortOrder: req.body?.sortOrder != null ? Number(req.body.sortOrder) : undefined,
+    });
+    res.json({ merchant });
+  } catch (e: any) {
+    const code = /not found/i.test(e?.message || '') ? 404 : 400;
+    res.status(code).json({ error: e?.message || 'Could not update merchant' });
+  }
+});
+
+app.delete('/api/payment-merchants/:id', (req, res) => {
+  const ok = deletePaymentMerchant(Number(req.params.id));
+  if (!ok) return res.status(404).json({ error: 'Merchant not found' });
+  res.json({ ok: true });
 });
 
 app.get('/api/payment-links/config', (_req, res) => {
