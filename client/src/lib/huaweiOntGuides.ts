@@ -17,8 +17,8 @@ export type OntGuide = {
  */
 export const OPTIXSTAR_WIFI_SSID_STEPS: string[] = [
   'Connect a phone or laptop to the ONT Wi‑Fi (current SSID on the sticker) or plug a LAN cable into any LAN port.',
-  'Open a browser and go to http://192.168.100.1 (try http://192.168.1.1 if that does not load).',
-  'Log in with the username and password printed on the ONT sticker (common user login: root / adminHW). Do not change WAN / Internet / PON settings.',
+  'Open a browser and go to http://192.168.100.1',
+  'Log in with username telecomadmin and password admintelecom. Do not change WAN / Internet / PON settings.',
   'Open Network → WLAN (on some builds: Advanced → WLAN).',
   '2.4 GHz — open 2.4G Basic Network Settings (or WLAN Basic Configuration → 2.4GHz tab).',
   'Turn Enable WLAN / SSID on. Set SSID Name to your 2.4G network name (e.g. MyHome-2.4G).',
@@ -31,8 +31,6 @@ export const OPTIXSTAR_WIFI_SSID_STEPS: string[] = [
 ];
 
 export const OPTIXSTAR_WIFI_SSID_TIPS: string[] = [
-  'Menus on R022 and R024 are the same idea; wording may be “2.4G Basic Network Settings” vs “2.4GHz Basic”.',
-  'If login fails, try sticker credentials only — ISP-locked telecomadmin access is for support, not home Wi‑Fi changes.',
   'Do not press Reset — that wipes Wi‑Fi and can break OLT registration until support re-provisions.',
   'If the page asks to reboot WLAN after Apply, allow it and wait ~1 minute before reconnecting.',
 ];
