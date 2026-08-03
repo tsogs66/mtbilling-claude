@@ -1,4 +1,4 @@
-/** Self-help reconnect guides for common Huawei ONTs used by PANORTH. */
+/** Self-help reconnect + Wi‑Fi guides for common Huawei ONTs used by PANORTH. */
 
 export type OntGuide = {
   id: string;
@@ -6,7 +6,36 @@ export type OntGuide = {
   blurb: string;
   steps: string[];
   tips: string[];
+  /** Optional: change SSID / Wi‑Fi password (2.4G + 5G). */
+  wifiSteps?: string[];
+  wifiTips?: string[];
 };
+
+/**
+ * Shared Wi‑Fi SSID/password steps for OptiXstar EG8145X6-10 & EG8041X6-10
+ * on firmware R022 / R024 (English web UI labels).
+ */
+export const OPTIXSTAR_WIFI_SSID_STEPS: string[] = [
+  'Connect a phone or laptop to the ONT Wi‑Fi (current SSID on the sticker) or plug a LAN cable into any LAN port.',
+  'Open a browser and go to http://192.168.100.1 (try http://192.168.1.1 if that does not load).',
+  'Log in with the username and password printed on the ONT sticker (common user login: root / adminHW). Do not change WAN / Internet / PON settings.',
+  'Open Network → WLAN (on some builds: Advanced → WLAN).',
+  '2.4 GHz — open 2.4G Basic Network Settings (or WLAN Basic Configuration → 2.4GHz tab).',
+  'Turn Enable WLAN / SSID on. Set SSID Name to your 2.4G network name (e.g. MyHome-2.4G).',
+  'Set Authentication Mode to WPA2 PreSharedKey or WPA/WPA2-PSK. Set Encryption Mode to AES (or TKIP&AES).',
+  'In WPA PreSharedKey, enter the new 2.4G password (8–63 characters, mix of letters and numbers). Click Apply / Submit.',
+  '5 GHz — open 5G Basic Network Settings (or the 5GHz tab).',
+  'Enable SSID. Set SSID Name for 5G (e.g. MyHome-5G — use a different name from 2.4G so phones can pick the right band).',
+  'Use the same Authentication / Encryption as 2.4G. Set WPA PreSharedKey to your new 5G password (can match 2.4G or differ). Click Apply / Submit.',
+  'On each device: forget the old Wi‑Fi, then join the new 2.4G and/or 5G SSID with the new password. Prefer 5G when close to the ONT for speed.',
+];
+
+export const OPTIXSTAR_WIFI_SSID_TIPS: string[] = [
+  'Menus on R022 and R024 are the same idea; wording may be “2.4G Basic Network Settings” vs “2.4GHz Basic”.',
+  'If login fails, try sticker credentials only — ISP-locked telecomadmin access is for support, not home Wi‑Fi changes.',
+  'Do not press Reset — that wipes Wi‑Fi and can break OLT registration until support re-provisions.',
+  'If the page asks to reboot WLAN after Apply, allow it and wait ~1 minute before reconnecting.',
+];
 
 export const HUAWEI_ONT_GUIDES: OntGuide[] = [
   {
@@ -26,11 +55,22 @@ export const HUAWEI_ONT_GUIDES: OntGuide[] = [
       'Do not press the Reset hole unless support asks — it wipes Wi‑Fi names and ISP settings.',
       'Keep the ONT upright with ventilation clear; overheating causes random disconnects.',
     ],
+    wifiSteps: [
+      'Connect to the ONT Wi‑Fi or LAN, then open http://192.168.100.1 and log in with the sticker username/password.',
+      'Go to Network → WLAN (or Advanced → WLAN).',
+      '2.4G: open 2.4G Basic / 2.4GHz settings → set SSID Name, Authentication = WPA2-PSK, Encryption = AES, WPA PreSharedKey = new password → Apply.',
+      '5G: open 5G Basic / 5GHz settings → set SSID Name, same security, new password → Apply.',
+      'Forget the old network on phones/laptops and reconnect to the new SSIDs.',
+    ],
+    wifiTips: [
+      'HG8145V5 menus may say “SSID Configuration” instead of “Basic Network Settings”.',
+      'Avoid factory reset — ask support if you are locked out of the web page.',
+    ],
   },
   {
     id: '8041x6-10',
     model: 'Huawei OptiXstar EG8041X6-10',
-    blurb: 'Wi‑Fi 6 ONT often used for higher-speed plans.',
+    blurb: 'Wi‑Fi 6 ONT (firmware R022 / R024) — dual-band SSID & password change supported.',
     steps: [
       'Seat the fiber firmly; LOS must be off. PON should become steady after boot.',
       'Power-cycle 30 seconds if LOS is off but internet is still down.',
@@ -43,11 +83,13 @@ export const HUAWEI_ONT_GUIDES: OntGuide[] = [
       'Wi‑Fi 6 clients need WPA2/WPA3; very old devices may need the 2.4 GHz SSID.',
       'Mesh extenders should connect after the ONT shows NET/Internet online.',
     ],
+    wifiSteps: OPTIXSTAR_WIFI_SSID_STEPS,
+    wifiTips: OPTIXSTAR_WIFI_SSID_TIPS,
   },
   {
     id: '8145x6-10',
     model: 'Huawei OptiXstar EG8145X6-10',
-    blurb: 'Wi‑Fi 6 dual-band ONT similar to 8145V5 with newer radio.',
+    blurb: 'Wi‑Fi 6 dual-band ONT (firmware R022 / R024) — same WLAN menu as EG8041X6-10.',
     steps: [
       'Check fiber seating and LOS LED first (same rules as other Huawei ONTs).',
       'Wait for PON steady + NET/Internet LED before testing speed.',
@@ -60,5 +102,7 @@ export const HUAWEI_ONT_GUIDES: OntGuide[] = [
       'Factory reset is last resort and requires ISP re-provisioning.',
       'Place the ONT centrally; thick walls cut 5 GHz range quickly.',
     ],
+    wifiSteps: OPTIXSTAR_WIFI_SSID_STEPS,
+    wifiTips: OPTIXSTAR_WIFI_SSID_TIPS,
   },
 ];

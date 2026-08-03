@@ -212,6 +212,9 @@ export function PortalDeviceHelperPanel() {
       </div>
       <div className="text-sm font-semibold text-white">{guide.model}</div>
       <p className="text-xs text-portal-muted mt-0.5 mb-2">{guide.blurb}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-300/80 mb-1.5">
+        Reconnect
+      </p>
       <ol className="space-y-1.5 text-sm text-portal-muted list-decimal pl-4">
         {guide.steps.map((s) => (
           <li key={s} className="leading-relaxed">
@@ -224,6 +227,30 @@ export function PortalDeviceHelperPanel() {
           <li key={t}>• {t}</li>
         ))}
       </ul>
+      {guide.wifiSteps && guide.wifiSteps.length > 0 && (
+        <>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-300/90 mt-4 mb-1.5">
+            Change Wi‑Fi name & password (2.4G + 5G)
+          </p>
+          <p className="text-[11px] text-portal-dim mb-2">
+            Firmware R022 / R024 — OptiXstar menus match on EG8145X6-10 and EG8041X6-10.
+          </p>
+          <ol className="space-y-1.5 text-sm text-portal-muted list-decimal pl-4">
+            {guide.wifiSteps.map((s) => (
+              <li key={s} className="leading-relaxed">
+                {s}
+              </li>
+            ))}
+          </ol>
+          {guide.wifiTips && guide.wifiTips.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-portal-dim">
+              {guide.wifiTips.map((t) => (
+                <li key={t}>• {t}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </Section>
   );
 }
