@@ -109,7 +109,9 @@ export default function JobOrders() {
                 <div className="text-xs text-slate-400">{j.contact || j.address || ''}</div>
               </div>,
               TYPES.find((t) => t.key === j.type)?.label || j.type,
-              <StatusBadge status={j.status === 'completed' ? 'Active' : j.status === 'cancelled' ? 'inactive' : 'Expired'} />,
+              <StatusBadge
+                status={STATUSES.find((s) => s.key === j.status)?.label || j.status}
+              />,
               j.assigned_to || '—',
               <div className="flex justify-end gap-1">
                 <IconAction icon={Pencil} title="Edit" tone="sky" onClick={() => setEdit(j)} />
