@@ -321,7 +321,18 @@ export function PortalPaymentsPanel({ onToast }: { onToast: (msg: string) => voi
       </Card>
 
       {edit && (
-        <Modal title={edit.id ? 'Edit merchant' : 'Add cash merchant'} onClose={() => setEdit(null)}>
+        <Modal
+          title={edit.id ? 'Edit merchant' : 'Add cash merchant'}
+          onClose={() => setEdit(null)}
+          footer={
+            <ModalFooter
+              onCancel={() => setEdit(null)}
+              onConfirm={() => void saveMerchant()}
+              busy={busyMerchant}
+              confirmLabel="Save merchant"
+            />
+          }
+        >
           <div className="space-y-3">
             <FormField label="Name">
               <input
@@ -378,14 +389,6 @@ export function PortalPaymentsPanel({ onToast }: { onToast: (msg: string) => voi
               Active (shown on payment portal)
             </label>
           </div>
-          <ModalFooter>
-            <button type="button" className="btn-secondary" onClick={() => setEdit(null)}>
-              Cancel
-            </button>
-            <button type="button" className="btn-primary" disabled={busyMerchant} onClick={() => void saveMerchant()}>
-              {busyMerchant ? 'Saving…' : 'Save merchant'}
-            </button>
-          </ModalFooter>
         </Modal>
       )}
     </div>
