@@ -392,7 +392,12 @@ export default function PayPortal() {
 
       <Card>
         <div className="text-sm text-slate-500 mb-4">
-          Subscribers submit GCash/Maya proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
+          Subscribers submit GCash, Maya, or Cash proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
+          Manage QR photos and cash merchants under{' '}
+          <a href="/subscriber-portal?tab=payments" className="text-brand-600 font-semibold hover:underline">
+            Subscriber Portal → Payments
+          </a>
+          .
           New links are valid for <b>{LINK_TTL_DAYS} days</b>. Upload your merchant QR under <b>Company</b>.
           Entries tagged <b>Portal</b> were opened by the subscriber (no admin link required).
         </div>
@@ -591,7 +596,12 @@ export default function PayPortal() {
                   <td className="py-2.5 text-xs text-slate-600 min-w-[140px]">
                     {l.payChannel || l.externalRef || l.proofImage ? (
                       <div className="space-y-0.5">
-                        {l.payChannel && <div className="uppercase font-semibold text-slate-700">{l.payChannel}</div>}
+                        {l.payChannel && (
+                          <div className="uppercase font-semibold text-slate-700">
+                            {l.payChannel}
+                            {l.merchantName ? ` · ${l.merchantName}` : ''}
+                          </div>
+                        )}
                         {l.externalRef && <div className="font-mono text-[11px] break-all">{l.externalRef}</div>}
                         {l.submittedAt && <div className="text-slate-400">{String(l.submittedAt).slice(0, 16).replace('T', ' ')}</div>}
                         {(l.proofImage || l.proofUrl) && (

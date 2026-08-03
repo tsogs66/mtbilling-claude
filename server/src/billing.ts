@@ -15,6 +15,7 @@ import {
 import { getSettings as getNotifySettings } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 import { pushPortalActivity } from './portalExtras.js';
+import { getPaymentMerchant, listPaymentMerchants } from './paymentMerchants.js';
 
 const SESSION_REFRESH_MS = 2000;
 /** Cap how long any single request will wait on a router call before responding anyway. */
@@ -1117,12 +1118,20 @@ export function getPaymentLinkPublic(token: string) {
     paidAt: link.paid_at,
     externalRef: link.external_ref,
     payChannel: link.pay_channel || null,
+    merchantId: link.merchant_id != null ? Number(link.merchant_id) : null,
     submittedAt: link.submitted_at || null,
     customer: link.customer_name || link.username,
     account: link.account_number,
     username: link.username,
     plan: link.profile,
     due: link.subscription_due,
+    merchants: listPaymentMerchants({ activeOnly: true }).map((m) => ({
+      id: m.id,
+      name: m.name,
+      photo: m.photo,
+      address: m.address,
+      notes: m.notes,
+    })),
     company: {
       name: company?.name || 'ISP Billing',
       logo: company?.logo || null,
@@ -1139,10 +1148,15 @@ export function getPaymentLinkPublic(token: string) {
   };
 }
 
-/** Subscriber submits GCash/Maya proof — awaits admin review (does not restore yet). */
+/** Subscriber submits GCash/Maya/Cash proof — awaits admin review (does not restore yet). */
 export function submitPaymentProof(
   token: string,
-  opts: { channel: string; reference: string; proofImage?: string | null }
+  opts: {
+    channel: string;
+    reference: string;
+    proofImage?: string | null;
+    merchantId?: number | null;
+  }
 ) {
   const link = db.prepare('SELECT * FROM payment_links WHERE token = ?').get(token) as any;
   if (!link) throw new Error('Payment link not found');
@@ -1158,11 +1172,27 @@ export function submitPaymentProof(
   }
 
   const channel = String(opts.channel || '').toLowerCase().trim();
-  if (channel !== 'gcash' && channel !== 'maya') {
-    throw new Error('Select GCash or Maya as the payment channel');
+  if (channel !== 'gcash' && channel !== 'maya' && channel !== 'cash') {
+    throw new Error('Select GCash, Maya, or Cash as the payment channel');
   }
-  const reference = String(opts.reference || '').trim();
-  if (!reference || reference.length < 4) {
+
+  let merchantId: number | null = null;
+  let merchantName: string | null = null;
+  if (channel === 'cash') {
+    const mid = Number(opts.merchantId);
+    if (!mid || !Number.isFinite(mid)) throw new Error('Select the merchant where you paid cash');
+    const merchant = getPaymentMerchant(mid);
+    if (!merchant || !merchant.active) throw new Error('Selected merchant is not available');
+    merchantId = merchant.id;
+    merchantName = merchant.name;
+  }
+
+  let reference = String(opts.reference || '').trim();
+  if (channel === 'cash') {
+    if (!reference || reference.length < 2) {
+      reference = `Cash @ ${merchantName}`;
+    }
+  } else if (!reference || reference.length < 4) {
     throw new Error('Enter the transaction / reference number from your receipt');
   }
 
@@ -1189,18 +1219,21 @@ export function submitPaymentProof(
        pay_channel = ?,
        external_ref = ?,
        proof_image = ?,
+       merchant_id = ?,
        submitted_at = datetime('now')
      WHERE id = ?`
-  ).run(channel, reference, proofPath, link.id);
+  ).run(channel, reference, proofPath, merchantId, link.id);
 
   // Subscriber payment proof — notify staff regardless of who created the link.
   try {
     const who = subscriberLabel(link.pppoe_user_id);
     const amt = Number(link.amount) || 0;
+    const channelLabel =
+      channel === 'cash' ? `CASH${merchantName ? ` @ ${merchantName}` : ''}` : channel.toUpperCase();
     notifyStaff({
       type: 'payment_submitted',
       title: 'Payment received',
-      body: `${who} submitted ${channel.toUpperCase()} proof for ₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} (ref ${reference})`,
+      body: `${who} submitted ${channelLabel} proof for ₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} (ref ${reference})`,
       entityType: 'payment_link',
       entityId: Number(link.id),
       pppoeUserId: Number(link.pppoe_user_id) || null,
@@ -1209,6 +1242,8 @@ export function submitPaymentProof(
         channel,
         reference,
         amount: amt,
+        merchantId,
+        merchantName,
         createdBy: link.created_by || 'admin',
       },
     });
@@ -1221,6 +1256,8 @@ export function submitPaymentProof(
     status: 'submitted',
     channel,
     reference,
+    merchantId,
+    merchantName,
     message: 'Payment proof submitted. Your ISP will review and restore your service shortly.',
   };
 }
@@ -1295,10 +1332,13 @@ export function listPaymentLinks(limit = 100) {
               pl.created_at AS createdAt, pl.external_ref AS externalRef,
               pl.pay_channel AS payChannel, pl.proof_image AS proofImage, pl.submitted_at AS submittedAt,
               pl.reviewed_at AS reviewedAt, pl.review_note AS reviewNote,
+              pl.merchant_id AS merchantId,
               COALESCE(NULLIF(pl.created_by, ''), 'admin') AS createdBy,
-              u.username, u.customer_name AS customer, u.account_number AS account
+              u.username, u.customer_name AS customer, u.account_number AS account,
+              m.name AS merchantName
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
+       LEFT JOIN payment_merchants m ON m.id = pl.merchant_id
        ORDER BY pl.id DESC LIMIT ?`
     )
     .all(limit) as any[];

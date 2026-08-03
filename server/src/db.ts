@@ -784,10 +784,26 @@ export function migrate() {
     ['review_note', 'TEXT'],
     // Who opened the link: admin panel vs subscriber portal (reverse create)
     ['created_by', "TEXT DEFAULT 'admin'"],
+    ['merchant_id', 'INTEGER'],
   ];
   for (const [col, type] of payLinkCols) {
     if (!columnExists('payment_links', col)) db.exec(`ALTER TABLE payment_links ADD COLUMN ${col} ${type}`);
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS payment_merchants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      photo TEXT,
+      address TEXT,
+      notes TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_payment_merchants_active
+      ON payment_merchants(active, sort_order, id);
+  `);
 
   if (!columnExists('transactions', 'receipt_json')) {
     db.exec('ALTER TABLE transactions ADD COLUMN receipt_json TEXT');
