@@ -220,7 +220,6 @@ export function initPortalExtras() {
   }
 
   const defaults = [
-    ['static-ip', 'Static IP', 'Public/static IP assignment (subject to availability).', 200],
     ['mesh-node', 'Mesh / extender', 'Extra Wi‑Fi mesh node or extender install.', 0],
     ['boost-7d', '7-day speed boost', 'Temporary higher speed profile for 7 days.', 150],
   ] as const;
@@ -230,6 +229,12 @@ export function initPortalExtras() {
   );
   for (const [code, name, description, price] of defaults) {
     ins.run(code, name, description, price);
+  }
+  // Remove Static IP from the subscriber add-on request catalog.
+  try {
+    db.prepare(`UPDATE portal_addon_catalog SET active = 0 WHERE code = 'static-ip'`).run();
+  } catch {
+    /* ignore */
   }
 }
 
