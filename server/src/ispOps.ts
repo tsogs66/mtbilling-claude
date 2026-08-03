@@ -1895,20 +1895,39 @@ publicPortalRouter.post('/public/portal/ticket', (req, res) => {
   }
   const who = subscriberLabel(sess.uid);
   const servicesNote = serviceNames.length ? ` Apps: ${serviceNames.join(', ')}.` : '';
-  notifyStaff({
-    type: 'ticket',
-    title: serviceNames.length ? 'Service outage report' : 'Support request',
-    body: `${who} filed ${job?.number || number}.${servicesNote}`,
-    entityType: 'job_order',
-    entityId: Number(job?.id) || Number(info.lastInsertRowid),
-    pppoeUserId: sess.uid,
-    status: 'open',
-    payload: {
-      number: job?.number || number,
-      serviceNames,
-      description: description || null,
-    },
-  });
+  if (outageReport?.id) {
+    notifyStaff({
+      type: 'outage_report',
+      title: 'Service outage report',
+      body: `${who} reported outage on ${serviceNames.join(', ') || 'selected services'}.${description ? ` ${description.slice(0, 120)}` : ''}`,
+      entityType: 'outage_subscriber_report',
+      entityId: Number(outageReport.id),
+      pppoeUserId: sess.uid,
+      status: 'open',
+      payload: {
+        outageReportId: Number(outageReport.id),
+        jobOrderId: Number(job?.id) || Number(info.lastInsertRowid),
+        number: job?.number || number,
+        serviceNames,
+        description: description || null,
+      },
+    });
+  } else {
+    notifyStaff({
+      type: 'ticket',
+      title: 'Support request',
+      body: `${who} filed ${job?.number || number}.${servicesNote}`,
+      entityType: 'job_order',
+      entityId: Number(job?.id) || Number(info.lastInsertRowid),
+      pppoeUserId: sess.uid,
+      status: 'open',
+      payload: {
+        number: job?.number || number,
+        serviceNames,
+        description: description || null,
+      },
+    });
+  }
   res.status(201).json({ ...job, outageReport });
 });
 
