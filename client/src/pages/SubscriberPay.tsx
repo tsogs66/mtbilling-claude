@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
-  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle,
+  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 import { getApiBase } from '../config';
@@ -504,7 +504,14 @@ export default function SubscriberPay() {
       <div className="min-h-screen flex items-center justify-center bg-[#0b1220] p-6">
         <div className="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full text-center">
           <div className="text-rose-600 font-semibold mb-2">Payment link unavailable</div>
-          <div className="text-sm text-slate-500">{error}</div>
+          <div className="text-sm text-slate-500 mb-5">{error}</div>
+          <Link
+            to="/portal"
+            className="inline-flex items-center justify-center gap-2 w-full rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3 transition"
+          >
+            <ArrowLeft size={16} />
+            Back to main portal
+          </Link>
         </div>
       </div>
     );
@@ -547,6 +554,16 @@ export default function SubscriberPay() {
       <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'0.04\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")' }} />
 
       <div className="relative z-10 max-w-lg mx-auto px-4 py-8 sm:py-12">
+        <div className="mb-4">
+          <Link
+            to="/portal"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-200/90 hover:text-white transition rounded-lg px-2 py-1.5 -ml-2 hover:bg-white/10"
+          >
+            <ArrowLeft size={16} />
+            Back to main portal
+          </Link>
+        </div>
+
         {/* Brand header */}
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white/95 shadow-lg overflow-hidden mb-3">
@@ -977,6 +994,16 @@ export default function SubscriberPay() {
               </div>
             )}
           </div>
+        </div>
+
+        <div className="mt-5">
+          <Link
+            to="/portal"
+            className="flex items-center justify-center gap-2 w-full rounded-2xl border border-white/15 bg-white/5 hover:bg-white/10 text-sky-100 font-semibold text-sm px-4 py-3 transition"
+          >
+            <ArrowLeft size={16} />
+            Back to main portal
+          </Link>
         </div>
 
         <p className="text-center text-[11px] text-slate-500 mt-6 flex items-center justify-center gap-1">
