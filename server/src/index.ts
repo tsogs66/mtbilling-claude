@@ -1893,6 +1893,26 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   const id = Number(req.params.id);
   const b = req.body || {};
   try {
+    const receiptEmail = String(b.receipt_email || b.email || '').trim();
+    const smsContact = String(b.sms_contact || b.contact || '').trim();
+    // Persist phone/email from the payment modal when staff fills them in.
+    if (b.save_contact) {
+      const existing = db.prepare('SELECT email, contact FROM pppoe_users WHERE id = ?').get(id) as
+        | { email?: string | null; contact?: string | null }
+        | undefined;
+      if (existing) {
+        const nextEmail = receiptEmail || existing.email || null;
+        const nextContact = smsContact || existing.contact || null;
+        if (nextEmail !== (existing.email || null) || nextContact !== (existing.contact || null)) {
+          db.prepare('UPDATE pppoe_users SET email = ?, contact = ? WHERE id = ?').run(
+            nextEmail,
+            nextContact,
+            id
+          );
+        }
+      }
+    }
+
     const result = await recordPppoePayment(id, {
       months: b.months,
       plan: b.plan,
@@ -1910,21 +1930,23 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
     // background instead: sendPaymentReceiptEmail / sendPaymentConfirmationSms
     // always log their real outcome to the Notifications page once they
     // settle, regardless of whether the response has already been sent.
+    const emailTo = receiptEmail || String(result.user?.email || '').trim();
+    const smsTo = smsContact || String(result.user?.contact || '').trim();
     let emailPending = false;
-    if (b.send_receipt && result.user?.email) {
+    if (b.send_receipt && emailTo) {
       const receipt = result.receipt;
       emailPending = true;
       sendPaymentReceiptEmail({
-        to: result.user.email,
+        to: emailTo,
         clientId: id,
         customerName: result.user.customer_name || receipt?.customer,
         receipt,
       }).catch(() => undefined);
     }
     let smsPending = false;
-    if (b.send_sms && result.user?.contact) {
+    if (b.send_sms && smsTo) {
       smsPending = true;
-      sendPaymentConfirmationSms(result.user, result.total).catch(() => undefined);
+      sendPaymentConfirmationSms({ ...result.user, contact: smsTo }, result.total).catch(() => undefined);
     }
     res.json({
       ...result,

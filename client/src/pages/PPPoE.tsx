@@ -1970,32 +1970,72 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   const [nonPaymentProfile, setNonPaymentProfile] = useState('non-payments');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [discountDays, setDiscountDays] = useState(0);
-  const [sendReceipt, setSendReceipt] = useState(false);
-  const [sendSms, setSendSms] = useState(true);
+  const [receiptEmail, setReceiptEmail] = useState(String(user.email || '').trim());
+  const [smsPhone, setSmsPhone] = useState(String(user.contact || '').trim());
+  const [sendReceipt, setSendReceipt] = useState(!!String(user.email || '').trim());
+  const [sendSms, setSendSms] = useState(!!String(user.contact || '').trim());
+  const [contactLoaded, setContactLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [receiptPreview, setReceiptPreview] = useState<any | null>(null);
+
+  // Refresh contact fields from DB — list rows can be stale / blank after edits.
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .get(`/pppoe/users/${user.id}`)
+      .then((r) => {
+        if (cancelled) return;
+        const row = r.data || {};
+        const email = String(row.email || '').trim();
+        const contact = String(row.contact || '').trim();
+        setReceiptEmail(email);
+        setSmsPhone(contact);
+        setSendReceipt(!!email);
+        setSendSms(!!contact);
+        setContactLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setContactLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user.id]);
 
   const planPrice = planOptions.find((p) => p.name === plan)?.price ?? user.price ?? 0;
   const subtotal = planPrice * months;
   const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
   const total = Math.max(0, subtotal - discount);
-  const hasEmail = !!user.email;
-  const hasContact = !!user.contact;
+  const emailOk = !!receiptEmail.trim();
+  const phoneOk = !!smsPhone.trim();
   const willRefreshSession = /non.?pay|expired|disabled/i.test(String(user.status || ''));
 
   const pay = async () => {
     setSaving(true);
     setError('');
     try {
+      if (sendReceipt && !emailOk) {
+        setError('Enter an email address to send the receipt, or uncheck Send receipt to email.');
+        setSaving(false);
+        return;
+      }
+      if (sendSms && !phoneOk) {
+        setError('Enter a phone number to send SMS, or uncheck Send SMS confirmation.');
+        setSaving(false);
+        return;
+      }
       const r = await api.post(`/pppoe/users/${user.id}/payment`, {
         months,
         plan,
         expiration_profile: nonPaymentProfile,
         payment_date: paymentDate,
         discount_days: discountDays,
-        send_receipt: sendReceipt,
-        send_sms: sendSms,
+        send_receipt: sendReceipt && emailOk,
+        send_sms: sendSms && phoneOk,
+        receipt_email: sendReceipt ? receiptEmail.trim() : undefined,
+        sms_contact: sendSms ? smsPhone.trim() : undefined,
+        save_contact: true,
       });
       const receipt = r.data.receipt;
       openReceiptForPrint(receipt, setReceiptPreview);
@@ -2076,21 +2116,65 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
           <input className="input" type="number" min={0} value={discountDays} onChange={(e) => setDiscountDays(Math.max(0, Number(e.target.value)))} />
         </FormField>
 
-        <label className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3">
-          <span>
-            <span className="text-sm font-medium text-slate-700 block">Send receipt to email</span>
-            <span className="text-xs text-slate-400">{hasEmail ? user.email : 'No email set in account details.'}</span>
-          </span>
-          <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-500" disabled={!hasEmail} checked={sendReceipt && hasEmail} onChange={(e) => setSendReceipt(e.target.checked)} />
-        </label>
+        <div className="border-t border-slate-100 pt-3 space-y-3">
+          <p className="text-xs text-slate-500">
+            {contactLoaded
+              ? 'Choose channels below. You can edit phone/email here — values are saved on the account when payment is processed.'
+              : 'Loading account contact details…'}
+          </p>
 
-        <label className="flex items-start justify-between gap-3">
-          <span>
-            <span className="text-sm font-medium text-slate-700 block">Send SMS confirmation</span>
-            <span className="text-xs text-slate-400">{hasContact ? user.contact : 'No phone number set in account details.'}</span>
-          </span>
-          <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-500" disabled={!hasContact} checked={sendSms && hasContact} onChange={(e) => setSendSms(e.target.checked)} />
-        </label>
+          <div className="rounded-xl border border-slate-200 p-3 space-y-2">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-slate-700">Send receipt to email</span>
+              <input
+                type="checkbox"
+                className="w-4 h-4 accent-brand-500 cursor-pointer"
+                checked={sendReceipt}
+                onChange={(e) => setSendReceipt(e.target.checked)}
+              />
+            </label>
+            <input
+              className="input text-sm"
+              type="email"
+              placeholder="customer@email.com"
+              value={receiptEmail}
+              onChange={(e) => {
+                const v = e.target.value;
+                setReceiptEmail(v);
+                if (v.trim()) setSendReceipt(true);
+              }}
+            />
+            {!emailOk && sendReceipt && (
+              <p className="text-[11px] text-amber-700">Enter an email address to enable sending.</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 p-3 space-y-2">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-slate-700">Send SMS confirmation</span>
+              <input
+                type="checkbox"
+                className="w-4 h-4 accent-brand-500 cursor-pointer"
+                checked={sendSms}
+                onChange={(e) => setSendSms(e.target.checked)}
+              />
+            </label>
+            <input
+              className="input text-sm"
+              type="tel"
+              placeholder="09XXXXXXXXX"
+              value={smsPhone}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSmsPhone(v);
+                if (v.trim()) setSendSms(true);
+              }}
+            />
+            {!phoneOk && sendSms && (
+              <p className="text-[11px] text-amber-700">Enter a phone number to enable sending.</p>
+            )}
+          </div>
+        </div>
 
         <div className="border-t border-slate-100 pt-3 text-sm space-y-1 rounded-xl bg-slate-50 p-4">
           <div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{peso(subtotal)}</span></div>
