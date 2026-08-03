@@ -5,6 +5,7 @@ export type PortalLiveEvent = {
   type:
     | 'plan_change'
     | 'ticket'
+    | 'outage_report'
     | 'ping'
     | 'payment_link_created'
     | 'payment_submitted'

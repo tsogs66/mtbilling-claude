@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Bell, CheckCheck, FileWarning, Link2, Wallet, Zap, Loader2, X,
+  Bell, CheckCheck, FileWarning, Link2, RadioTower, Wallet, Zap, Loader2, X,
 } from 'lucide-react';
 import { api } from '../api';
 import { subscribePortalLive } from '../lib/portalLive';
 
 type StaffNotification = {
   id: number;
-  type: 'plan_change' | 'ticket' | 'payment_link_created' | 'payment_submitted' | string;
+  type: 'plan_change' | 'ticket' | 'outage_report' | 'payment_link_created' | 'payment_submitted' | string;
   title: string;
   body?: string | null;
   entityId?: number | null;
@@ -20,6 +20,7 @@ type StaffNotification = {
 const LIVE_TYPES = new Set([
   'plan_change',
   'ticket',
+  'outage_report',
   'payment_link_created',
   'payment_submitted',
 ]);
@@ -27,6 +28,7 @@ const LIVE_TYPES = new Set([
 function iconFor(type: string) {
   if (type === 'plan_change') return Zap;
   if (type === 'ticket') return FileWarning;
+  if (type === 'outage_report') return RadioTower;
   if (type === 'payment_link_created') return Link2;
   if (type === 'payment_submitted') return Wallet;
   return Bell;
@@ -178,7 +180,7 @@ export default function TopbarNotifications() {
                   Notifications
                 </div>
                 <div className="text-xs theme-topbar-menu-muted truncate">
-                  Portal requests & payments
+                  Portal, outages & payments
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">

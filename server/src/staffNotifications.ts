@@ -1,9 +1,11 @@
 import { db } from './db.js';
 import { publishPortalEvent, type PortalLiveEvent } from './portalEvents.js';
+import { listRecentSubscriberOutageReports } from './outageMonitor.js';
 
 export type StaffNotificationType =
   | 'plan_change'
   | 'ticket'
+  | 'outage_report'
   | 'payment_link_created'
   | 'payment_submitted';
 
@@ -69,6 +71,8 @@ function hrefFor(type: StaffNotificationType, entityId?: number | null): string 
       return '/subscriber-portal?tab=plans';
     case 'ticket':
       return entityId ? `/job-orders?highlight=${entityId}` : '/job-orders';
+    case 'outage_report':
+      return entityId ? `/outage-monitor?report=${entityId}` : '/outage-monitor';
     case 'payment_link_created':
     case 'payment_submitted':
       return entityId ? `/pay-portal?highlight=${entityId}` : '/pay-portal';
@@ -133,7 +137,80 @@ export function notifyStaff(opts: {
   return id;
 }
 
+/** Ensure Outage Monitor received reports appear in the staff inbox. */
+function ensureOutageReportNotifications() {
+  try {
+    const reports = listRecentSubscriberOutageReports(40);
+    if (!reports.length) return;
+    const existing = db
+      .prepare(
+        `SELECT type, entity_type AS entityType, entity_id AS entityId, payload FROM staff_notifications
+         WHERE type = 'outage_report'
+            OR title = 'Service outage report'`
+      )
+      .all() as {
+      type: string;
+      entityType: string | null;
+      entityId: number | null;
+      payload: string | null;
+    }[];
+    const known = new Set<number>();
+    const knownJobOrders = new Set<number>();
+    for (const row of existing) {
+      const payload = parsePayload(row.payload);
+      const rid = payload?.outageReportId != null ? Number(payload.outageReportId) : null;
+      if (rid && Number.isFinite(rid)) known.add(rid);
+      if (
+        row.entityId != null &&
+        (row.type === 'outage_report' || row.entityType === 'outage_subscriber_report')
+      ) {
+        known.add(Number(row.entityId));
+      }
+      const jid = payload?.jobOrderId != null ? Number(payload.jobOrderId) : null;
+      if (jid && Number.isFinite(jid)) knownJobOrders.add(jid);
+      // Legacy ticket rows used job_order id as entity_id
+      if (row.entityId != null && (row.type === 'ticket' || row.entityType === 'job_order')) {
+        knownJobOrders.add(Number(row.entityId));
+      }
+    }
+    const ins = db.prepare(
+      `INSERT INTO staff_notifications
+         (type, title, body, entity_type, entity_id, pppoe_user_id, payload, created_at)
+       VALUES ('outage_report', ?, ?, 'outage_subscriber_report', ?, ?, ?, ?)`
+    );
+    for (const r of reports) {
+      if (known.has(Number(r.id))) continue;
+      if (r.jobOrderId != null && knownJobOrders.has(Number(r.jobOrderId))) continue;
+      const who =
+        String(r.customerName || '').trim() ||
+        String(r.accountNumber || '').trim() ||
+        'Subscriber';
+      const names = (r.services || []).map((s) => s.name).filter(Boolean);
+      const body = `${who} reported outage on ${names.join(', ') || 'selected services'}.${
+        r.description ? ` ${String(r.description).slice(0, 120)}` : ''
+      }`;
+      ins.run(
+        'Service outage report',
+        body,
+        Number(r.id),
+        r.pppoeUserId ?? null,
+        JSON.stringify({
+          outageReportId: Number(r.id),
+          jobOrderId: r.jobOrderId ?? null,
+          serviceNames: names,
+          description: r.description || null,
+        }),
+        r.createdAt || null
+      );
+      known.add(Number(r.id));
+    }
+  } catch {
+    /* table may not exist yet during early boot */
+  }
+}
+
 export function listStaffNotifications(userId: number, limit = 40) {
+  ensureOutageReportNotifications();
   const lim = Math.min(100, Math.max(1, Math.floor(limit) || 40));
   const rows = db
     .prepare(
@@ -159,19 +236,32 @@ export function listStaffNotifications(userId: number, limit = 40) {
     .get(userId) as { c: number };
 
   const items: StaffNotificationRow[] = rows.map((r) => {
-    const type = r.type as StaffNotificationType;
+    let type = r.type as StaffNotificationType;
+    let entityId = r.entityId != null ? Number(r.entityId) : null;
+    const payload = parsePayload(r.payload);
+    // Legacy portal outage filings were stored as tickets — surface them as outage reports.
+    if (
+      type === 'ticket' &&
+      (String(r.title || '') === 'Service outage report' ||
+        (Array.isArray(payload?.serviceNames) && (payload!.serviceNames as unknown[]).length > 0))
+    ) {
+      type = 'outage_report';
+      const reportId = payload?.outageReportId != null ? Number(payload.outageReportId) : null;
+      if (reportId && Number.isFinite(reportId)) entityId = reportId;
+      else entityId = null; // open Outage Monitor list
+    }
     return {
       id: Number(r.id),
       type,
       title: String(r.title || ''),
       body: r.body != null ? String(r.body) : null,
       entityType: r.entityType != null ? String(r.entityType) : null,
-      entityId: r.entityId != null ? Number(r.entityId) : null,
+      entityId,
       pppoeUserId: r.pppoeUserId != null ? Number(r.pppoeUserId) : null,
-      payload: parsePayload(r.payload),
+      payload,
       createdAt: String(r.createdAt || ''),
       read: Number(r.isRead) === 1,
-      href: hrefFor(type, r.entityId != null ? Number(r.entityId) : null),
+      href: hrefFor(type, entityId),
     };
   });
 

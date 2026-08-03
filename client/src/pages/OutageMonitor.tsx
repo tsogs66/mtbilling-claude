@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -113,6 +114,8 @@ function ReportSpark({ history }: { history: OutageService['history'] }) {
 }
 
 export default function OutageMonitor() {
+  const [searchParams] = useSearchParams();
+  const highlightReportId = Number(searchParams.get('report') || 0) || null;
   const [services, setServices] = useState<OutageService[]>([]);
   const [mostReported, setMostReported] = useState<OutageService[]>([]);
   const [subscriberReports, setSubscriberReports] = useState<SubscriberReport[]>([]);
@@ -177,6 +180,14 @@ export default function OutageMonitor() {
       .then((r) => setRecentNotices(r.data.notices || []))
       .catch(() => setRecentNotices([]));
   }, []);
+
+  useEffect(() => {
+    if (!highlightReportId || !subscriberReports.length) return;
+    const el = document.getElementById(`outage-report-${highlightReportId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightReportId, subscriberReports]);
 
   const toggleNap = (id: number) => {
     setSelectedNapIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -432,7 +443,14 @@ export default function OutageMonitor() {
             </div>
             <ul className="divide-y divide-slate-100">
               {subscriberReports.slice(0, 12).map((r) => (
-                <li key={r.id} className="py-2.5 flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4">
+                <li
+                  key={r.id}
+                  id={`outage-report-${r.id}`}
+                  className={[
+                    'py-2.5 flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4 rounded-lg px-1 -mx-1',
+                    highlightReportId === r.id ? 'bg-amber-50 ring-1 ring-amber-300/70' : '',
+                  ].join(' ')}
+                >
                   <div className="min-w-0 flex-1">
                     <div className="font-medium text-slate-800 truncate">
                       {r.customerName || 'Subscriber'}
