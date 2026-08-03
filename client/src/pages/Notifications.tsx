@@ -236,13 +236,13 @@ export default function Notifications() {
         <Card title="Send Notification">
           <div className="space-y-3">
             <FormField label="Channel" hint="Uses each client's saved email and/or SMS contact number.">
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {([['email', 'Email', Mail], ['sms', 'SMS', MessageSquare], ['both', 'Both', Send]] as const).map(([key, label, Icon]) => (
                   <button
                     key={key}
                     type="button"
                     onClick={() => setChannel(key)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border ${channel === key ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                    className={`flex items-center gap-2 px-3 py-2 sm:py-1.5 rounded-lg text-sm border min-h-[40px] ${channel === key ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                   >
                     <Icon size={15} /> {label}
                   </button>
@@ -251,13 +251,13 @@ export default function Notifications() {
             </FormField>
 
             <FormField label="Recipients">
-              <div className="flex gap-2 mb-2">
+              <div className="flex flex-wrap gap-2 mb-2">
                 {(['all', 'selected'] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
                     onClick={() => setTarget(t)}
-                    className={`px-3 py-1.5 rounded-lg text-sm border ${target === t ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                    className={`px-3 py-2 sm:py-1.5 rounded-lg text-sm border min-h-[40px] ${target === t ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                   >
                     {t === 'all' ? 'All clients' : `Selected (${selected.length})`}
                   </button>
@@ -269,14 +269,14 @@ export default function Notifications() {
                     value={clientSearch}
                     onChange={(e) => setClientSearch(e.target.value)}
                     placeholder="Search clients..."
-                    className="w-full text-sm px-3 py-2 border-b border-slate-100 focus:outline-none"
+                    className="w-full text-sm px-3 py-2.5 border-b border-slate-100 focus:outline-none"
                   />
                   <div className="max-h-40 overflow-y-auto">
                     {filteredClients.map((c) => (
-                      <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
-                        <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggleClient(c.id)} />
-                        <span className="text-slate-700">{c.customer || c.username}</span>
-                        <span className="text-slate-400 text-xs ml-auto">{c.email || c.contact || 'no contact'}</span>
+                      <label key={c.id} className="flex items-start sm:items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+                        <input type="checkbox" className="mt-1 sm:mt-0 shrink-0" checked={selected.includes(c.id)} onChange={() => toggleClient(c.id)} />
+                        <span className="text-slate-700 min-w-0 flex-1 break-words">{c.customer || c.username}</span>
+                        <span className="text-slate-400 text-xs shrink-0 max-w-[40%] truncate text-right">{c.email || c.contact || 'no contact'}</span>
                       </label>
                     ))}
                     {filteredClients.length === 0 && <div className="px-3 py-3 text-sm text-slate-400">No clients found.</div>}
@@ -350,7 +350,7 @@ export default function Notifications() {
               )}
             </div>
 
-            <button type="button" className="btn-primary" onClick={send} disabled={busy}>
+            <button type="button" className="btn-primary w-full sm:w-auto justify-center" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
             </button>
           </div>
@@ -363,18 +363,18 @@ export default function Notifications() {
             <Row icon={<Bell size={16} className="text-brand-500" />} label="Expiry reminders" desc="Notify clients before their plan expires">
               <Toggle label="Expiry reminders" on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm pl-0 sm:pl-7">
               <span className="text-slate-500">Send reminder this many days before expiration</span>
               <input
                 type="number"
                 min={1}
-                className="input w-20 text-center"
+                className="input w-full sm:w-20 text-center"
                 value={settings.days_before}
                 onChange={(e) => saveSettings({ days_before: Number(e.target.value) })}
               />
             </div>
 
-            <div className="flex items-center gap-4 pl-7 text-sm">
+            <div className="flex flex-wrap items-center gap-4 pl-0 sm:pl-7 text-sm">
               <label className="flex items-center gap-2"><Toggle label="Email reminders" on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email</label>
               <label className="flex items-center gap-2"><Toggle label="SMS reminders" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS</label>
             </div>
@@ -384,18 +384,18 @@ export default function Notifications() {
             <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disable when overdue past the grace period (from due date)">
               <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm pl-0 sm:pl-7">
               <span className="text-slate-500">Grace hours after due date (within grace → non-payment profile)</span>
               <input
                 type="number"
                 min={1}
-                className="input w-20 text-center"
+                className="input w-full sm:w-20 text-center"
                 value={settings.autodisable_hours}
                 onChange={(e) => saveSettings({ autodisable_hours: Number(e.target.value) })}
               />
             </div>
 
-            <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+            <div className="border-t border-slate-100 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="text-xs text-slate-400 flex items-center gap-1.5"><Clock size={14} /> Runs automatically every 5 minutes.</div>
               <button type="button" className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={runNow} disabled={busy}>
                 <PlayCircle size={15} /> Run checks now
@@ -543,37 +543,74 @@ export default function Notifications() {
 
       {tab === 'log' && (
         <Card title="Notification Log" noPadding>
-          <div className="p-5">
-            <DataTable
-              columns={[
-                { key: 'time', label: 'Time' },
-                { key: 'channel', label: 'Channel' },
-                { key: 'type', label: 'Type' },
-                { key: 'recipient', label: 'Recipient' },
-                { key: 'message', label: 'Message', className: 'max-w-[280px]' },
-                { key: 'status', label: 'Status' },
-              ]}
-              rows={logs.map((l) => ({
-                key: l.id,
-                cells: [
-                  <span className="text-slate-400 whitespace-nowrap">{new Date(l.date).toLocaleString()}</span>,
-                  <span className="inline-flex items-center gap-1 text-slate-600">
-                    {l.channel === 'email' ? <Mail size={14} /> : <MessageSquare size={14} />} {l.channel}
-                  </span>,
-                  <span className="text-slate-500">{TYPE_LABEL[l.type] || l.type}</span>,
-                  <span className="text-slate-600">
-                    {l.customer}
-                    <div className="text-[11px] text-slate-400">{l.recipient || '—'}</div>
-                  </span>,
-                  <span className="text-slate-500 truncate block max-w-[280px]" title={l.message}>{l.message}</span>,
-                  <span>
+          <div className="p-3 sm:p-5">
+            {/* Mobile cards */}
+            <ul className="sm:hidden space-y-2.5">
+              {logs.map((l) => (
+                <li key={l.id} className="rounded-xl border border-slate-200 bg-white px-3.5 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-800 truncate">
+                        {l.customer || '—'}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5 break-all">{l.recipient || '—'}</div>
+                    </div>
                     <StatusBadge status={l.status} />
-                    <div className="text-[11px] text-slate-400">{l.detail}</div>
-                  </span>,
-                ],
-              }))}
-              emptyMessage="No notifications yet."
-            />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                    <span className="inline-flex items-center gap-1">
+                      {l.channel === 'email' ? <Mail size={12} /> : <MessageSquare size={12} />}
+                      {l.channel}
+                    </span>
+                    <span>·</span>
+                    <span>{TYPE_LABEL[l.type] || l.type}</span>
+                    <span>·</span>
+                    <span className="whitespace-nowrap">{new Date(l.date).toLocaleString()}</span>
+                  </div>
+                  {l.message && (
+                    <p className="mt-2 text-sm text-slate-600 leading-snug line-clamp-4 break-words">{l.message}</p>
+                  )}
+                  {l.detail && <p className="mt-1 text-[11px] text-slate-400 break-words">{l.detail}</p>}
+                </li>
+              ))}
+              {!logs.length && (
+                <li className="py-10 text-center text-sm text-slate-400">No notifications yet.</li>
+              )}
+            </ul>
+
+            {/* Desktop table */}
+            <div className="hidden sm:block">
+              <DataTable
+                columns={[
+                  { key: 'time', label: 'Time' },
+                  { key: 'channel', label: 'Channel' },
+                  { key: 'type', label: 'Type' },
+                  { key: 'recipient', label: 'Recipient' },
+                  { key: 'message', label: 'Message', className: 'max-w-[280px]' },
+                  { key: 'status', label: 'Status' },
+                ]}
+                rows={logs.map((l) => ({
+                  key: l.id,
+                  cells: [
+                    <span className="text-slate-400 whitespace-nowrap">{new Date(l.date).toLocaleString()}</span>,
+                    <span className="inline-flex items-center gap-1 text-slate-600">
+                      {l.channel === 'email' ? <Mail size={14} /> : <MessageSquare size={14} />} {l.channel}
+                    </span>,
+                    <span className="text-slate-500">{TYPE_LABEL[l.type] || l.type}</span>,
+                    <span className="text-slate-600">
+                      {l.customer}
+                      <div className="text-[11px] text-slate-400">{l.recipient || '—'}</div>
+                    </span>,
+                    <span className="text-slate-500 truncate block max-w-[280px]" title={l.message}>{l.message}</span>,
+                    <span>
+                      <StatusBadge status={l.status} />
+                      <div className="text-[11px] text-slate-400">{l.detail}</div>
+                    </span>,
+                  ],
+                }))}
+                emptyMessage="No notifications yet."
+              />
+            </div>
           </div>
         </Card>
       )}
@@ -583,15 +620,15 @@ export default function Notifications() {
 
 function Row({ icon, label, desc, children }: { icon: React.ReactNode; label: string; desc: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {icon}
-        <div>
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex items-start sm:items-center gap-2 min-w-0">
+        <span className="shrink-0 mt-0.5 sm:mt-0">{icon}</span>
+        <div className="min-w-0">
           <div className="text-sm font-medium text-slate-700">{label}</div>
-          <div className="text-xs text-slate-400">{desc}</div>
+          <div className="text-xs text-slate-400 leading-snug">{desc}</div>
         </div>
       </div>
-      {children}
+      <div className="shrink-0 self-end sm:self-auto">{children}</div>
     </div>
   );
 }
