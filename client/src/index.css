@@ -3083,7 +3083,7 @@ html.portal-route .portal-matrix-veil::after {
   from { transform: translateY(0); }
   to { transform: translateY(4px); }
 }
-html.portal-route .subscriber-portal > *:not(.portal-matrix-canvas):not(.matrix-rain-canvas):not(.portal-matrix-veil):not(.orbital-network-canvas):not(.portal-orbital-veil) {
+html.portal-route .subscriber-portal > *:not(.portal-matrix-canvas):not(.matrix-rain-canvas):not(.portal-matrix-veil):not(.orbital-network-canvas):not(.portal-orbital-veil):not(.portal-modal-root) {
   position: relative;
   z-index: 1;
 }
