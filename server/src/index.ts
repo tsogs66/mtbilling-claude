@@ -3,6 +3,7 @@ import http from 'http';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -173,6 +174,8 @@ import {
   sendPaymentConfirmationSms,
   notifyClientChannels,
 } from './notify.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Last-resort safety net. node-routeros's underlying Connector can emit a
@@ -4800,6 +4803,35 @@ app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
 app.use('/api', twingateRouter);
 app.use('/api', nocRouter);
+
+// Windows / single-process deploys: serve the Vite SPA from Express (no nginx).
+// Set SERVE_STATIC=1 and optionally STATIC_ROOT. Must run after /api routes.
+{
+  const flag = String(process.env.SERVE_STATIC || '').trim().toLowerCase();
+  const enabled = flag === '1' || flag === 'true' || flag === 'yes';
+  if (enabled) {
+    const candidates = [
+      process.env.STATIC_ROOT ? path.resolve(process.env.STATIC_ROOT) : '',
+      path.join(__dirname, '..', '..', 'client', 'dist'),
+      path.join(__dirname, '..', 'public'),
+    ].filter(Boolean);
+    const root = candidates.find((p) => fs.existsSync(path.join(p, 'index.html')));
+    if (root) {
+      console.log(`[static] Serving UI from ${root}`);
+      app.use(express.static(root, { index: false, maxAge: '1h' }));
+      app.get('*', (req, res, next) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+        if (req.path.startsWith('/api')) return next();
+        res.sendFile(path.join(root, 'index.html'), (err) => (err ? next(err) : undefined));
+      });
+    } else {
+      console.warn(
+        '[static] SERVE_STATIC is set but no client/dist (index.html) found. ' +
+          `Tried: ${candidates.join(', ')}`
+      );
+    }
+  }
+}
 
 const server = http.createServer(app);
 initTerminalWs(server);

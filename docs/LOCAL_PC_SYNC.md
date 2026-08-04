@@ -16,7 +16,9 @@ MT-Billing can run as a full install on a **local PC** (USB flash image, install
    - Role: Hub
    - Enable sync
    - Copy the **shared sync token** (or rotate once and copy)
-2. Install MT-Billing on the **PC** the same way as a normal panel (flash USB / LXC / Node).
+2. Install MT-Billing on the **PC**:
+   - **Windows:** download the [Windows installer zip](https://github.com/tsogs66/MT-Billing/releases/download/windows-latest/mt-billing-windows-x64.zip) and run `install.cmd` as Administrator ([docs/WINDOWS_INSTALL.md](./WINDOWS_INSTALL.md))
+   - **Linux PC:** flash USB / appliance image, or normal Node/LXC install
 3. On the **PC**:
    - Role: Edge
    - Hub URL: `https://your-hub` or `http://192.168.x.x`
