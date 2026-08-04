@@ -1080,6 +1080,63 @@ function LocalPcSync({ flash }: { flash: (m: string) => void }) {
   return (
     <SettingsSection icon={RefreshCw} title="Local PC / Hub database sync">
       <div className="space-y-5 max-w-3xl">
+        <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm">
+              <Usb size={22} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-bold text-slate-900">PC USB installer</div>
+              <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                Flash this image to a USB stick, boot the PC from USB (UEFI), and it installs MT-Billing onto the
+                internal disk. Then set the PC as an <b>Edge</b> node below to sync with this hub.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <a
+                  className="btn-primary inline-flex items-center gap-2 text-sm"
+                  href="https://github.com/tsogs66/MT-Billing/releases/download/sbc-flash-images/mt-billing-pc-usb-amd64.img.xz"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Download size={16} /> Download PC USB installer
+                </a>
+                <a
+                  className="btn-secondary inline-flex items-center gap-2 text-sm"
+                  href="https://github.com/tsogs66/MT-Billing/releases/download/sbc-flash-images/mt-billing-pc-usb-amd64.img.xz.sha256"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  SHA256
+                </a>
+                <a
+                  className="btn-secondary inline-flex items-center gap-2 text-sm"
+                  href="https://github.com/tsogs66/MT-Billing/releases/download/sbc-flash-images/mt-billing-pc-amd64.img.xz"
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Run the panel from USB/SSD without installing to internal disk"
+                >
+                  <Download size={16} /> PC appliance (run from USB)
+                </a>
+                <a
+                  className="btn-secondary inline-flex items-center gap-2 text-sm"
+                  href="https://github.com/tsogs66/MT-Billing/releases/tag/sbc-flash-images"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={16} /> All flash images
+                </a>
+              </div>
+              <ol className="mt-3 text-xs text-slate-500 space-y-1 list-decimal pl-4 leading-relaxed">
+                <li>Write <code className="text-slate-700">mt-billing-pc-usb-amd64.img.xz</code> with Balena Etcher or Rufus (DD Image mode).</li>
+                <li>Boot the PC from that USB stick (UEFI), Ethernet connected.</li>
+                <li>Installer wipes the largest internal disk, clones the OS, then powers off.</li>
+                <li>Unplug USB → boot from internal disk → firstboot installs the panel (needs internet).</li>
+                <li>Sign in (<code className="text-slate-700">admin</code> / <code className="text-slate-700">admin123</code>), then configure Edge sync below.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
         <p className="text-sm text-slate-500 leading-relaxed">
           Install the full panel on a local PC (USB/flash or normal install). Set this server as{' '}
           <b>Hub</b> and each PC as <b>Edge</b> with the same sync token. While a PC is offline it keeps working
