@@ -114,6 +114,22 @@ import {
   deletePaymentMerchant,
 } from './paymentMerchants.js';
 import {
+  initDbSync,
+  getSyncSettings,
+  updateSyncSettings,
+  rotateSyncToken,
+  assertSyncToken,
+  buildSyncSnapshot,
+  applySyncChanges,
+  applySyncSnapshot,
+  runEdgeSyncCycle,
+  listOutbox,
+  listPeers,
+  touchPeer,
+  startDbSyncScheduler,
+  SYNC_CATEGORIES,
+} from './dbSync.js';
+import {
   startUsageScheduler,
   getFairUseSettings,
   updateFairUseSettings,
@@ -181,6 +197,7 @@ process.on('unhandledRejection', (reason) => {
 initSchema();
 migrate();
 seed();
+initDbSync();
 initExtra();
 initIspOps();
 initTwingate();
@@ -490,6 +507,67 @@ app.get('/api/health', (_req, res) => {
 
 /** Public subscriber self-service portal (no JWT). */
 app.use('/api', publicPortalRouter);
+
+// ---- Hub ↔ Edge DB sync (device token auth; no staff JWT) ----
+function syncAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  try {
+    const token = String(req.headers.authorization || req.headers['x-sync-token'] || '');
+    assertSyncToken(token);
+    next();
+  } catch (e: any) {
+    res.status(e?.status || 401).json({ error: e?.message || 'Unauthorized' });
+  }
+}
+
+app.get('/api/sync/hello', syncAuth, (_req, res) => {
+  const s = getSyncSettings();
+  res.json({
+    ok: true,
+    role: s.role,
+    deviceId: s.deviceId,
+    at: new Date().toISOString(),
+  });
+});
+
+app.get('/api/sync/pull', syncAuth, (req, res) => {
+  try {
+    const deviceId = String(req.headers['x-sync-device-id'] || req.query.deviceId || 'unknown');
+    const deviceName = String(req.headers['x-sync-device-name'] || req.query.deviceName || '');
+    touchPeer(deviceId, deviceName, 'pull');
+    const cats = String(req.query.categories || '')
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const snapshot = buildSyncSnapshot(cats.length ? cats : undefined);
+    res.json({ ok: true, snapshot });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Pull failed' });
+  }
+});
+
+app.post('/api/sync/push', express.json({ limit: '80mb' }), syncAuth, (req, res) => {
+  try {
+    const deviceId = String(req.body?.deviceId || req.headers['x-sync-device-id'] || 'unknown');
+    const deviceName = String(req.body?.deviceName || req.headers['x-sync-device-name'] || '');
+    touchPeer(deviceId, deviceName, 'push');
+    const changes = Array.isArray(req.body?.changes) ? req.body.changes : [];
+    const result = applySyncChanges(
+      changes.map((c: any) => ({
+        entityType: String(c.entityType || c.entity_type || ''),
+        entityId: String(c.entityId || c.entity_id || ''),
+        op: String(c.op || 'upsert'),
+        payload: c.payload ?? null,
+      }))
+    );
+    // Also accept optional full snapshot merge from edge bootstrap
+    if (req.body?.snapshot?.data) {
+      applySyncSnapshot(req.body.snapshot);
+    }
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Push failed' });
+  }
+});
 
 app.use('/api', requireAuth);
 
@@ -1981,7 +2059,46 @@ app.get('/api/payment-links', (_req, res) => {
   });
 });
 
-/** Cash collection merchants (managed from Subscriber Portal admin). */
+// ---- Payment merchants + Local PC sync (staff) ----
+app.get('/api/sync/status', (_req, res) => {
+  initDbSync();
+  res.json({
+    settings: getSyncSettings(),
+    peers: listPeers(),
+    outbox: listOutbox(50),
+    categories: Object.keys(SYNC_CATEGORIES),
+  });
+});
+
+app.put('/api/sync/settings', (req, res) => {
+  try {
+    const body = req.body || {};
+    const settings = updateSyncSettings({
+      role: body.role,
+      enabled: body.enabled,
+      hubUrl: body.hubUrl,
+      token: body.token,
+      deviceName: body.deviceName,
+    });
+    res.json({ settings });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not save sync settings' });
+  }
+});
+
+app.post('/api/sync/token/rotate', (_req, res) => {
+  res.json({ settings: rotateSyncToken() });
+});
+
+app.post('/api/sync/now', async (_req, res) => {
+  try {
+    const result = await runEdgeSyncCycle(true);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Sync failed' });
+  }
+});
+
 app.get('/api/payment-merchants', (_req, res) => {
   initPaymentMerchants();
   res.json({ merchants: listPaymentMerchants() });
@@ -4717,4 +4834,5 @@ server.listen(PORT, () => {
   setTimeout(() => startUsageScheduler(ap.intervals.usage), ap.appliance ? 45_000 : 15_000);
   setTimeout(() => startRouterSyncScheduler(ap.intervals.routerSync), ap.appliance ? 60_000 : 30_000);
   setTimeout(() => startNotifyScheduler(ap.intervals.notify), ap.appliance ? 90_000 : 45_000);
+  setTimeout(() => startDbSyncScheduler(ap.intervals.dbSync ?? ap.intervals.routerSync), ap.appliance ? 75_000 : 40_000);
 });

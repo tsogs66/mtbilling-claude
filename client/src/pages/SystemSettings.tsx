@@ -17,6 +17,7 @@ const TABS = [
   { key: 'cloudflare', label: 'Cloudflare Tunnel', icon: Cloud },
   { key: 'ngrok', label: 'Ngrok Remote Access', icon: Globe2 },
   { key: 'database', label: 'Database Management', icon: DbIcon },
+  { key: 'sync', label: 'Local PC Sync', icon: RefreshCw },
   { key: 'ai', label: 'AI Settings', icon: Bot },
   { key: 'time', label: 'Time Synchronization', icon: Clock },
   { key: 'account', label: 'Account & Security', icon: KeyRound },
@@ -67,6 +68,7 @@ export default function SystemSettings() {
       {tab === 'cloudflare' && <CloudflareTunnelSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
       {tab === 'ngrok' && <NgrokSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
       {tab === 'database' && <DatabaseManagement flash={flash} />}
+      {tab === 'sync' && <LocalPcSync flash={flash} />}
       {tab === 'ai' && <AiSettings app={app} setA={setA} save={saveApp} />}
       {tab === 'time' && <TimeSync app={app} setA={setA} save={saveApp} flash={flash} />}
       {tab === 'account' && (
@@ -992,6 +994,215 @@ function DatabaseManagement({ flash }: any) {
             </div>
           )}
         </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+function LocalPcSync({ flash }: { flash: (m: string) => void }) {
+  const [settings, setSettings] = useState<any>(null);
+  const [peers, setPeers] = useState<any[]>([]);
+  const [outbox, setOutbox] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    role: 'standalone',
+    enabled: false,
+    hubUrl: '',
+    token: '',
+    deviceName: '',
+  });
+
+  const load = async () => {
+    const r = await api.get('/sync/status');
+    setSettings(r.data.settings);
+    setPeers(r.data.peers || []);
+    setOutbox(r.data.outbox || []);
+    const s = r.data.settings || {};
+    setForm({
+      role: s.role || 'standalone',
+      enabled: !!s.enabled,
+      hubUrl: s.hubUrl || '',
+      token: s.token || '',
+      deviceName: s.deviceName || '',
+    });
+  };
+
+  useEffect(() => {
+    void load().catch(() => flash('Could not load sync status'));
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.put('/sync/settings', form);
+      setSettings(r.data.settings);
+      flash('Sync settings saved');
+      await load();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Could not save sync settings');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rotate = async () => {
+    if (!confirm('Rotate sync token? Update every local PC with the new token.')) return;
+    setBusy(true);
+    try {
+      const r = await api.post('/sync/token/rotate');
+      setSettings(r.data.settings);
+      setForm((f) => ({ ...f, token: r.data.settings.token }));
+      flash('Sync token rotated');
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Rotate failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/sync/now');
+      if (r.data.ok) {
+        flash(`Synced — pulled ${r.data.pulled || 0} rows, pushed ${r.data.pushed || 0} held changes`);
+      } else {
+        flash(r.data.error || 'Hub offline — local changes are held until online');
+      }
+      await load();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Sync failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsSection icon={RefreshCw} title="Local PC / Hub database sync">
+      <div className="space-y-5 max-w-3xl">
+        <p className="text-sm text-slate-500 leading-relaxed">
+          Install the full panel on a local PC (USB/flash or normal install). Set this server as{' '}
+          <b>Hub</b> and each PC as <b>Edge</b> with the same sync token. While a PC is offline it keeps working
+          on its local database; changes are <b>held in a queue</b> and flushed when the hub is reachable again.
+          Coming online also <b>pulls the latest hub data</b>.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <FormField label="Role">
+            <select
+              className="input"
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value })}
+            >
+              <option value="standalone">Standalone (no sync)</option>
+              <option value="hub">Hub (central server)</option>
+              <option value="edge">Edge (local PC)</option>
+            </select>
+          </FormField>
+          <FormField label="Device name">
+            <input
+              className="input"
+              value={form.deviceName}
+              onChange={(e) => setForm({ ...form, deviceName: e.target.value })}
+              placeholder="e.g. Branch-PC-1"
+            />
+          </FormField>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+          />
+          Enable database sync
+        </label>
+
+        {form.role === 'edge' && (
+          <FormField label="Hub URL" hint="Base URL of the central server, e.g. https://billing.example.com or http://192.168.1.10">
+            <input
+              className="input font-mono text-sm"
+              value={form.hubUrl}
+              onChange={(e) => setForm({ ...form, hubUrl: e.target.value })}
+              placeholder="https://your-hub-host"
+            />
+          </FormField>
+        )}
+
+        <FormField
+          label="Shared sync token"
+          hint="Same token on hub and every edge PC. Keep it secret."
+        >
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="input font-mono text-sm flex-1 min-w-[12rem]"
+              value={form.token}
+              onChange={(e) => setForm({ ...form, token: e.target.value })}
+            />
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => void rotate()}>
+              Rotate
+            </button>
+          </div>
+        </FormField>
+
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-primary" disabled={busy} onClick={() => void save()}>
+            {busy ? 'Saving…' : 'Save sync settings'}
+          </button>
+          {form.role === 'edge' && (
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => void syncNow()}>
+              <RefreshCw size={16} /> Sync now
+            </button>
+          )}
+        </div>
+
+        {settings && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm space-y-1">
+            <div>
+              Status:{' '}
+              <span className="font-semibold text-slate-800">{settings.lastStatus || '—'}</span>
+            </div>
+            <div className="text-slate-500">
+              Pending held changes: <b className="text-slate-800">{settings.pendingCount ?? 0}</b>
+              {' · '}Last pull: {settings.lastPullAt || '—'}
+              {' · '}Last push: {settings.lastPushAt || '—'}
+            </div>
+            {settings.lastError && (
+              <div className="text-rose-600 text-xs">{settings.lastError}</div>
+            )}
+            <div className="text-xs text-slate-400 font-mono">Device ID: {settings.deviceId}</div>
+          </div>
+        )}
+
+        {form.role === 'hub' && peers.length > 0 && (
+          <div>
+            <div className="text-sm font-semibold text-slate-800 mb-2">Connected edge PCs</div>
+            <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+              {peers.map((p) => (
+                <li key={p.deviceId || p.id} className="px-3 py-2 text-sm flex justify-between gap-3">
+                  <span className="font-medium text-slate-800">{p.deviceName || p.deviceId}</span>
+                  <span className="text-xs text-slate-400">seen {String(p.lastSeenAt || '').replace('T', ' ').slice(0, 16)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {form.role === 'edge' && outbox.length > 0 && (
+          <div>
+            <div className="text-sm font-semibold text-slate-800 mb-2">Held changes (waiting for hub)</div>
+            <ul className="max-h-48 overflow-y-auto divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white text-xs">
+              {outbox.slice(0, 30).map((o) => (
+                <li key={o.id} className="px-3 py-1.5 flex justify-between gap-2">
+                  <span className="font-mono text-slate-700">
+                    {o.op} {o.entityType}/{o.entityId}
+                  </span>
+                  <span className="text-slate-400">{o.attempts ? `${o.attempts} tries` : 'queued'}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </SettingsSection>
   );

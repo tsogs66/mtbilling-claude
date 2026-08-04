@@ -23,6 +23,7 @@ export type ApplianceProfile = {
     usage: number;
     routerSync: number;
     notify: number;
+    dbSync: number;
   };
   /** Parallel HTTP/router feed checks in Status Hub */
   statusHubConcurrency: number;
@@ -91,6 +92,7 @@ export function getApplianceProfile(): ApplianceProfile {
           usage: 5 * 60_000, // was 60s — main MikroTik load on RPi
           routerSync: 5 * 60_000,
           notify: 10 * 60_000,
+          dbSync: 3 * 60_000,
         }
       : {
           statusHub: 5 * 60_000,
@@ -100,6 +102,7 @@ export function getApplianceProfile(): ApplianceProfile {
           usage: 60_000,
           routerSync: 3 * 60_000,
           notify: 5 * 60_000,
+          dbSync: 2 * 60_000,
         },
     statusHubConcurrency: appliance ? 2 : 8,
     nocPassDeadlineMs: appliance ? 60_000 : 90_000,
