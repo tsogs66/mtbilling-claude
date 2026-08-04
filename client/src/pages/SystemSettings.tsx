@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
-  Palette, Binary, Satellite,
+  Palette, Binary, Satellite, Usb, ExternalLink,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
