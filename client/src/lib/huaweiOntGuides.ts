@@ -16,16 +16,16 @@ export type OntGuide = {
  * on firmware R022 / R024 (English web UI labels).
  */
 export const OPTIXSTAR_WIFI_SSID_STEPS: string[] = [
-  'Connect a phone or laptop to the ONT Wi‑Fi (current SSID on the sticker) or plug a LAN cable into any LAN port.',
+  'Connect a phone or laptop to your current ONT Wi‑Fi, or plug a LAN cable into any LAN port.',
   'Open a browser and go to http://192.168.100.1',
   'Log in with username telecomadmin and password admintelecom. Do not change WAN / Internet / PON settings.',
   'Open Network → WLAN (on some builds: Advanced → WLAN).',
   '2.4 GHz — open 2.4G Basic Network Settings (or WLAN Basic Configuration → 2.4GHz tab).',
-  'Turn Enable WLAN / SSID on. Set SSID Name to your 2.4G network name (e.g. MyHome-2.4G).',
+  'Set SSID Name to your 2.4G network name (e.g. MyHome-2.4G).',
   'Set Authentication Mode to WPA2 PreSharedKey or WPA/WPA2-PSK. Set Encryption Mode to AES (or TKIP&AES).',
   'In WPA PreSharedKey, enter the new 2.4G password (8–63 characters, mix of letters and numbers). Click Apply / Submit.',
   '5 GHz — open 5G Basic Network Settings (or the 5GHz tab).',
-  'Enable SSID. Set SSID Name for 5G (e.g. MyHome-5G — use a different name from 2.4G so phones can pick the right band).',
+  'Set SSID Name for 5G (e.g. MyHome-5G — use a different name from 2.4G so phones can pick the right band).',
   'Use the same Authentication / Encryption as 2.4G. Set WPA PreSharedKey to your new 5G password (can match 2.4G or differ). Click Apply / Submit.',
   'On each device: forget the old Wi‑Fi, then join the new 2.4G and/or 5G SSID with the new password. Prefer 5G when close to the ONT for speed.',
 ];
