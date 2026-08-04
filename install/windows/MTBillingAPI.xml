@@ -1,0 +1,18 @@
+<!--
+  WinSW service template. install.ps1 regenerates this with absolute paths.
+  Docs: https://github.com/winsw/winsw
+-->
+<service>
+  <id>MTBillingAPI</id>
+  <name>MT-Billing API</name>
+  <description>MT-Billing MikroTik billing panel (API + web UI)</description>
+  <executable>node</executable>
+  <arguments>dist\index.js</arguments>
+  <workingdirectory>C:\Program Files\MT-Billing\server</workingdirectory>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <onfailure action="restart" delay="5 sec"/>
+  <env name="NODE_ENV" value="production"/>
+</service>

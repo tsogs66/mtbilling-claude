@@ -1,0 +1,64 @@
+name: Windows installer zip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'install/windows/**'
+      - 'scripts/build-windows-zip.sh'
+      - '.github/workflows/windows-installer.yml'
+      - 'docs/WINDOWS_INSTALL.md'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build zip
+        run: bash scripts/build-windows-zip.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt-billing-windows-x64
+          path: |
+            dist/windows/mt-billing-windows-x64.zip
+            dist/windows/mt-billing-windows-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish rolling "windows-latest" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-latest
+          name: MT-Billing Windows installer
+          body: |
+            Windows **x64** installer package from `main` (commit ${{ github.sha }}).
+
+            **Install**
+            1. Download `mt-billing-windows-x64.zip`
+            2. Unzip, right-click `install.cmd` → **Run as administrator**
+            3. Open http://127.0.0.1/ — sign in `admin` / `admin123`
+
+            The installer installs Node if needed, builds the panel, and registers the
+            **MTBillingAPI** Windows service (API + UI on port 80 by default).
+
+            Docs: [install/windows/README.md](https://github.com/${{ github.repository }}/blob/main/install/windows/README.md)
+            · [docs/WINDOWS_INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/WINDOWS_INSTALL.md)
+          files: |
+            dist/windows/mt-billing-windows-x64.zip
+            dist/windows/mt-billing-windows-x64.zip.sha256
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

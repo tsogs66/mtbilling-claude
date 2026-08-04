@@ -18,7 +18,8 @@
     "flash:opi-one": "bash scripts/build-opi-one-img.sh",
     "flash:pc": "bash scripts/build-pc-img.sh",
     "flash:pc-usb": "bash scripts/build-pc-usb-img.sh",
-    "flash:all": "bash scripts/build-all-flash-images.sh"
+    "flash:all": "bash scripts/build-all-flash-images.sh",
+    "windows:zip": "bash scripts/build-windows-zip.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

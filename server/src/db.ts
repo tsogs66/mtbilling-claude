@@ -5,7 +5,10 @@ import path from 'path';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const dataDir = path.join(__dirname, '..', 'data');
+/** Override with MT_DATA_DIR (e.g. Windows ProgramData) so upgrades don't wipe SQLite. */
+export const dataDir = process.env.MT_DATA_DIR
+  ? path.resolve(process.env.MT_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
 export const backupsDir = path.join(dataDir, 'backups');
 export const dbPath = path.join(dataDir, 'mt-billing.db');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });

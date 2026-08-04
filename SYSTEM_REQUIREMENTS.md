@@ -34,7 +34,7 @@ Run on the **Proxmox host** as root.
 
 ```bash
 # Public repo one-liner
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 
 # Or from a clone
 sudo bash scripts/proxmox-install.sh
@@ -47,6 +47,20 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 **Updates:** new commits on `main` are applied automatically every 10 minutes via `mt-billing-auto-update.timer` (enabled by default). Manual update from the Proxmox host: `sudo bash scripts/proxmox-update.sh`.
 
 **Big updates / factory reinstall:** `sudo bash scripts/proxmox-reinstall.sh --yes` (backs up data, reclones from GitHub, rebuilds; use `--keep-db` to preserve SQLite). Guest script: `install/mt-billing-reinstall.sh`.
+
+---
+
+## Windows (installer zip)
+
+| Item | Requirement |
+|------|-------------|
+| OS | Windows 10/11 or Windows Server 2019+ (x64) |
+| RAM / disk | 2 GB+ RAM · ~2 GB free for build · then ~500 MB installed |
+| Rights | Administrator (service + firewall) |
+| Network | Internet during install (npm + source download) |
+| Package | [`mt-billing-windows-x64.zip`](https://github.com/tsogs66/MT-Billing/releases/tag/windows-latest) |
+
+See **[docs/WINDOWS_INSTALL.md](./docs/WINDOWS_INSTALL.md)**.
 
 ---
 
@@ -66,8 +80,8 @@ Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with 
 ### Build the flash files (Linux)
 
 ```bash
-git clone https://github.com/tsogs66/mtbilling-claude.git
-cd mtbilling-claude
+git clone https://github.com/tsogs66/MT-Billing.git
+cd MT-Billing
 
 # Raspberry Pi → dist/flash/mt-billing-rpi-arm64.img (+ .img.xz)
 sudo bash scripts/build-rpi-img.sh
