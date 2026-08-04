@@ -25,7 +25,7 @@ Assert-Admin
 
 $exe = Join-Path $InstallDir 'service\MTBillingAPI.exe'
 if (Test-Path $exe) {
-  Write-Host "Stopping service…"
+  Write-Host "Stopping service..."
   & $exe stop 2>$null
   Start-Sleep -Seconds 2
   & $exe uninstall 2>$null
