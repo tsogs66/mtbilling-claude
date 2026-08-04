@@ -48,7 +48,7 @@ function Assert-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = New-Object Security.Principal.WindowsPrincipal($id)
   if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'Run this script as Administrator (right-click PowerShell → Run as administrator).'
+    throw 'Run this script as Administrator (right-click PowerShell -> Run as administrator).'
   }
 }
 
@@ -129,7 +129,7 @@ function Install-Source {
 
   $marker = Join-Path $InstallDir 'package.json'
   if ((Test-Path $marker) -and (Test-Path (Join-Path $InstallDir 'server'))) {
-    Write-Host "Existing install found — updating sources…"
+    Write-Host "Existing install found - updating sources..."
   }
 
   if ($UseGit -or ($RepoUrl -match '\.git$')) {
@@ -217,7 +217,7 @@ function Install-WinSW {
 
   if (-not (Test-Path $exe)) {
     $winswUrl = 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe'
-    Write-Host "Downloading WinSW…"
+    Write-Host "Downloading WinSW..."
     Invoke-WebRequest -Uri $winswUrl -OutFile $exe
   }
 
