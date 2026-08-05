@@ -1080,7 +1080,7 @@ function LocalPcSync({ flash }: { flash: (m: string) => void }) {
   return (
     <SettingsSection icon={RefreshCw} title="Local PC / Hub database sync">
       <div className="space-y-5 max-w-3xl">
-        <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-4 sm:p-5">
+        <div className="rounded-2xl border border-sky-500/35 bg-sky-500/10 p-4 sm:p-5">
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm">
               <Monitor size={22} />
@@ -1119,7 +1119,7 @@ function LocalPcSync({ flash }: { flash: (m: string) => void }) {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 sm:p-5">
+        <div className="rounded-2xl border border-slate-500/35 bg-slate-500/10 p-4 sm:p-5">
           <div className="flex items-start gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-white shadow-sm">
               <Usb size={22} />
