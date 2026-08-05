@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 import { getApiBase } from '../config';
+import QrphLogo from '../components/QrphLogo';
 
 type Channel = 'gcash' | 'maya' | 'cash' | '';
 
@@ -838,11 +839,7 @@ export default function SubscriberPay() {
                   {paymongoBusy ? (
                     <Loader2 className="animate-spin" size={18} />
                   ) : (
-                    <img
-                      src="/wallets/qrph.svg"
-                      alt="QRPh"
-                      className="h-9 w-auto bg-white rounded-md px-2 py-1 shadow-sm"
-                    />
+                    <QrphLogo className="h-9 w-auto shrink-0" />
                   )}
                   {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                 </button>
