@@ -326,9 +326,12 @@ export default function SubscriberPay() {
         if (!r.ok) throw new Error(j.error || 'Not found');
         setData(j);
         dueAmountRef.current = Number(j.amount || 0);
-        if (j.payChannel === 'gcash' || j.payChannel === 'maya' || j.payChannel === 'cash') setChannel(j.payChannel);
-        if (j.merchantId) setMerchantId(Number(j.merchantId));
-        if (j.externalRef) setRef(j.externalRef);
+        // Only restore channel after proof was submitted — keep Cash merchants hidden until Cash is clicked.
+        if (j.status === 'submitted' || j.status === 'rejected') {
+          if (j.payChannel === 'gcash' || j.payChannel === 'maya' || j.payChannel === 'cash') setChannel(j.payChannel);
+          if (j.merchantId) setMerchantId(Number(j.merchantId));
+          if (j.externalRef) setRef(j.externalRef);
+        }
       })
       .catch((e) => setError(e.message || 'Could not load payment link'));
     fetch(`${getApiBase()}/public/paymongo/status`)
@@ -343,10 +346,9 @@ export default function SubscriberPay() {
         setManualMaya(allowMaya);
         setManualCash(allowCash);
         setChannel((prev) => {
-          if (prev === 'gcash' && !allowGcash) return allowCash ? 'cash' : '';
-          if (prev === 'maya' && !allowMaya) return allowCash ? 'cash' : '';
+          if (prev === 'gcash' && !allowGcash) return '';
+          if (prev === 'maya' && !allowMaya) return '';
           if (prev === 'cash' && !allowCash) return '';
-          if (!prev && !allowGcash && !allowMaya && allowCash) return 'cash';
           return prev;
         });
       })
@@ -838,8 +840,8 @@ export default function SubscriberPay() {
                   ) : (
                     <img
                       src="/wallets/qrph.svg"
-                      alt="QR Ph"
-                      className="h-8 w-auto rounded-md shadow-sm ring-1 ring-white/25 bg-[#1B4F9C]"
+                      alt="QRPh"
+                      className="h-8 w-auto bg-white rounded-md px-1.5 py-0.5 shadow-sm"
                     />
                   )}
                   {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
@@ -1268,6 +1270,8 @@ export default function SubscriberPay() {
                   </>
                 )}
 
+                {channel && (
+                <>
                 <button
                   type="button"
                   disabled={busy || (channel !== 'cash' && Boolean(screenshot) && ocrBusy) || !canSubmit}
@@ -1278,16 +1282,7 @@ export default function SubscriberPay() {
                     ? 'Submitting…'
                     : channel !== 'cash' && screenshot && ocrBusy
                       ? 'Reading receipt…'
-                      : !channel
-                        ? `Select ${[
-                            manualGcash && 'GCash',
-                            manualMaya && 'Maya',
-                            manualCash && 'Cash',
-                          ]
-                            .filter(Boolean)
-                            .join(', ')
-                            .replace(/, ([^,]*)$/, ' or $1') || 'a payment method'}`
-                        : channel === 'cash' && !merchantId
+                      : channel === 'cash' && !merchantId
                           ? 'Select a cash merchant'
                           : channel !== 'cash' && !hasManualRef
                             ? 'Enter reference / transaction no.'
@@ -1310,6 +1305,8 @@ export default function SubscriberPay() {
                 <p className="text-[11px] text-center text-slate-400 flex items-center justify-center gap-1">
                   <Clock3 size={12} /> Internet restores after your ISP verifies this payment
                 </p>
+                </>
+                )}
               </>
             )}
 
