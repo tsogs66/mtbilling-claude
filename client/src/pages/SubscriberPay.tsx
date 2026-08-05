@@ -841,7 +841,7 @@ export default function SubscriberPay() {
                     <img
                       src="/wallets/qrph.svg"
                       alt="QRPh"
-                      className="h-8 w-auto bg-white rounded-md px-1.5 py-0.5 shadow-sm"
+                      className="h-9 w-auto bg-white rounded-md px-2 py-1 shadow-sm"
                     />
                   )}
                   {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
@@ -1037,8 +1037,8 @@ export default function SubscriberPay() {
                   </div>
                 )}
 
-                {/* Merchant QR — zoom + download + scan line (GCash / Maya) */}
-                {channel !== 'cash' && merchantQr && (
+                {/* Merchant QR — zoom + download + scan line (GCash / Maya only) */}
+                {(channel === 'gcash' || channel === 'maya') && merchantQr && (
                   <div className="flex flex-col items-center gap-2 py-1">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       {qrLabel}
@@ -1069,23 +1069,21 @@ export default function SubscriberPay() {
                       Download
                     </button>
                     <div className="text-xs text-slate-500 text-center px-2 max-w-xs leading-relaxed">
-                      {channel
-                        ? `Open ${channel === 'maya' ? 'Maya' : 'GCash'} — or any Philippine bank app — → Scan QR → pay the exact amount`
-                        : 'Select GCash or Maya above, then scan the matching QR'}
+                      {`Open ${channel === 'maya' ? 'Maya' : 'GCash'} — or any Philippine bank app — → Scan QR → pay the exact amount`}
                       <span className="block mt-1 text-slate-400">
                         Works with InstaPay / QR Ph — any participating PH bank or e-wallet.
                       </span>
                     </div>
                   </div>
                 )}
-                {!merchantQr && channel && channel !== 'cash' && (
+                {(channel === 'gcash' || channel === 'maya') && !merchantQr && (
                   <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
                     No {channel === 'maya' ? 'Maya' : 'GCash'} QR uploaded yet. Your ISP should add it under Subscriber Portal → Payments.
                     {accountHint ? <> Meanwhile send to <span className="font-mono font-semibold">{accountHint}</span>.</> : null}
                   </div>
                 )}
 
-                {channel !== 'cash' && (
+                {(channel === 'gcash' || channel === 'maya') && (
                   <>
                 {/* Reference */}
                 <label className="block">
