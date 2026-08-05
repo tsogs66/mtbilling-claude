@@ -3,11 +3,45 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
   ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft, Banknote, CreditCard,
+  ChevronDown,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 import { getApiBase } from '../config';
 
 type Channel = 'gcash' | 'maya' | 'cash' | '';
+
+/** Well-known QR Ph / InstaPay participants (banks + e-wallets). Not exhaustive — BSP updates the full list. */
+const QRPH_INSTITUTIONS: string[] = [
+  'GCash',
+  'Maya',
+  'BDO Unibank',
+  'Bank of the Philippine Islands (BPI)',
+  'Metrobank',
+  'UnionBank',
+  'Land Bank of the Philippines',
+  'Philippine National Bank (PNB)',
+  'RCBC',
+  'Security Bank',
+  'China Bank',
+  'EastWest Bank',
+  'Asia United Bank (AUB)',
+  'Bank of Commerce',
+  'CTBC Bank',
+  'Philtrust Bank',
+  'CIMB Bank Philippines',
+  'HSBC',
+  'GoTyme Bank',
+  'Maya Bank',
+  'Tonik Digital Bank',
+  'UnionDigital Bank',
+  'UNObank',
+  'GrabPay',
+  'ShopeePay',
+  'PalawanPay',
+  'Coins.ph',
+  'StarPay',
+  'Bayad',
+].sort((a, b) => a.localeCompare(b));
 
 function parseMoneyToken(raw: string): number | null {
   const n = Number(String(raw).replace(/,/g, '').replace(/[^\d.]/g, ''));
@@ -277,6 +311,7 @@ export default function SubscriberPay() {
   const [manualMaya, setManualMaya] = useState(true);
   const [manualCash, setManualCash] = useState(true);
   const [paymongoBusy, setPaymongoBusy] = useState(false);
+  const [qrphListOpen, setQrphListOpen] = useState(false);
   const [banner, setBanner] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -304,7 +339,6 @@ export default function SubscriberPay() {
         const allowMaya = j.manualMaya !== false;
         const allowCash = j.manualCash !== false;
         setPaymongoEnabled(pm);
-        setPaymongoMethods(Array.isArray(j.methods) ? j.methods.map(String) : []);
         setManualGcash(allowGcash);
         setManualMaya(allowMaya);
         setManualCash(allowCash);
@@ -764,6 +798,35 @@ export default function SubscriberPay() {
 
             {!paid && !expired && !submitted && paymongoEnabled && (
               <div className="space-y-2">
+                <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+                    aria-expanded={qrphListOpen}
+                    onClick={() => setQrphListOpen((o) => !o)}
+                  >
+                    <span>Accredited QR Ph institutions</span>
+                    <ChevronDown
+                      size={18}
+                      className={`text-slate-400 shrink-0 transition-transform ${qrphListOpen ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                  {qrphListOpen && (
+                    <div className="border-t border-slate-100 px-3.5 py-2.5 max-h-48 overflow-y-auto">
+                      <ul className="text-xs text-slate-600 columns-1 sm:columns-2 gap-x-4 space-y-1">
+                        {QRPH_INSTITUTIONS.map((name) => (
+                          <li key={name} className="break-inside-avoid">
+                            {name}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-slate-400 mt-2.5 leading-relaxed">
+                        Major QR Ph / InstaPay participants. Your bank or e-wallet app may also work if it supports QR
+                        Ph scanning.
+                      </p>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
