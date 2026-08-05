@@ -1,0 +1,38 @@
+{
+  "id": "/merchant",
+  "name": "Merchant",
+  "short_name": "Merchant",
+  "description": "Merchant portal — collect subscriber payments and remit deposits",
+  "start_url": "/merchant",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020806",
+  "theme_color": "#020806",
+  "categories": ["finance", "business"],
+  "icons": [
+    {
+      "src": "/favicon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

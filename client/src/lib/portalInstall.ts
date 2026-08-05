@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 export type PortalThemeId = 'matrix' | 'orbital';
+export type PortalInstallKind = 'subscriber' | 'merchant';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -27,14 +28,24 @@ function normalizePortalTheme(theme?: string | null): PortalThemeId {
   return theme === 'orbital' ? 'orbital' : 'matrix';
 }
 
-/** Swap main manifest for the portal one while /portal is open. */
-export function usePortalManifest(theme: PortalThemeId = 'matrix') {
+function manifestFor(kind: PortalInstallKind) {
+  return kind === 'merchant' ? '/merchant-manifest.webmanifest' : '/portal-manifest.webmanifest';
+}
+
+function swFor(kind: PortalInstallKind) {
+  return kind === 'merchant' ? '/merchant-sw.js' : '/portal-sw.js';
+}
+
+/** Swap main manifest for the portal/merchant one while that route is open. */
+export function usePortalManifest(theme: PortalThemeId = 'matrix', kind: PortalInstallKind = 'subscriber') {
   const portalTheme = normalizePortalTheme(theme);
 
   useEffect(() => {
     const html = document.documentElement;
     html.classList.add('portal-route');
     html.setAttribute('data-portal-theme', portalTheme);
+    if (kind === 'merchant') html.setAttribute('data-portal-kind', 'merchant');
+    else html.removeAttribute('data-portal-kind');
 
     // Suspend panel themes (dark/isptech/blueglass…) so their remaps
     // cannot override the portal theme.
@@ -50,7 +61,7 @@ export function usePortalManifest(theme: PortalThemeId = 'matrix') {
         return el;
       })();
     const prev = link.getAttribute('href');
-    link.setAttribute('href', '/portal-manifest.webmanifest');
+    link.setAttribute('href', manifestFor(kind));
     const prevScheme = html.style.getPropertyValue('color-scheme');
     html.style.setProperty('color-scheme', 'dark');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
@@ -58,12 +69,16 @@ export function usePortalManifest(theme: PortalThemeId = 'matrix') {
     metaTheme?.setAttribute('content', portalTheme === 'orbital' ? '#030b18' : '#020806');
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/portal-sw.js').catch(() => undefined);
+      navigator.serviceWorker.register(swFor(kind)).catch(() => undefined);
     }
+
+    const prevTitle = document.title;
+    if (kind === 'merchant') document.title = 'Merchant';
 
     return () => {
       html.classList.remove('portal-route');
       html.removeAttribute('data-portal-theme');
+      html.removeAttribute('data-portal-kind');
       if (prevDataTheme) html.setAttribute('data-theme', prevDataTheme);
       else html.removeAttribute('data-theme');
       if (prevScheme) html.style.setProperty('color-scheme', prevScheme);
@@ -71,16 +86,17 @@ export function usePortalManifest(theme: PortalThemeId = 'matrix') {
       if (prev) link.setAttribute('href', prev);
       else link.setAttribute('href', '/manifest.webmanifest');
       if (metaTheme && prevTheme) metaTheme.setAttribute('content', prevTheme);
+      if (kind === 'merchant') document.title = prevTitle;
     };
-  }, [portalTheme]);
+  }, [portalTheme, kind]);
 }
 
-export function usePortalInstall(theme: PortalThemeId = 'matrix') {
+export function usePortalInstall(theme: PortalThemeId = 'matrix', kind: PortalInstallKind = 'subscriber') {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(isStandalone);
   const [iosHint, setIosHint] = useState(false);
 
-  usePortalManifest(theme);
+  usePortalManifest(theme, kind);
 
   useEffect(() => {
     if (isStandalone()) {

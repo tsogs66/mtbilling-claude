@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
+  Download, Share, X,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -10,7 +12,6 @@ import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
-import { PRODUCT_TITLE } from '../branding';
 
 function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   if (theme === 'orbital') {
@@ -77,7 +78,7 @@ export default function MerchantPortal() {
   const [depositBusy, setDepositBusy] = useState(false);
   const [myDeposits, setMyDeposits] = useState<any[]>([]);
 
-  usePortalInstall(theme);
+  const { showInstallButton, installed, iosHint, dismissIosHint, install } = usePortalInstall(theme, 'merchant');
 
   const show = (m: string) => {
     setToast(m);
@@ -256,37 +257,70 @@ export default function MerchantPortal() {
           <div className="flex items-center gap-3 min-w-0">
             <Logo size="sm" variant="dark" />
             <div className="min-w-0">
-              <div className="font-bold text-lg truncate">{PRODUCT_TITLE}</div>
-              <div className="text-xs text-slate-300/80">Merchant portal · {company?.name || 'Payments'}</div>
+              <div className="font-bold text-lg truncate">{company?.name || 'Merchant'}</div>
+              <div className="text-xs text-slate-300/80">Merchant portal</div>
             </div>
           </div>
-          {signedIn ? (
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {showInstallButton && (
               <button
                 type="button"
-                className="portal-cta inline-flex items-center gap-1.5 text-xs"
-                onClick={() => void saveTheme(theme === 'matrix' ? 'orbital' : 'matrix')}
-                title="Toggle portal theme"
+                className="portal-cta inline-flex items-center gap-1.5 text-xs font-semibold"
+                onClick={() => void install()}
+                title="Install Merchant to Home Screen"
               >
-                <Palette size={14} /> {theme === 'matrix' ? 'Matrix' : 'Orbital'}
+                <Download size={14} /> Install
               </button>
-              <button
-                type="button"
-                className="portal-cta inline-flex items-center gap-1.5 text-xs"
-                onClick={() => {
-                  logout();
-                  setSelected(null);
-                }}
-              >
-                <LogOut size={14} /> Sign out
-              </button>
-            </div>
-          ) : (
-            <Link to="/login" className="text-xs text-slate-300 hover:text-white inline-flex items-center gap-1">
-              <ArrowLeft size={12} /> Staff panel
-            </Link>
-          )}
+            )}
+            {installed && (
+              <span className="text-[11px] text-emerald-300/90 px-1">Installed</span>
+            )}
+            {signedIn ? (
+              <>
+                <button
+                  type="button"
+                  className="portal-cta inline-flex items-center gap-1.5 text-xs"
+                  onClick={() => void saveTheme(theme === 'matrix' ? 'orbital' : 'matrix')}
+                  title="Toggle portal theme"
+                >
+                  <Palette size={14} /> {theme === 'matrix' ? 'Matrix' : 'Orbital'}
+                </button>
+                <button
+                  type="button"
+                  className="portal-cta inline-flex items-center gap-1.5 text-xs"
+                  onClick={() => {
+                    logout();
+                    setSelected(null);
+                  }}
+                >
+                  <LogOut size={14} /> Sign out
+                </button>
+              </>
+            ) : (
+              <Link to="/login" className="text-xs text-slate-300 hover:text-white inline-flex items-center gap-1">
+                <ArrowLeft size={12} /> Staff panel
+              </Link>
+            )}
+          </div>
         </header>
+
+        {showInstallButton && (
+          <button
+            type="button"
+            onClick={() => void install()}
+            className="w-full flex items-center gap-3 rounded-2xl border border-orange-400/35 bg-orange-500/15 hover:bg-orange-500/25 px-4 py-3 text-left transition portal-glass-strong"
+          >
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500 text-slate-950 shrink-0">
+              <Download size={18} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold text-white text-sm">Install Merchant</span>
+              <span className="block text-xs text-slate-300/80 mt-0.5">
+                Add to Home Screen for faster collection — opens straight to this portal.
+              </span>
+            </span>
+          </button>
+        )}
 
         {toast && (
           <div className="portal-glass rounded-xl px-4 py-3 text-sm text-emerald-100 border border-emerald-400/30">
@@ -800,6 +834,56 @@ export default function MerchantPortal() {
           </>
         )}
       </div>
+      {iosHint && <MerchantIosInstallHint onClose={dismissIosHint} />}
     </div>
+  );
+}
+
+function MerchantIosInstallHint({ onClose }: { onClose: () => void }) {
+  return createPortal(
+    <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-label="Close" />
+      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 sm:p-6 portal-glass-strong border border-white/10">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h3 className="text-lg font-bold text-white">Install Merchant</h3>
+            <p className="text-sm text-slate-300/80 mt-1">Add Merchant to your Home Screen.</p>
+          </div>
+          <button type="button" className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <ol className="space-y-3 text-sm text-slate-300/90">
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500/20 text-orange-300 ring-1 ring-orange-400/30 font-semibold text-xs shrink-0">
+              1
+            </span>
+            <span>
+              Tap the <Share size={14} className="inline -mt-0.5 text-orange-300" /> <b className="text-white">Share</b> button in Safari.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500/20 text-orange-300 ring-1 ring-orange-400/30 font-semibold text-xs shrink-0">
+              2
+            </span>
+            <span>
+              Scroll and tap <b className="text-white">Add to Home Screen</b>.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500/20 text-orange-300 ring-1 ring-orange-400/30 font-semibold text-xs shrink-0">
+              3
+            </span>
+            <span>
+              Tap <b className="text-white">Add</b> — open Merchant anytime without the browser chrome.
+            </span>
+          </li>
+        </ol>
+        <button type="button" onClick={onClose} className="portal-cta mt-5 w-full rounded-xl font-semibold py-2.5 text-sm">
+          Got it
+        </button>
+      </div>
+    </div>,
+    document.body
   );
 }
