@@ -278,6 +278,24 @@ write_nginx_payonly_locations() {
     location = /logo.png {
         try_files /logo.png =404;
     }
+    location = /merchant-manifest.webmanifest {
+        default_type application/manifest+json;
+        try_files /merchant-manifest.webmanifest =404;
+    }
+    location = /merchant-sw.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-cache";
+        try_files /merchant-sw.js =404;
+    }
+    location = /apple-touch-icon.png {
+        try_files /apple-touch-icon.png =404;
+    }
+    location = /favicon.png {
+        try_files /favicon.png =404;
+    }
+    location = /favicon-64.png {
+        try_files /favicon-64.png =404;
+    }
     location ^~ /assets/ {
         try_files \$uri =404;
     }
