@@ -2055,7 +2055,8 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
 app.get('/api/payment-links', (_req, res) => {
   const resolved = resolvePublicBaseUrl();
   res.json({
-    links: listPaymentLinks(200),
+    links: listPaymentLinks(200, { excludeStatus: 'paid' }),
+    paid: listPaymentLinks(500, { status: 'paid' }),
     publicBaseUrl: resolved.baseUrl || null,
     source: resolved.source,
     warning: resolved.warning || null,
