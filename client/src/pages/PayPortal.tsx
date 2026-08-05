@@ -64,6 +64,9 @@ export default function PayPortal() {
   const [paymongoMethods, setPaymongoMethods] = useState<string[]>(['gcash', 'paymaya', 'qrph']);
   const [paymongoWebhookUrl, setPaymongoWebhookUrl] = useState('');
   const [paymongoBusy, setPaymongoBusy] = useState(false);
+  const [manualGcash, setManualGcash] = useState(true);
+  const [manualMaya, setManualMaya] = useState(true);
+  const [manualCash, setManualCash] = useState(true);
   const [settlement, setSettlement] = useState<any>(null);
 
   const show = (m: string) => {
@@ -120,6 +123,9 @@ export default function PayPortal() {
         setPaymongoSecret('');
         setPaymongoPublic('');
         setPaymongoWebhookSecret('');
+        setManualGcash(s.manualGcash !== false);
+        setManualMaya(s.manualMaya !== false);
+        setManualCash(s.manualCash !== false);
       })
       .catch(() => undefined);
     api
@@ -134,6 +140,9 @@ export default function PayPortal() {
       const body: Record<string, unknown> = {
         enabled: paymongoEnabled,
         methods: paymongoMethods,
+        manualGcash,
+        manualMaya,
+        manualCash,
       };
       if (paymongoSecret.trim()) body.secretKey = paymongoSecret.trim();
       if (paymongoPublic.trim()) body.publicKey = paymongoPublic.trim();
@@ -148,6 +157,9 @@ export default function PayPortal() {
       setPaymongoSecret('');
       setPaymongoPublic('');
       setPaymongoWebhookSecret('');
+      setManualGcash(s.manualGcash !== false);
+      setManualMaya(s.manualMaya !== false);
+      setManualCash(s.manualCash !== false);
       show('PayMongo settings saved');
       const cfg = await api.get('/paymongo/settings').catch(() => null);
       if (cfg?.data?.webhookUrl) setPaymongoWebhookUrl(cfg.data.webhookUrl);
@@ -531,9 +543,10 @@ export default function PayPortal() {
             <CreditCard size={20} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="font-semibold text-slate-800">PayMongo (GCash / Maya / QR Ph)</div>
+            <div className="font-semibold text-slate-800">PayMongo (online checkout)</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Hosted checkout for subscriber pay links. Leave secret fields blank to keep the saved value.
+              Hosted GCash / Maya / QR Ph checkout. Payment confirms via webhook and activates the subscriber
+              automatically. Leave secret fields blank to keep the saved value.
             </p>
           </div>
           <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 shrink-0">
@@ -579,7 +592,7 @@ export default function PayPortal() {
           </FormField>
         </div>
         <div className="mb-3">
-          <div className="text-xs text-slate-500 mb-1.5">Payment methods</div>
+          <div className="text-xs text-slate-500 mb-1.5">PayMongo checkout methods</div>
           <div className="flex flex-wrap gap-2">
             {PAYMONGO_METHODS.map((m) => (
               <label
@@ -614,6 +627,66 @@ export default function PayPortal() {
             }
           />
         </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 mb-3">
+          <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Pay page channels</div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Control what subscribers see on <span className="font-mono">/pay/…</span>. With PayMongo on, turn off
+                manual GCash/Maya QR proof and keep Cash for merchant walk-ins.
+              </p>
+            </div>
+            {paymongoEnabled && (
+              <button
+                type="button"
+                className="btn-secondary text-xs py-1.5 px-2.5 shrink-0"
+                onClick={() => {
+                  setManualGcash(false);
+                  setManualMaya(false);
+                  setManualCash(true);
+                }}
+              >
+                PayMongo + Cash only
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="rounded border-slate-300"
+                checked={manualGcash}
+                onChange={(e) => setManualGcash(e.target.checked)}
+              />
+              Manual GCash (QR + proof)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="rounded border-slate-300"
+                checked={manualMaya}
+                onChange={(e) => setManualMaya(e.target.checked)}
+              />
+              Manual Maya (QR + proof)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="rounded border-slate-300"
+                checked={manualCash}
+                onChange={(e) => setManualCash(e.target.checked)}
+              />
+              Cash at merchant
+            </label>
+          </div>
+          {paymongoEnabled && (manualGcash || manualMaya) && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 mt-2.5">
+              Manual wallet proof still requires staff approval. Prefer PayMongo for instant activation.
+            </p>
+          )}
+        </div>
+
         <div className="flex flex-wrap gap-2 items-end">
           <label className="text-sm flex-1 min-w-[240px]">
             <span className="text-xs text-slate-500">Webhook URL</span>
@@ -638,7 +711,18 @@ export default function PayPortal() {
 
       <Card>
         <div className="text-sm text-slate-500 mb-4">
-          Subscribers submit GCash, Maya, or Cash proof on the pay page. Items <b>For approval</b> sort to the top of the Links tab — Approve restores internet.
+          {paymongoEnabled && !manualGcash && !manualMaya ? (
+            <>
+              Subscribers pay <b>online via PayMongo</b> (auto-activates) or <b>Cash</b> at a merchant (awaits approval).
+              Items <b>For approval</b> are mostly cash proofs — Approve restores internet when needed.
+            </>
+          ) : (
+            <>
+              Subscribers can submit GCash, Maya, or Cash proof on the pay page
+              {paymongoEnabled ? ' (or pay instantly with PayMongo)' : ''}. Items <b>For approval</b> sort to the top of
+              the Links tab — Approve restores internet.
+            </>
+          )}{' '}
           Paid subscribers are listed under the <b>Paid</b> tab.
           Manage QR photos and cash merchants under{' '}
           <a href="/subscriber-portal?tab=payments" className="text-brand-600 font-semibold hover:underline">

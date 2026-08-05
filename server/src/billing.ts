@@ -1197,6 +1197,26 @@ export function submitPaymentProof(
   if (channel !== 'gcash' && channel !== 'maya' && channel !== 'cash') {
     throw new Error('Select GCash, Maya, or Cash as the payment channel');
   }
+  // Honor admin toggles for manual GCash / Maya / Cash on the public pay page.
+  try {
+    const flags = db
+      .prepare('SELECT pay_manual_gcash, pay_manual_maya, pay_manual_cash FROM app_settings WHERE id = 1')
+      .get() as { pay_manual_gcash?: number; pay_manual_maya?: number; pay_manual_cash?: number } | undefined;
+    if (flags) {
+      if (channel === 'gcash' && flags.pay_manual_gcash != null && Number(flags.pay_manual_gcash) !== 1) {
+        throw new Error('Manual GCash proof is disabled. Pay online with PayMongo or choose Cash.');
+      }
+      if (channel === 'maya' && flags.pay_manual_maya != null && Number(flags.pay_manual_maya) !== 1) {
+        throw new Error('Manual Maya proof is disabled. Pay online with PayMongo or choose Cash.');
+      }
+      if (channel === 'cash' && flags.pay_manual_cash != null && Number(flags.pay_manual_cash) !== 1) {
+        throw new Error('Cash payment is disabled on this portal.');
+      }
+    }
+  } catch (e: any) {
+    if (String(e?.message || '').includes('disabled')) throw e;
+    /* columns may not exist yet on very old DBs */
+  }
 
   let merchantId: number | null = null;
   let merchantName: string | null = null;

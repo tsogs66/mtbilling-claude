@@ -15,6 +15,11 @@ export type PaymongoSettings = {
   secretKeySet: boolean;
   publicKeySet: boolean;
   webhookSecretSet: boolean;
+  /** Manual QR + proof upload on the pay page (not PayMongo hosted checkout). */
+  manualGcash: boolean;
+  manualMaya: boolean;
+  /** Cash at merchant + ISP confirmation. */
+  manualCash: boolean;
 };
 
 const DEFAULT_METHODS = ['gcash', 'paymaya', 'qrph'];
@@ -46,6 +51,28 @@ export function ensurePaymongoColumns() {
       db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
     }
   }
+  // Pay-page channel toggles. When PayMongo is already live, prefer hosted checkout
+  // over manual GCash/Maya QR proof (cash stays available).
+  const addingManual = !columnExists('app_settings', 'pay_manual_gcash');
+  for (const [col, type] of [
+    ['pay_manual_gcash', 'INTEGER DEFAULT 1'],
+    ['pay_manual_maya', 'INTEGER DEFAULT 1'],
+    ['pay_manual_cash', 'INTEGER DEFAULT 1'],
+  ] as [string, string][]) {
+    if (!columnExists('app_settings', col)) {
+      db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
+    }
+  }
+  if (addingManual) {
+    const r = db.prepare('SELECT paymongo_enabled FROM app_settings WHERE id = 1').get() as
+      | { paymongo_enabled?: number }
+      | undefined;
+    if (Number(r?.paymongo_enabled) === 1) {
+      db.prepare(
+        `UPDATE app_settings SET pay_manual_gcash = 0, pay_manual_maya = 0, pay_manual_cash = 1 WHERE id = 1`
+      ).run();
+    }
+  }
   if (!columnExists('payment_links', 'paymongo_checkout_id')) {
     db.exec('ALTER TABLE payment_links ADD COLUMN paymongo_checkout_id TEXT');
   }
@@ -71,7 +98,37 @@ export function getPaymongoSettings(): PaymongoSettings {
     secretKeySet: !!r.paymongo_secret_key,
     publicKeySet: !!r.paymongo_public_key,
     webhookSecretSet: !!r.paymongo_webhook_secret,
+    manualGcash: r.pay_manual_gcash == null ? true : Number(r.pay_manual_gcash) === 1,
+    manualMaya: r.pay_manual_maya == null ? true : Number(r.pay_manual_maya) === 1,
+    manualCash: r.pay_manual_cash == null ? true : Number(r.pay_manual_cash) === 1,
   };
+}
+
+/** Public pay-page options (safe to expose without secrets). */
+export function getPublicPayOptions() {
+  const s = getPaymongoSettings();
+  const paymongoLive = s.enabled && s.secretKeySet;
+  return {
+    paymongo: paymongoLive,
+    methods: paymongoLive ? s.methods : [],
+    manualGcash: s.manualGcash,
+    manualMaya: s.manualMaya,
+    manualCash: s.manualCash,
+  };
+}
+
+export function assertManualChannelAllowed(channel: string) {
+  const s = getPaymongoSettings();
+  const ch = String(channel || '').toLowerCase().trim();
+  if (ch === 'gcash' && !s.manualGcash) {
+    throw new Error('Manual GCash proof is disabled. Pay online with PayMongo or choose Cash.');
+  }
+  if (ch === 'maya' && !s.manualMaya) {
+    throw new Error('Manual Maya proof is disabled. Pay online with PayMongo or choose Cash.');
+  }
+  if (ch === 'cash' && !s.manualCash) {
+    throw new Error('Cash payment is disabled on this portal.');
+  }
 }
 
 export function updatePaymongoSettings(patch: Record<string, unknown>) {
@@ -96,10 +153,41 @@ export function updatePaymongoSettings(patch: Record<string, unknown>) {
     patch.webhookSecret != null && String(patch.webhookSecret).trim()
       ? String(patch.webhookSecret).trim()
       : cur.paymongo_webhook_secret;
+  const manualGcash =
+    patch.manualGcash != null
+      ? patch.manualGcash
+        ? 1
+        : 0
+      : cur.pay_manual_gcash == null
+        ? 1
+        : Number(cur.pay_manual_gcash) === 1
+          ? 1
+          : 0;
+  const manualMaya =
+    patch.manualMaya != null
+      ? patch.manualMaya
+        ? 1
+        : 0
+      : cur.pay_manual_maya == null
+        ? 1
+        : Number(cur.pay_manual_maya) === 1
+          ? 1
+          : 0;
+  const manualCash =
+    patch.manualCash != null
+      ? patch.manualCash
+        ? 1
+        : 0
+      : cur.pay_manual_cash == null
+        ? 1
+        : Number(cur.pay_manual_cash) === 1
+          ? 1
+          : 0;
   db.prepare(
     `UPDATE app_settings SET paymongo_enabled = ?, paymongo_secret_key = ?, paymongo_public_key = ?,
-       paymongo_webhook_secret = ?, paymongo_methods = ? WHERE id = 1`
-  ).run(enabled, secret || null, pub || null, wh || null, methods);
+       paymongo_webhook_secret = ?, paymongo_methods = ?,
+       pay_manual_gcash = ?, pay_manual_maya = ?, pay_manual_cash = ? WHERE id = 1`
+  ).run(enabled, secret || null, pub || null, wh || null, methods, manualGcash, manualMaya, manualCash);
   return getPaymongoSettings();
 }
 

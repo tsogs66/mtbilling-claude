@@ -27,6 +27,7 @@ import {
   updateBackupAutoSettings,
   getFairUseThrottleSettings,
   updateFairUseThrottleSettings,
+  getPublicPayOptions,
 } from './paymongo.js';
 import { startAutoBackupScheduler, runAutoBackupOnce } from './autoBackup.js';
 import { verifyTotpToken } from './totp.js';
@@ -540,11 +541,17 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
   }
 });
 
-/** Public: PayMongo availability for a pay link page. */
+/** Public: PayMongo availability + which manual channels the pay page shows. */
 app.get('/api/public/paymongo/status', (_req, res) => {
   ensurePaymongoColumns();
-  const s = getPaymongoSettings();
-  res.json({ enabled: s.enabled && s.secretKeySet, methods: s.methods });
+  const opts = getPublicPayOptions();
+  res.json({
+    enabled: opts.paymongo,
+    methods: opts.methods,
+    manualGcash: opts.manualGcash,
+    manualMaya: opts.manualMaya,
+    manualCash: opts.manualCash,
+  });
 });
 
 /** Public: start PayMongo hosted checkout for a payment link token. */
