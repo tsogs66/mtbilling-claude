@@ -829,35 +829,65 @@ export default function SubscriberPay() {
                 </div>
                 <button
                   type="button"
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
+                  className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
                   disabled={paymongoBusy}
                   onClick={() => void startPaymongo()}
                 >
-                  {paymongoBusy ? <Loader2 className="animate-spin" size={18} /> : <CreditCard size={18} />}
-                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online (QR Ph)'}
+                  {paymongoBusy ? (
+                    <Loader2 className="animate-spin" size={18} />
+                  ) : (
+                    <img
+                      src="/wallets/qrph.svg"
+                      alt="QR Ph"
+                      className="h-8 w-auto rounded-md shadow-sm ring-1 ring-white/25 bg-[#1B4F9C]"
+                    />
+                  )}
+                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                 </button>
-                {(manualGcash || manualMaya || manualCash) && (
-                  <p className="text-center text-xs text-slate-400">
-                    {manualGcash || manualMaya
-                      ? 'Or use a method below'
-                      : 'Or pay cash at a merchant below'}
-                  </p>
+                {manualCash && !manualGcash && !manualMaya && (
+                  <button
+                    type="button"
+                    className={`w-full inline-flex items-center justify-center gap-2.5 rounded-xl font-semibold text-sm px-4 py-3.5 transition ${
+                      channel === 'cash'
+                        ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-600/25 ring-2 ring-amber-300/50'
+                        : 'bg-amber-500 hover:bg-amber-400 text-white shadow-lg shadow-amber-500/20'
+                    }`}
+                    onClick={() => {
+                      setChannel('cash');
+                      setScreenshot(null);
+                      setOcrAmount(null);
+                      setCopied(false);
+                    }}
+                  >
+                    <img
+                      src="/wallets/cash.svg"
+                      alt=""
+                      className="h-8 w-auto rounded-md shadow-sm ring-1 ring-white/25 bg-[#B45309]"
+                    />
+                    Cash
+                  </button>
+                )}
+                {(manualGcash || manualMaya) && (
+                  <p className="text-center text-xs text-slate-400">Or use a method below</p>
                 )}
               </div>
             )}
 
             {!paid && !expired && !submitted && (manualGcash || manualMaya || manualCash) && (
               <>
-                {/* Channel select */}
+                {/* Channel select — skip tab strip when PayMongo + Cash-only (Cash CTA above) */}
+                {(manualGcash || manualMaya || !(paymongoEnabled && manualCash)) && (
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
-                    {paymongoEnabled && !manualGcash && !manualMaya ? 'Or pay with' : 'Pay with'}
+                    {paymongoEnabled ? 'Or pay with' : 'Pay with'}
                   </div>
                   <div
                     className={`grid gap-2 ${
-                      [manualGcash, manualMaya, manualCash].filter(Boolean).length >= 3
+                      [manualGcash, manualMaya, manualCash && !(paymongoEnabled && !manualGcash && !manualMaya)]
+                        .filter(Boolean).length >= 3
                         ? 'grid-cols-3'
-                        : [manualGcash, manualMaya, manualCash].filter(Boolean).length === 2
+                        : [manualGcash, manualMaya, manualCash && !(paymongoEnabled && !manualGcash && !manualMaya)]
+                              .filter(Boolean).length === 2
                           ? 'grid-cols-2'
                           : 'grid-cols-1'
                     }`}
@@ -902,7 +932,7 @@ export default function SubscriberPay() {
                       <img src="/wallets/maya.svg" alt="Maya" className="h-8 w-auto max-w-full" />
                     </button>
                     )}
-                    {manualCash && (
+                    {manualCash && !(paymongoEnabled && !manualGcash && !manualMaya) && (
                     <button
                       type="button"
                       role="tab"
@@ -913,14 +943,20 @@ export default function SubscriberPay() {
                         setOcrAmount(null);
                         setCopied(false);
                       }}
-                      className={`flex flex-col items-center justify-center gap-1 rounded-2xl border px-2 py-3 transition ${
+                      className={`inline-flex items-center justify-center gap-2.5 rounded-xl border px-4 py-3.5 transition ${
                         channel === 'cash'
                           ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-400/40'
                           : 'border-slate-200 bg-slate-50 hover:bg-white'
                       }`}
                     >
-                      <Banknote size={22} className={channel === 'cash' ? 'text-amber-700' : 'text-slate-500'} />
-                      <span className={`text-xs font-bold ${channel === 'cash' ? 'text-amber-800' : 'text-slate-600'}`}>Cash</span>
+                      <img
+                        src="/wallets/cash.svg"
+                        alt=""
+                        className="h-8 w-auto rounded-md shadow-sm"
+                      />
+                      <span className={`text-sm font-bold ${channel === 'cash' ? 'text-amber-900' : 'text-slate-700'}`}>
+                        Cash
+                      </span>
                     </button>
                     )}
                   </div>
@@ -940,6 +976,7 @@ export default function SubscriberPay() {
                     </div>
                   )}
                 </div>
+                )}
 
                 {channel === 'cash' && (
                   <div>
