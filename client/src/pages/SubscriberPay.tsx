@@ -784,6 +784,9 @@ export default function SubscriberPay() {
                     How to pay cash
                   </div>
                   <ol className="text-sm text-slate-600 space-y-2 list-decimal pl-5">
+                    <li>
+                      Tap <b>Cash</b>.
+                    </li>
                     <li>Select from merchants listed below.</li>
                     <li>
                       Click <b>Submit cash payment for review</b>.
