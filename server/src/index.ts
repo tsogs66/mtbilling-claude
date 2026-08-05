@@ -157,6 +157,7 @@ import {
 } from './ispOps.js';
 import { initTwingate, twingateRouter } from './twingate.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
+import { cashierRouter, publicCashierRouter, cashierLoginExtras } from './cashier.js';
 import {
   getPublicSettings as getNotifySettings,
   updateSettings as updateNotifySettings,
@@ -285,9 +286,24 @@ const PORT = Number(process.env.PORT) || 4000;
 // ---- Auth ----
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
-  const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
-    | { id: number; username: string; password_hash: string; role: string; totp_enabled?: number }
-    | undefined;
+  const login = String(username || '').trim();
+  const row = (db
+    .prepare(
+      `SELECT * FROM users WHERE username = ? OR lower(username) = lower(?) OR lower(COALESCE(email,'')) = lower(?) LIMIT 1`
+    )
+    .get(login, login, login) || null) as
+    | {
+        id: number;
+        username: string;
+        password_hash: string;
+        role: string;
+        totp_enabled?: number;
+        must_change_password?: number;
+        cashier_theme?: string;
+        email?: string;
+        mobile?: string;
+      }
+    | null;
   if (!row || !bcrypt.compareSync(password || '', row.password_hash)) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
@@ -296,7 +312,7 @@ app.post('/api/login', (req, res) => {
   }
   const token = signToken({ id: row.id, username: row.username, role: row.role });
   const session = sessionPayload(row);
-  res.json({ token, ...session });
+  res.json({ token, ...session, ...cashierLoginExtras(row) });
 });
 
 /** Completes login after /api/login returned requiresTotp: verifies the 6-digit
@@ -342,25 +358,24 @@ app.post('/api/login/totp', (req, res) => {
       `${row.username} logged in using a 2FA backup code`
     );
   }
-  res.json({ token, ...session });
+  res.json({ token, ...session, ...cashierLoginExtras(row) });
 });
 
 app.get('/api/me', requireAuth, (req: AuthedRequest, res) => {
   if (!req.user) return res.status(401).json({ error: 'missing user' });
-  const row = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(req.user.id) as
-    | { id: number; username: string; role: string }
-    | undefined;
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id) as any;
   if (!row) return res.status(401).json({ error: 'user not found' });
   const session = sessionPayload(row);
+  const extras = cashierLoginExtras(row);
   // Sliding refresh so long ops sessions don't die at a hard 12h cliff.
   const auth = String(req.headers.authorization || '');
   const presented = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (presented && tokenNeedsRefresh(presented)) {
     const token = signToken({ id: row.id, username: row.username, role: row.role });
     res.setHeader('X-Mt-Token', token);
-    return res.json({ ...session, token });
+    return res.json({ ...session, ...extras, token });
   }
-  res.json(session);
+  res.json({ ...session, ...extras });
 });
 
 // Public: panel hardware ID for license / password-reset activator tools
@@ -510,6 +525,7 @@ app.get('/api/health', (_req, res) => {
 
 /** Public subscriber self-service portal (no JWT). */
 app.use('/api', publicPortalRouter);
+app.use('/api', publicCashierRouter);
 
 // ---- Hub ↔ Edge DB sync (device token auth; no staff JWT) ----
 function syncAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -4804,6 +4820,7 @@ app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
 app.use('/api', twingateRouter);
 app.use('/api', nocRouter);
+app.use('/api', cashierRouter);
 
 // Windows / single-process deploys: serve the Vite SPA from Express (no nginx).
 // Set SERVE_STATIC=1 and optionally STATIC_ROOT. Must run after /api routes.

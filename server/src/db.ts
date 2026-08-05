@@ -788,6 +788,8 @@ export function migrate() {
     // Who opened the link: admin panel vs subscriber portal (reverse create)
     ['created_by', "TEXT DEFAULT 'admin'"],
     ['merchant_id', 'INTEGER'],
+    ['cashier_user_id', 'INTEGER'],
+    ['cashier_username', 'TEXT'],
   ];
   for (const [col, type] of payLinkCols) {
     if (!columnExists('payment_links', col)) db.exec(`ALTER TABLE payment_links ADD COLUMN ${col} ${type}`);
@@ -816,9 +818,21 @@ export function migrate() {
     ['totp_secret', 'TEXT'],
     ['totp_enabled', 'INTEGER DEFAULT 0'],
     ['totp_backup_codes', 'TEXT'],
+    ['email', 'TEXT'],
+    ['mobile', 'TEXT'],
+    ['must_change_password', 'INTEGER DEFAULT 0'],
+    ['cashier_theme', "TEXT DEFAULT 'matrix'"],
   ];
   for (const [col, type] of userCols) {
     if (!columnExists('users', col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+  }
+
+  const txCashierCols: [string, string][] = [
+    ['cashier_user_id', 'INTEGER'],
+    ['cashier_username', 'TEXT'],
+  ];
+  for (const [col, type] of txCashierCols) {
+    if (!columnExists('transactions', col)) db.exec(`ALTER TABLE transactions ADD COLUMN ${col} ${type}`);
   }
 }
 

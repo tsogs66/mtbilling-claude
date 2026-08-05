@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ShieldCheck, Plus, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { ShieldCheck, Plus, Pencil, Trash2, UserPlus, Wallet } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Modal, ModalFooter, FormField, PageHeader } from '../components/ui';
 import { api } from '../api';
@@ -14,12 +14,18 @@ const PERMISSIONS = [
 export default function PanelRoles() {
   const [roles, setRoles] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [cashiers, setCashiers] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const [editUser, setEditUser] = useState<any>(null);
+  const [editCashier, setEditCashier] = useState<any>(null);
 
   const load = () => {
     api.get('/roles').then((r) => setRoles(r.data));
     api.get('/panel-users').then((r) => setUsers(r.data));
+    api
+      .get('/cashiers')
+      .then((r) => setCashiers(r.data.cashiers || []))
+      .catch(() => setCashiers([]));
   };
   useEffect(() => {
     load();
@@ -45,13 +51,76 @@ export default function PanelRoles() {
     }
   };
 
+  const delCashier = async (id: number) => {
+    if (!confirm('Delete this cashier account?')) return;
+    try {
+      await api.delete(`/cashiers/${id}`);
+      load();
+    } catch (e: any) {
+      alert(e?.response?.data?.error || 'Could not delete cashier');
+    }
+  };
+
   return (
     <Layout title="Panel Roles">
       <PageHeader
         title="Roles & Users"
-        description="Assign menu access by role. The Read-only role can view the entire system but cannot make changes."
+        description="Assign menu access by role. Create cashier portal accounts with email + mobile (initial password = mobile)."
         icon={ShieldCheck}
       />
+
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-700">Cashier portal accounts</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Login at <code className="text-slate-700">/cashier</code> — username is the email; initial password is the mobile number.
+            Recovery uses email + mobile.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setEditCashier({ email: '', mobile: '' })}
+        >
+          <Wallet size={16} /> New Cashier
+        </button>
+      </div>
+      <div className="card mb-6 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-slate-400 bg-slate-50 border-b border-slate-100">
+              <th className="px-4 py-2.5">Email (login)</th>
+              <th className="px-4 py-2.5">Mobile</th>
+              <th className="px-4 py-2.5">Theme</th>
+              <th className="px-4 py-2.5 w-40" />
+            </tr>
+          </thead>
+          <tbody>
+            {cashiers.map((c) => (
+              <tr key={c.id} className="border-b border-slate-50">
+                <td className="px-4 py-2.5 font-medium text-slate-800">{c.email}</td>
+                <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{c.mobile}</td>
+                <td className="px-4 py-2.5 text-slate-500 text-xs capitalize">{c.theme}</td>
+                <td className="px-4 py-2.5 text-right space-x-2">
+                  <button type="button" className="text-sky-600 hover:underline" onClick={() => setEditCashier(c)}>
+                    Edit
+                  </button>
+                  <button type="button" className="text-rose-600 hover:underline" onClick={() => delCashier(c.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {cashiers.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
+                  No cashier accounts yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-slate-700">Panel users</h2>
@@ -139,6 +208,16 @@ export default function PanelRoles() {
           onClose={() => setEditUser(null)}
           onSaved={() => {
             setEditUser(null);
+            load();
+          }}
+        />
+      )}
+      {editCashier && (
+        <CashierModal
+          cashier={editCashier}
+          onClose={() => setEditCashier(null)}
+          onSaved={() => {
+            setEditCashier(null);
             load();
           }}
         />
@@ -239,6 +318,73 @@ function UserModal({ user, roles, onClose, onSaved }: any) {
             ))}
           </select>
         </FormField>
+      </div>
+    </Modal>
+  );
+}
+
+function CashierModal({ cashier, onClose, onSaved }: any) {
+  const [form, setForm] = useState({
+    email: cashier.email || '',
+    mobile: cashier.mobile || '',
+    resetPasswordToMobile: false,
+  });
+  const [busy, setBusy] = useState(false);
+  const isEdit = !!cashier.id;
+  const save = async () => {
+    if (!form.email.trim() || !form.mobile.trim()) return;
+    setBusy(true);
+    try {
+      if (isEdit) {
+        await api.put(`/cashiers/${cashier.id}`, form);
+      } else {
+        await api.post('/cashiers', form);
+      }
+      onSaved();
+    } catch (e: any) {
+      alert(e?.response?.data?.error || 'Could not save cashier');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={isEdit ? 'Edit Cashier' : 'New Cashier'}
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Save Cashier" />}
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-slate-500">
+          Email is the login username. Initial password is the mobile number. Cashiers use{' '}
+          <code className="text-slate-700">/cashier</code> only (not the full staff panel).
+        </p>
+        <FormField label="Email" required>
+          <input
+            className="input"
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="cashier@example.com"
+          />
+        </FormField>
+        <FormField label="Mobile number" required hint="Used as initial password and for account recovery">
+          <input
+            className="input"
+            value={form.mobile}
+            onChange={(e) => setForm({ ...form, mobile: e.target.value })}
+            placeholder="09XXXXXXXXX"
+          />
+        </FormField>
+        {isEdit && (
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.resetPasswordToMobile}
+              onChange={(e) => setForm({ ...form, resetPasswordToMobile: e.target.checked })}
+            />
+            Reset password to this mobile number
+          </label>
+        )}
       </div>
     </Modal>
   );

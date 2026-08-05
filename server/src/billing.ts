@@ -833,6 +833,8 @@ export async function recordPppoePayment(
     discount_days?: number;
     external_ref?: string;
     source?: string;
+    cashierUserId?: number | null;
+    cashierUsername?: string | null;
   } = {}
 ) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
@@ -890,13 +892,23 @@ export async function recordPppoePayment(
   };
 
   db.prepare(
-    'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(userId, user.customer_name || user.username, total, 'payment', paymentDate, JSON.stringify(receipt));
+    'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    userId,
+    user.customer_name || user.username,
+    total,
+    'payment',
+    paymentDate,
+    JSON.stringify(receipt),
+    opts.cashierUserId != null ? Number(opts.cashierUserId) : null,
+    opts.cashierUsername ? String(opts.cashierUsername) : null
+  );
 
+  const cashierNote = opts.cashierUsername ? ` cashier=${opts.cashierUsername}` : '';
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'billing',
-    `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}`
+    `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}${cashierNote}`
   );
 
   // The payment itself (DB update above) is already committed at this point.
@@ -1026,8 +1038,10 @@ export function createPaymentLink(opts: {
   amount?: number | null;
   ttlHours?: number;
   baseUrl?: string;
-  /** admin = panel create; portal = subscriber initiated; system = reminders */
-  createdBy?: 'admin' | 'portal' | 'system';
+  /** admin = panel create; portal = subscriber initiated; system = reminders; cashier = cashier portal */
+  createdBy?: 'admin' | 'portal' | 'system' | 'cashier';
+  cashierUserId?: number | null;
+  cashierUsername?: string | null;
 }) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
   if (!user) throw new Error('User not found');
@@ -1039,14 +1053,19 @@ export function createPaymentLink(opts: {
   const ttl = Math.max(1, Math.floor(Number(opts.ttlHours) || 15 * 24));
   const expiresAt = new Date(Date.now() + ttl * 3600000).toISOString();
   const createdBy =
-    opts.createdBy === 'portal' || opts.createdBy === 'system' || opts.createdBy === 'admin'
+    opts.createdBy === 'portal' ||
+    opts.createdBy === 'system' ||
+    opts.createdBy === 'admin' ||
+    opts.createdBy === 'cashier'
       ? opts.createdBy
       : 'admin';
+  const cashierUserId = opts.cashierUserId != null ? Number(opts.cashierUserId) : null;
+  const cashierUsername = opts.cashierUsername ? String(opts.cashierUsername) : null;
 
   const info = db.prepare(
-    `INSERT INTO payment_links (pppoe_user_id, token, amount, months, status, expires_at, created_by)
-     VALUES (?, ?, ?, ?, 'pending', ?, ?)`
-  ).run(opts.pppoeUserId, token, amount, months, expiresAt, createdBy);
+    `INSERT INTO payment_links (pppoe_user_id, token, amount, months, status, expires_at, created_by, cashier_user_id, cashier_username)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+  ).run(opts.pppoeUserId, token, amount, months, expiresAt, createdBy, cashierUserId, cashierUsername);
 
   const id = Number(info.lastInsertRowid);
   const path = `/pay/${token}`;
@@ -1346,6 +1365,8 @@ export function listPaymentLinks(limit = 100, opts?: { status?: string; excludeS
               pl.reviewed_at AS reviewedAt, pl.review_note AS reviewNote,
               pl.merchant_id AS merchantId,
               COALESCE(NULLIF(pl.created_by, ''), 'admin') AS createdBy,
+              pl.cashier_user_id AS cashierUserId,
+              pl.cashier_username AS cashierUsername,
               u.username, u.customer_name AS customer, u.account_number AS account,
               m.name AS merchantName
        FROM payment_links pl
@@ -1480,4 +1501,132 @@ export function listPayLinkResendCandidates(withinDays = 10) {
             : ['non-payment', 'expired', 'overdue'].includes(String(u.status || '').toLowerCase()),
       };
     });
+}
+
+/**
+ * Cashier portal: collect payment for a subscriber, store proof, activate/extend
+ * the account immediately, and attribute the payment to the cashier user.
+ */
+export async function cashierCollectPayment(opts: {
+  pppoeUserId: number;
+  months?: number;
+  amount?: number | null;
+  channel: string;
+  reference?: string;
+  proofImage?: string | null;
+  merchantId?: number | null;
+  cashier: { id: number; username: string };
+}) {
+  const channel = String(opts.channel || '').toLowerCase().trim();
+  if (channel !== 'gcash' && channel !== 'maya' && channel !== 'cash') {
+    throw new Error('Select GCash, Maya, or Cash as the payment channel');
+  }
+
+  let merchantId: number | null = null;
+  let merchantName: string | null = null;
+  if (channel === 'cash') {
+    const mid = Number(opts.merchantId);
+    if (mid && Number.isFinite(mid)) {
+      const merchant = getPaymentMerchant(mid);
+      if (!merchant || !merchant.active) throw new Error('Selected merchant is not available');
+      merchantId = merchant.id;
+      merchantName = merchant.name;
+    }
+  }
+
+  let reference = String(opts.reference || '').trim();
+  if (channel === 'cash') {
+    if (!reference || reference.length < 2) {
+      reference = merchantName
+        ? `Cash @ ${merchantName} (cashier ${opts.cashier.username})`
+        : `Cash (cashier ${opts.cashier.username})`;
+    }
+  } else if (!reference || reference.length < 4) {
+    throw new Error('Enter the transaction / reference number from the receipt');
+  }
+
+  const link = createPaymentLink({
+    pppoeUserId: opts.pppoeUserId,
+    months: opts.months,
+    amount: opts.amount,
+    createdBy: 'cashier',
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+  });
+
+  let proofPath: string | null = null;
+  const raw = opts.proofImage;
+  if (raw && typeof raw === 'string' && raw.startsWith('data:image/')) {
+    const m = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!m) throw new Error('Invalid screenshot format');
+    const mime = m[1].toLowerCase();
+    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 6 * 1024 * 1024) throw new Error('Screenshot must be 6MB or smaller');
+    const dir = path.resolve(process.cwd(), 'data', 'pay-proofs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = `cashier-${String(link.token).slice(0, 20)}-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(dir, file), buf);
+    proofPath = `pay-proofs/${file}`;
+  } else if (channel !== 'cash') {
+    throw new Error('Upload a payment proof screenshot');
+  }
+
+  db.prepare(
+    `UPDATE payment_links SET
+       pay_channel = ?,
+       external_ref = ?,
+       proof_image = ?,
+       merchant_id = ?,
+       submitted_at = datetime('now'),
+       cashier_user_id = ?,
+       cashier_username = ?
+     WHERE id = ?`
+  ).run(channel, reference, proofPath, merchantId, opts.cashier.id, opts.cashier.username, link.id);
+
+  const payment = await recordPppoePayment(opts.pppoeUserId, {
+    months: link.months || 1,
+    source: `cashier:${opts.cashier.username}`,
+    external_ref: reference,
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+  });
+
+  db.prepare(
+    `UPDATE payment_links SET status = 'paid', paid_at = datetime('now'),
+       reviewed_at = datetime('now'),
+       cashier_user_id = ?, cashier_username = ?
+     WHERE id = ?`
+  ).run(opts.cashier.id, opts.cashier.username, link.id);
+
+  try {
+    const amt = Number(link.amount) || Number((payment as any)?.amount) || 0;
+    pushPortalActivity({
+      pppoeUserId: Number(opts.pppoeUserId),
+      type: 'payment',
+      title: 'Payment posted by cashier',
+      body: `₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} was posted by cashier ${opts.cashier.username}.`,
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+      payload: {
+        transactionId: (payment as any)?.transactionId || (payment as any)?.id || null,
+        cashier: opts.cashier.username,
+      },
+    });
+  } catch {
+    /* ignore */
+  }
+
+  return {
+    ok: true,
+    linkId: link.id,
+    token: link.token,
+    amount: link.amount,
+    months: link.months,
+    channel,
+    reference,
+    merchantName,
+    cashier: opts.cashier.username,
+    payment,
+  };
 }

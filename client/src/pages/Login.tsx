@@ -177,6 +177,8 @@ export default function Login() {
       const result = await login(username, password);
       if (result.requiresTotp) {
         setPendingToken(result.pendingToken);
+      } else if ('isCashier' in result && result.isCashier) {
+        nav('/cashier');
       } else {
         nav('/');
       }

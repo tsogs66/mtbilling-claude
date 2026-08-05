@@ -38,6 +38,7 @@ export default function PayPortal() {
   const [resendBusy, setResendBusy] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [resendIds, setResendIds] = useState<Set<number>>(new Set());
+  const [resendSearch, setResendSearch] = useState('');
   const [toast, setToast] = useState('');
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [effective, setEffective] = useState<string | null>(null);
@@ -201,12 +202,35 @@ export default function PayPortal() {
     });
   };
 
+  const filteredResendClients = useMemo(() => {
+    const q = resendSearch.trim().toLowerCase();
+    if (!q) return resendClients;
+    return resendClients.filter((c: any) => {
+      const hay = [c.username, c.customer, c.customer_name, c.account, c.account_number, c.contact, c.email]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ');
+      return hay.includes(q);
+    });
+  }, [resendClients, resendSearch]);
+
   const allResendSelected =
-    resendClients.length > 0 && resendIds.size === resendClients.length;
+    filteredResendClients.length > 0 &&
+    filteredResendClients.every((c: any) => resendIds.has(Number(c.id)));
 
   const toggleResendAll = () => {
-    if (allResendSelected) setResendIds(new Set());
-    else setResendIds(new Set(resendClients.map((c) => Number(c.id))));
+    if (allResendSelected) {
+      setResendIds((prev) => {
+        const next = new Set(prev);
+        filteredResendClients.forEach((c: any) => next.delete(Number(c.id)));
+        return next;
+      });
+    } else {
+      setResendIds((prev) => {
+        const next = new Set(prev);
+        filteredResendClients.forEach((c: any) => next.add(Number(c.id)));
+        return next;
+      });
+    }
   };
 
   const resendSelected = async (channels: ('email' | 'sms')[] | 'copy') => {
@@ -510,18 +534,36 @@ export default function PayPortal() {
               type="checkbox"
               className="rounded border-slate-300"
               checked={allResendSelected}
-              disabled={!resendClients.length}
+              disabled={!filteredResendClients.length}
               onChange={toggleResendAll}
             />
-            Select all eligible clients
+            Select all{resendSearch.trim() ? ' matching' : ' eligible'} clients
+            {resendSearch.trim() ? (
+              <span className="text-xs font-normal text-slate-400">
+                ({filteredResendClients.length} of {resendClients.length})
+              </span>
+            ) : null}
           </label>
+          <div className="mb-2">
+            <input
+              className="input text-sm"
+              value={resendSearch}
+              onChange={(e) => setResendSearch(e.target.value)}
+              placeholder="Search username, customer, account, mobile…"
+              aria-label="Search resend payment links"
+            />
+          </div>
           <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
             {resendClients.length === 0 ? (
               <div className="text-xs text-slate-400 px-3 py-4 text-center">
                 No expired or near-expiry (≤{RESEND_WITHIN_DAYS} days) subscribers.
               </div>
+            ) : filteredResendClients.length === 0 ? (
+              <div className="text-xs text-slate-400 px-3 py-4 text-center">
+                No matches for “{resendSearch.trim()}”.
+              </div>
             ) : (
-              resendClients.map((c: any) => (
+              filteredResendClients.map((c: any) => (
                 <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -641,6 +683,13 @@ export default function PayPortal() {
                     ) : String(l.createdBy || l.created_by || '') === 'system' ? (
                       <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-slate-100 text-slate-600 ring-1 ring-slate-200">
                         System
+                      </span>
+                    ) : String(l.createdBy || l.created_by || '') === 'cashier' ? (
+                      <span
+                        className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                        title={l.cashierUsername || ''}
+                      >
+                        Cashier{l.cashierUsername ? `: ${l.cashierUsername}` : ''}
                       </span>
                     ) : (
                       <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200">
