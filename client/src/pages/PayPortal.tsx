@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare, Wallet } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction, TabPills } from '../components/ui';
 import { api, peso } from '../api';
@@ -38,6 +38,7 @@ export default function PayPortal() {
   const [resendBusy, setResendBusy] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [resendIds, setResendIds] = useState<Set<number>>(new Set());
+  const [resendSearch, setResendSearch] = useState('');
   const [toast, setToast] = useState('');
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [effective, setEffective] = useState<string | null>(null);
@@ -47,6 +48,9 @@ export default function PayPortal() {
   const [lanIp, setLanIp] = useState<string | null>(null);
   const [savingUrl, setSavingUrl] = useState(false);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
+  const [cashierDeposits, setCashierDeposits] = useState<any[]>([]);
+  const [depositBusyId, setDepositBusyId] = useState<number | null>(null);
+  const [depositProofPreview, setDepositProofPreview] = useState<string | null>(null);
 
   const show = (m: string) => {
     setToast(m);
@@ -85,6 +89,10 @@ export default function PayPortal() {
       })
       .catch(() => setResendClients([]));
     loadConfig().catch(() => undefined);
+    api
+      .get('/merchant-deposits', { params: { status: 'pending,accepted' } })
+      .then((r) => setCashierDeposits(r.data.deposits || []))
+      .catch(() => setCashierDeposits([]));
   };
 
   useEffect(() => {
@@ -201,12 +209,35 @@ export default function PayPortal() {
     });
   };
 
+  const filteredResendClients = useMemo(() => {
+    const q = resendSearch.trim().toLowerCase();
+    if (!q) return resendClients;
+    return resendClients.filter((c: any) => {
+      const hay = [c.username, c.customer, c.customer_name, c.account, c.account_number, c.contact, c.email]
+        .map((x) => String(x || '').toLowerCase())
+        .join(' ');
+      return hay.includes(q);
+    });
+  }, [resendClients, resendSearch]);
+
   const allResendSelected =
-    resendClients.length > 0 && resendIds.size === resendClients.length;
+    filteredResendClients.length > 0 &&
+    filteredResendClients.every((c: any) => resendIds.has(Number(c.id)));
 
   const toggleResendAll = () => {
-    if (allResendSelected) setResendIds(new Set());
-    else setResendIds(new Set(resendClients.map((c) => Number(c.id))));
+    if (allResendSelected) {
+      setResendIds((prev) => {
+        const next = new Set(prev);
+        filteredResendClients.forEach((c: any) => next.delete(Number(c.id)));
+        return next;
+      });
+    } else {
+      setResendIds((prev) => {
+        const next = new Set(prev);
+        filteredResendClients.forEach((c: any) => next.add(Number(c.id)));
+        return next;
+      });
+    }
   };
 
   const resendSelected = async (channels: ('email' | 'sms')[] | 'copy') => {
@@ -510,18 +541,36 @@ export default function PayPortal() {
               type="checkbox"
               className="rounded border-slate-300"
               checked={allResendSelected}
-              disabled={!resendClients.length}
+              disabled={!filteredResendClients.length}
               onChange={toggleResendAll}
             />
-            Select all eligible clients
+            Select all{resendSearch.trim() ? ' matching' : ' eligible'} clients
+            {resendSearch.trim() ? (
+              <span className="text-xs font-normal text-slate-400">
+                ({filteredResendClients.length} of {resendClients.length})
+              </span>
+            ) : null}
           </label>
+          <div className="mb-2">
+            <input
+              className="input text-sm"
+              value={resendSearch}
+              onChange={(e) => setResendSearch(e.target.value)}
+              placeholder="Search username, customer, account, mobile…"
+              aria-label="Search resend payment links"
+            />
+          </div>
           <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
             {resendClients.length === 0 ? (
               <div className="text-xs text-slate-400 px-3 py-4 text-center">
                 No expired or near-expiry (≤{RESEND_WITHIN_DAYS} days) subscribers.
               </div>
+            ) : filteredResendClients.length === 0 ? (
+              <div className="text-xs text-slate-400 px-3 py-4 text-center">
+                No matches for “{resendSearch.trim()}”.
+              </div>
             ) : (
-              resendClients.map((c: any) => (
+              filteredResendClients.map((c: any) => (
                 <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -642,6 +691,13 @@ export default function PayPortal() {
                       <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-slate-100 text-slate-600 ring-1 ring-slate-200">
                         System
                       </span>
+                    ) : String(l.createdBy || l.created_by || '') === 'cashier' ? (
+                      <span
+                        className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                        title={l.cashierUsername || ''}
+                      >
+                        Merchant{l.cashierUsername ? `: ${l.cashierUsername}` : ''}
+                      </span>
                     ) : (
                       <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200">
                         Admin
@@ -709,6 +765,129 @@ export default function PayPortal() {
         </div>
       </Card>
 
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="font-semibold text-slate-800 inline-flex items-center gap-2">
+              <Wallet size={18} className="text-amber-600" /> Merchant deposits
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Merchant partners activate subscribers immediately. Accept a deposit when the merchant remits collections (single or bulk) with optional proof.
+            </p>
+          </div>
+          <button type="button" className="btn-secondary text-sm" onClick={load}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                <th className="py-2">Deposit</th>
+                <th className="py-2">Merchant</th>
+                <th className="py-2">Mode</th>
+                <th className="py-2">Items</th>
+                <th className="py-2">Amount</th>
+                <th className="py-2">Status</th>
+                <th className="py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cashierDeposits.map((d) => (
+                <tr key={d.id} className="border-b border-slate-50 align-top">
+                  <td className="py-2.5">
+                    <div className="font-semibold">#{d.id}</div>
+                    <div className="text-[11px] text-slate-400">
+                      {String(d.createdAt || '').slice(0, 16).replace('T', ' ')}
+                    </div>
+                    {d.note && <div className="text-xs text-slate-500 mt-0.5">{d.note}</div>}
+                  </td>
+                  <td className="py-2.5 text-xs font-mono">{d.cashierUsername}</td>
+                  <td className="py-2.5 capitalize text-xs">{d.mode}</td>
+                  <td className="py-2.5">{d.itemCount}</td>
+                  <td className="py-2.5 font-semibold">{peso(d.amountTotal)}</td>
+                  <td className="py-2.5">
+                    <StatusBadge status={d.status === 'pending' ? 'For approval' : d.status} />
+                  </td>
+                  <td className="py-2.5">
+                    <div className="flex justify-end gap-1 flex-wrap">
+                      {(d.proofUrl || d.proofImage) && (
+                        <IconAction
+                          icon={ImageIcon}
+                          title="View deposit proof"
+                          tone="sky"
+                          onClick={async () => {
+                            try {
+                              const r = await api.get(`/merchant-deposits/${d.id}/proof`, {
+                                responseType: 'blob',
+                              });
+                              const url = URL.createObjectURL(r.data);
+                              setDepositProofPreview(url);
+                            } catch {
+                              show('Could not load deposit proof');
+                            }
+                          }}
+                        />
+                      )}
+                      {d.status === 'pending' && (
+                        <>
+                          <IconAction
+                            icon={Check}
+                            title="Accept as collected"
+                            tone="emerald"
+                            onClick={async () => {
+                              if (!confirm(`Accept deposit #${d.id} (${peso(d.amountTotal)}) from ${d.cashierUsername}?`)) return;
+                              setDepositBusyId(d.id);
+                              try {
+                                await api.post(`/merchant-deposits/${d.id}/accept`);
+                                show(`Deposit #${d.id} accepted`);
+                                load();
+                              } catch (e: any) {
+                                show(e?.response?.data?.error || 'Accept failed');
+                              } finally {
+                                setDepositBusyId(null);
+                              }
+                            }}
+                          />
+                          <IconAction
+                            icon={X}
+                            title="Reject (return to cashier)"
+                            tone="rose"
+                            onClick={async () => {
+                              const note = prompt('Reject reason (optional)') || '';
+                              setDepositBusyId(d.id);
+                              try {
+                                await api.post(`/merchant-deposits/${d.id}/reject`, { note });
+                                show(`Deposit #${d.id} rejected — items returned to cashier`);
+                                load();
+                              } catch (e: any) {
+                                show(e?.response?.data?.error || 'Reject failed');
+                              } finally {
+                                setDepositBusyId(null);
+                              }
+                            }}
+                          />
+                        </>
+                      )}
+                      {depositBusyId === d.id && (
+                        <span className="text-xs text-slate-400 self-center">…</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {cashierDeposits.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
+                    No merchant deposits yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
       {proofPreview && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
@@ -718,6 +897,22 @@ export default function PayPortal() {
           }}
         >
           <img src={proofPreview} alt="Payment proof" className="max-h-[90vh] max-w-full rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
+      {depositProofPreview && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => {
+            URL.revokeObjectURL(depositProofPreview);
+            setDepositProofPreview(null);
+          }}
+        >
+          <img
+            src={depositProofPreview}
+            alt="Merchant deposit proof"
+            className="max-h-[90vh] max-w-full rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </Layout>

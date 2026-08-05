@@ -37,6 +37,7 @@ import Invoices from './pages/Invoices';
 import Finance from './pages/Finance';
 import ClientPortal from './pages/ClientPortal';
 import PortalAdmin from './pages/PortalAdmin';
+import MerchantPortal from './pages/MerchantPortal';
 import RogueMacs from './pages/RogueMacs';
 import Twingate from './pages/Twingate';
 import Noc from './pages/Noc';
@@ -68,6 +69,9 @@ function Protected({ children }: { children: React.ReactNode }) {
       </div>
     );
   if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
+  if ((String(user.role || '').trim().toLowerCase() === 'cashier' || String(user.role || '').trim().toLowerCase() === 'merchant')) {
+    return <Navigate to="/merchant" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -95,9 +99,11 @@ export default function App() {
     <>
       <DocumentTitle />
       <Routes>
-      <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/login" element={user ? <Navigate to={['cashier','merchant'].includes(String(user.role || '').toLowerCase()) ? '/merchant' : '/'} replace /> : <Login />} />
       <Route path="/pay/:token" element={<SubscriberPay />} />
       <Route path="/portal" element={<ClientPortal />} />
+      <Route path="/merchant" element={<MerchantPortal />} />
+      <Route path="/cashier" element={<Navigate to="/merchant" replace />} />
       <Route
         path="/*"
         element={
