@@ -1324,8 +1324,20 @@ export function rejectPaymentProof(id: number, note?: string) {
   return { ok: true, status: 'rejected' };
 }
 
-export function listPaymentLinks(limit = 100) {
+export function listPaymentLinks(limit = 100, opts?: { status?: string; excludeStatus?: string }) {
   const resolved = resolvePublicBaseUrl();
+  const where: string[] = [];
+  const params: any[] = [];
+  if (opts?.status) {
+    where.push('pl.status = ?');
+    params.push(opts.status);
+  }
+  if (opts?.excludeStatus) {
+    where.push('pl.status != ?');
+    params.push(opts.excludeStatus);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  // For approval (submitted) always first, then pending, rejected, expired, paid; newest id within each.
   const rows = db
     .prepare(
       `SELECT pl.id, pl.token, pl.amount, pl.months, pl.status, pl.expires_at AS expiresAt, pl.paid_at AS paidAt,
@@ -1339,9 +1351,21 @@ export function listPaymentLinks(limit = 100) {
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
        LEFT JOIN payment_merchants m ON m.id = pl.merchant_id
-       ORDER BY pl.id DESC LIMIT ?`
+       ${whereSql}
+       ORDER BY
+         CASE pl.status
+           WHEN 'submitted' THEN 0
+           WHEN 'pending' THEN 1
+           WHEN 'rejected' THEN 2
+           WHEN 'expired' THEN 3
+           WHEN 'paid' THEN 4
+           ELSE 5
+         END,
+         COALESCE(pl.paid_at, pl.submitted_at, pl.created_at) DESC,
+         pl.id DESC
+       LIMIT ?`
     )
-    .all(limit) as any[];
+    .all(...params, limit) as any[];
   return rows.map((r) => {
     const path = `/pay/${r.token}`;
     return {

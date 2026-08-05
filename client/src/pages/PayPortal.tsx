@@ -2,15 +2,33 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
+import { Card, Toolbar, StatusBadge, IconAction, TabPills } from '../components/ui';
 import { api, peso } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
 
 const LINK_TTL_DAYS = 15;
 const RESEND_WITHIN_DAYS = 10;
 
+/** Open-link statuses: for-approval (submitted) first, then pending, rejected, expired. */
+function sortOpenPaymentLinks(rows: any[]) {
+  const rank: Record<string, number> = {
+    submitted: 0,
+    pending: 1,
+    rejected: 2,
+    expired: 3,
+  };
+  return [...rows].sort((a, b) => {
+    const ra = rank[String(a.status)] ?? 9;
+    const rb = rank[String(b.status)] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return Number(b.id) - Number(a.id);
+  });
+}
+
 export default function PayPortal() {
   const [links, setLinks] = useState<any[]>([]);
+  const [paidLinks, setPaidLinks] = useState<any[]>([]);
+  const [linksTab, setLinksTab] = useState<'open' | 'paid'>('open');
   const [clients, setClients] = useState<any[]>([]);
   const [resendClients, setResendClients] = useState<any[]>([]);
   const [userId, setUserId] = useState('');
@@ -47,7 +65,12 @@ export default function PayPortal() {
 
   const load = () => {
     api.get('/payment-links').then((r) => {
-      setLinks(r.data.links || []);
+      const open = (r.data.links || []).filter((l: any) => l.status !== 'paid');
+      const paid =
+        r.data.paid ||
+        (r.data.links || []).filter((l: any) => l.status === 'paid');
+      setLinks(sortOpenPaymentLinks(open));
+      setPaidLinks(paid);
       setSelected(new Set());
       if (r.data.effective !== undefined) setEffective(r.data.effective);
       if (r.data.warning !== undefined) setWarning(r.data.warning);
@@ -68,7 +91,13 @@ export default function PayPortal() {
     load();
   }, []);
 
-  const allSelected = links.length > 0 && selected.size === links.length;
+  const visibleLinks = linksTab === 'paid' ? paidLinks : links;
+  const awaitingCount = useMemo(
+    () => links.filter((l) => l.status === 'submitted').length,
+    [links]
+  );
+
+  const allSelected = visibleLinks.length > 0 && selected.size === visibleLinks.length;
   const someSelected = selected.size > 0;
 
   const toggleOne = (id: number) => {
@@ -82,7 +111,12 @@ export default function PayPortal() {
 
   const toggleAll = () => {
     if (allSelected) setSelected(new Set());
-    else setSelected(new Set(links.map((l) => Number(l.id))));
+    else setSelected(new Set(visibleLinks.map((l) => Number(l.id))));
+  };
+
+  const switchLinksTab = (key: string) => {
+    setLinksTab(key === 'paid' ? 'paid' : 'open');
+    setSelected(new Set());
   };
 
   const savePublicUrl = async () => {
@@ -392,13 +426,14 @@ export default function PayPortal() {
 
       <Card>
         <div className="text-sm text-slate-500 mb-4">
-          Subscribers submit GCash, Maya, or Cash proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
+          Subscribers submit GCash, Maya, or Cash proof on the pay page. Items <b>For approval</b> sort to the top of the Links tab — Approve restores internet.
+          Paid subscribers are listed under the <b>Paid</b> tab.
           Manage QR photos and cash merchants under{' '}
           <a href="/subscriber-portal?tab=payments" className="text-brand-600 font-semibold hover:underline">
             Subscriber Portal → Payments
           </a>
           .
-          New links are valid for <b>{LINK_TTL_DAYS} days</b>. Upload your merchant QR under <b>Company</b>.
+          New links are valid for <b>{LINK_TTL_DAYS} days</b>.
           Entries tagged <b>Portal</b> were opened by the subscriber (no admin link required).
         </div>
         <div className="flex flex-wrap gap-2 items-end mb-6">
@@ -516,10 +551,31 @@ export default function PayPortal() {
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <TabPills
+            active={linksTab}
+            onChange={switchLinksTab}
+            tabs={[
+              {
+                key: 'open',
+                label:
+                  awaitingCount > 0
+                    ? `Links (${links.length}) · ${awaitingCount} for approval`
+                    : `Links (${links.length})`,
+              },
+              { key: 'paid', label: `Paid (${paidLinks.length})` },
+            ]}
+          />
+        </div>
+
         <Toolbar
           left={
             <span>
-              Links <span className="font-semibold">{links.length}</span>
+              {linksTab === 'paid' ? 'Paid subscribers' : 'Links'}{' '}
+              <span className="font-semibold">{visibleLinks.length}</span>
+              {linksTab === 'open' && awaitingCount > 0 ? (
+                <span className="text-sky-600"> · {awaitingCount} for approval (top)</span>
+              ) : null}
               {someSelected ? <span className="text-slate-400"> · {selected.size} selected</span> : null}
             </span>
           }
@@ -546,9 +602,9 @@ export default function PayPortal() {
                     type="checkbox"
                     className="rounded border-slate-300"
                     checked={allSelected}
-                    disabled={!links.length}
+                    disabled={!visibleLinks.length}
                     onChange={toggleAll}
-                    aria-label="Select all payment links"
+                    aria-label={linksTab === 'paid' ? 'Select all paid links' : 'Select all payment links'}
                   />
                 </th>
                 <th className="py-2">Subscriber</th>
@@ -556,13 +612,13 @@ export default function PayPortal() {
                 <th className="py-2">From</th>
                 <th className="py-2">Status</th>
                 <th className="py-2">Proof / Ref</th>
-                <th className="py-2">Expires</th>
+                <th className="py-2">{linksTab === 'paid' ? 'Paid' : 'Expires'}</th>
                 <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {links.map((l) => (
-                <tr key={l.id} className={`border-b border-slate-50 align-top ${selected.has(l.id) ? 'bg-sky-50/40' : ''}`}>
+              {visibleLinks.map((l) => (
+                <tr key={l.id} className={`border-b border-slate-50 align-top ${selected.has(l.id) ? 'bg-sky-50/40' : ''} ${l.status === 'submitted' ? 'bg-sky-50/30' : ''}`}>
                   <td className="py-2.5 pr-2">
                     <input
                       type="checkbox"
@@ -592,7 +648,9 @@ export default function PayPortal() {
                       </span>
                     )}
                   </td>
-                  <td className="py-2.5"><StatusBadge status={l.status} /></td>
+                  <td className="py-2.5">
+                    <StatusBadge status={l.status === 'submitted' ? 'For approval' : l.status} />
+                  </td>
                   <td className="py-2.5 text-xs text-slate-600 min-w-[140px]">
                     {l.payChannel || l.externalRef || l.proofImage ? (
                       <div className="space-y-0.5">
@@ -614,7 +672,11 @@ export default function PayPortal() {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="py-2.5 text-xs text-slate-500">{(l.expiresAt || l.expires_at || '').toString().slice(0, 16).replace('T', ' ')}</td>
+                  <td className="py-2.5 text-xs text-slate-500">
+                    {linksTab === 'paid'
+                      ? String(l.paidAt || l.paid_at || l.reviewedAt || '').slice(0, 16).replace('T', ' ')
+                      : String(l.expiresAt || l.expires_at || '').slice(0, 16).replace('T', ' ')}
+                  </td>
                   <td className="py-2.5">
                     <div className="flex justify-end gap-1 flex-wrap">
                       {(l.status === 'submitted' || l.status === 'rejected') && (
@@ -635,9 +697,11 @@ export default function PayPortal() {
                   </td>
                 </tr>
               ))}
-              {links.length === 0 && (
+              {visibleLinks.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">No payment links yet.</td>
+                  <td colSpan={8} className="py-8 text-center text-slate-400">
+                    {linksTab === 'paid' ? 'No paid subscribers yet.' : 'No open payment links.'}
+                  </td>
                 </tr>
               )}
             </tbody>
