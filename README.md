@@ -9,27 +9,20 @@ topology), sales reporting, hotspot vouchers, inventory and more.
 
 ## Features
 
-- **Dashboard** – live host stats (CPU/RAM/disk of the Ubuntu host, via
-  `systeminformation`), per-router status (active / offline / expired PPPoE),
-  sales overview chart and queue-tree ranking.
-- **PPPoE & IPoE Management** – users, offline users, active connections,
-  profiles, servers and billing plans, with create/edit/delete.
-- **Clients Map** – Leaflet map plotting OLT, NAP boxes and subscribers with
-  **animated** server → OLT → NAP → ONU topology links and per-ONU online/offline
-  status (pulsing markers, live counts, auto-refresh).
-- **Billing / Payments** – executing a payment extends the subscription by whole
-  month(s) anchored on the **original expiration date** (the billing day-of-month
-  is preserved and never re-anchored to the payment day).
-- **Uptime Monitor** – live reachability + latency monitoring of the most popular
-  services, sites and games (Google, YouTube, Facebook, Steam, Roblox, Riot,
-  Cloudflare/Google DNS, etc.) grouped by category with sparklines and uptime %.
-- **Sales Report** – revenue chart (7d / 30d / 6m / 1y) and recent transactions.
-- **Stock & Inventory**, **Hotspot vouchers**, **Company profile**, **System Logs**,
-  plus placeholders for AI Scripting, Terminal, Network, Mikrotik Files, ZeroTier,
-  Panel Roles, Updater, Super Router and License.
-- **MikroTik RouterOS API integration** (`node-routeros`) with graceful fallback
-  to a seeded local database, so the panel is fully usable during development
-  without live hardware.
+- **Dashboard** – live host stats, per-router status, sales overview, queue-tree ranking
+- **PPPoE & IPoE Management** – users, active sessions, profiles, billing plans
+- **Clients Map** – OLT → NAP → ONU topology with live online/offline markers
+- **Billing / Payments** – day-of-month preserving renewals; payment links with proof review
+- **PayMongo** – hosted checkout (GCash / Maya / QRPh) with webhook auto-activation
+- **Merchant portal** (`/merchant`) – partner cash/online collect + deposit remittance (PWA + offline queue)
+- **Subscriber portal** (`/portal`) – self-serve balance, pay, tickets, plan change
+- **Notifications** – SMTP + SMS (iSMS / Semaphore / SMSGate) with system SMS logs
+- **Finance / Invoices / Job orders / Inventory / Hotspot / Fair-use / NOC / Outage monitor**
+- **Remote access** – Cloudflare Tunnel (preferred); Twingate; ZeroTier
+- **Local PC sync** – hub ↔ edge SQLite sync for offline branch PCs
+- **Windows installer** + flashable PC/SBC appliances
+- **Android** – Capacitor shell (panel URL on first launch)
+- **License, roles, updater, auto-backups, audit trail**
 
 ## Tech stack
 

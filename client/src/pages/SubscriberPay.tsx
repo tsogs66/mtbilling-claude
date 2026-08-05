@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
-  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft, Banknote,
+  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle, ArrowLeft, Banknote, CreditCard,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 import { getApiBase } from '../config';
@@ -254,6 +254,7 @@ async function recognizeReceiptText(dataUrl: string): Promise<string> {
 /** Public subscriber payment page — no panel login required. */
 export default function SubscriberPay() {
   const { token } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -271,6 +272,9 @@ export default function SubscriberPay() {
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [copied, setCopied] = useState(false);
+  const [paymongoEnabled, setPaymongoEnabled] = useState(false);
+  const [paymongoBusy, setPaymongoBusy] = useState(false);
+  const [banner, setBanner] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -289,7 +293,51 @@ export default function SubscriberPay() {
         if (j.externalRef) setRef(j.externalRef);
       })
       .catch((e) => setError(e.message || 'Could not load payment link'));
+    fetch(`${getApiBase()}/public/paymongo/status`)
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        setPaymongoEnabled(!!j.enabled);
+      })
+      .catch(() => setPaymongoEnabled(false));
   }, [token]);
+
+  useEffect(() => {
+    const paidQ = searchParams.get('paid');
+    const canceledQ = searchParams.get('canceled');
+    if (paidQ === '1') {
+      setBanner({ tone: 'ok', text: 'Payment received via PayMongo. Your account will activate shortly.' });
+      searchParams.delete('paid');
+      setSearchParams(searchParams, { replace: true });
+      // Refresh link status
+      fetch(`${getApiBase()}/public/pay/${token}`)
+        .then(async (r) => {
+          const j = await r.json();
+          if (r.ok) setData(j);
+        })
+        .catch(() => undefined);
+    } else if (canceledQ === '1') {
+      setBanner({ tone: 'warn', text: 'PayMongo checkout was canceled. You can try again or upload proof below.' });
+      searchParams.delete('canceled');
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const startPaymongo = async () => {
+    if (!token) return;
+    setPaymongoBusy(true);
+    setError('');
+    try {
+      const r = await fetch(`${getApiBase()}/public/pay/${token}/paymongo`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+      if (!j.checkoutUrl) throw new Error('No checkout URL returned');
+      window.location.href = j.checkoutUrl;
+    } catch (e: any) {
+      setBanner({ tone: 'warn', text: e.message || 'PayMongo checkout failed' });
+      setPaymongoBusy(false);
+    }
+  };
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -609,6 +657,18 @@ export default function SubscriberPay() {
           </div>
 
           <div className="p-5 sm:p-6 space-y-5">
+            {banner && (
+              <div
+                className={`rounded-xl px-3.5 py-2.5 text-sm ${
+                  banner.tone === 'ok'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-900 border border-amber-200'
+                }`}
+              >
+                {banner.text}
+              </div>
+            )}
+
             {/* How to pay */}
             <section className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
               <div className="flex items-start gap-2 text-slate-800 font-semibold text-sm mb-2">
@@ -632,6 +692,21 @@ export default function SubscriberPay() {
                 <p className="text-xs text-slate-500 mt-3 border-t border-slate-200 pt-3 whitespace-pre-wrap">{company.paymentInstructions}</p>
               )}
             </section>
+
+            {!paid && !expired && !submitted && paymongoEnabled && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
+                  disabled={paymongoBusy}
+                  onClick={() => void startPaymongo()}
+                >
+                  {paymongoBusy ? <Loader2 className="animate-spin" size={18} /> : <CreditCard size={18} />}
+                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay with PayMongo (GCash / Maya)'}
+                </button>
+                <p className="text-center text-xs text-slate-400">Or upload proof manually below</p>
+              </div>
+            )}
 
             {!paid && !expired && !submitted && (
               <>

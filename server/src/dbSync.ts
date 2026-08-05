@@ -17,7 +17,15 @@ export const SYNC_CATEGORIES: Record<string, string[]> = {
   clients: ['pppoe_users', 'profiles', 'ipoe_profiles', 'ipoe_plans', 'ipoe_lease_meta'],
   network: ['routers', 'naps', 'splitters', 'splitter_loss_reference', 'noc_devices', 'queues'],
   reports: ['transactions', 'payment_links', 'invoices', 'invoice_payments', 'expenses'],
-  operations: ['notifications', 'job_orders', 'ai_scripts', 'inventory', 'usage_alerts'],
+  operations: [
+    'notifications',
+    'job_orders',
+    'ai_scripts',
+    'inventory',
+    'usage_alerts',
+    'cashier_collectibles',
+    'cashier_deposits',
+  ],
   portal: [
     'payment_merchants',
     'outage_subscriber_reports',

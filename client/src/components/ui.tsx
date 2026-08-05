@@ -131,6 +131,7 @@ const STATUS_STYLES: Record<string, string> = {
   sent: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   failed: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   simulated: 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
+  'Not delivered (simulated)': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
   'Low Stock': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
   'Out of Stock': 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   'In Stock': 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',

@@ -555,7 +555,7 @@ export default function Notifications() {
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5 break-all">{l.recipient || '—'}</div>
                     </div>
-                    <StatusBadge status={l.status} />
+                    <StatusBadge status={l.status === 'simulated' ? 'Not delivered (simulated)' : l.status} />
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1">
@@ -603,7 +603,7 @@ export default function Notifications() {
                     </span>,
                     <span className="text-slate-500 truncate block max-w-[280px]" title={l.message}>{l.message}</span>,
                     <span>
-                      <StatusBadge status={l.status} />
+                      <StatusBadge status={l.status === 'simulated' ? 'Not delivered (simulated)' : l.status} />
                       <div className="text-[11px] text-slate-400">{l.detail}</div>
                     </span>,
                   ],

@@ -389,6 +389,12 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
   return (
     <SettingsSection icon={Globe2} title="Ngrok Remote Access">
       <div className="space-y-4 max-w-2xl">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
+          Simulated for demo — use Cloudflare Tunnel for real remote access.{' '}
+          <Link to="/cloudflare" className="font-semibold text-amber-950 underline underline-offset-2">
+            Open Cloudflare Tunnel
+          </Link>
+        </div>
         <p className="text-sm text-slate-500">Expose the panel securely over the internet via an ngrok tunnel.</p>
         <div className="flex items-center justify-between rounded-lg border border-slate-100 px-4 py-3">
           <div>
@@ -469,10 +475,31 @@ function DatabaseManagement({ flash }: any) {
     percent?: number;
     error?: string;
   } | null>(null);
+  const [autoBackup, setAutoBackup] = useState({
+    enabled: false,
+    everyHours: 24,
+    retainCount: 14,
+    lastAt: null as string | null,
+  });
+  const [autoBusy, setAutoBusy] = useState(false);
 
   const load = () => api.get('/db/backups').then((r) => setBackups(r.data));
+  const loadAutoBackup = () =>
+    api
+      .get('/backup-auto/settings')
+      .then((r) =>
+        setAutoBackup({
+          enabled: !!r.data.enabled,
+          everyHours: Number(r.data.everyHours) || 24,
+          retainCount: Number(r.data.retainCount) || 14,
+          lastAt: r.data.lastAt || null,
+        })
+      )
+      .catch(() => undefined);
+
   useEffect(() => {
     load();
+    loadAutoBackup();
     api
       .get('/db/backup-categories')
       .then((r) => setCategories(r.data.categories || []))
@@ -487,6 +514,42 @@ function DatabaseManagement({ flash }: any) {
       load();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const saveAutoBackup = async () => {
+    setAutoBusy(true);
+    try {
+      const r = await api.put('/backup-auto/settings', {
+        enabled: autoBackup.enabled,
+        everyHours: autoBackup.everyHours,
+        retainCount: autoBackup.retainCount,
+      });
+      setAutoBackup({
+        enabled: !!r.data.enabled,
+        everyHours: Number(r.data.everyHours) || 24,
+        retainCount: Number(r.data.retainCount) || 14,
+        lastAt: r.data.lastAt || null,
+      });
+      flash('Auto-backup settings saved.');
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Could not save auto-backup settings');
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const runAutoBackupNow = async () => {
+    setAutoBusy(true);
+    try {
+      const r = await api.post('/backup-auto/run');
+      flash(r.data?.name ? `Backup created: ${r.data.name}` : 'Auto-backup completed.');
+      await loadAutoBackup();
+      load();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Auto-backup failed');
+    } finally {
+      setAutoBusy(false);
     }
   };
 
@@ -852,6 +915,56 @@ function DatabaseManagement({ flash }: any) {
         <button className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-medium py-2.5 rounded-lg" onClick={createBackup} disabled={busy}>
           <DbIcon size={16} /> Create New Backup
         </button>
+
+        <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+          <div className="text-sm font-semibold text-slate-800">Automatic backups</div>
+          <p className="text-xs text-slate-500">
+            Schedule periodic full database backups and keep the newest N copies.
+          </p>
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="rounded border-slate-300"
+              checked={autoBackup.enabled}
+              onChange={(e) => setAutoBackup((s) => ({ ...s, enabled: e.target.checked }))}
+            />
+            Enable auto-backup
+          </label>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <FormField label="Every N hours">
+              <input
+                type="number"
+                min={1}
+                className="input"
+                value={autoBackup.everyHours}
+                onChange={(e) => setAutoBackup((s) => ({ ...s, everyHours: Math.max(1, Number(e.target.value) || 24) }))}
+              />
+            </FormField>
+            <FormField label="Retain count">
+              <input
+                type="number"
+                min={1}
+                className="input"
+                value={autoBackup.retainCount}
+                onChange={(e) => setAutoBackup((s) => ({ ...s, retainCount: Math.max(1, Number(e.target.value) || 14) }))}
+              />
+            </FormField>
+          </div>
+          <div className="text-xs text-slate-500">
+            Last backup:{' '}
+            <span className="font-medium text-slate-700">
+              {autoBackup.lastAt ? String(autoBackup.lastAt).replace('T', ' ').slice(0, 19) : 'Never'}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary text-sm" disabled={autoBusy} onClick={saveAutoBackup}>
+              Save schedule
+            </button>
+            <button type="button" className="btn-secondary text-sm" disabled={autoBusy} onClick={runAutoBackupNow}>
+              Run now
+            </button>
+          </div>
+        </div>
 
         <div className="rounded-xl border border-slate-200 p-4 space-y-3">
           <div className="text-sm font-semibold text-slate-800">Selective backup &amp; restore</div>

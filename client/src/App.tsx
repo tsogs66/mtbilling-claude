@@ -143,7 +143,7 @@ export default function App() {
                 <Route path="/cloudflare" element={<CloudflareAccess />} />
                 <Route path="/roles" element={<PanelRoles />} />
                 <Route path="/updater" element={<Updater />} />
-                <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
+                <Route path="/super-router" element={<Navigate to="/network?tab=routers" replace />} />
                 <Route path="/tech-tools" element={<TechTools />} />
                 <Route path="/license" element={<License />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

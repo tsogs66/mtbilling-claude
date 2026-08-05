@@ -14,6 +14,7 @@ export default function FairUseAlerts() {
     notify_email: 1,
     notify_sms: 0,
   });
+  const [throttle, setThrottle] = useState({ autoThrottle: false, throttleProfile: '' });
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState('');
 
@@ -23,8 +24,20 @@ export default function FairUseAlerts() {
       if (r.data.settings) setSettings(r.data.settings);
     });
 
+  const loadThrottle = () =>
+    api
+      .get('/usage/fair-use-throttle')
+      .then((r) =>
+        setThrottle({
+          autoThrottle: !!r.data.autoThrottle,
+          throttleProfile: r.data.throttleProfile || '',
+        })
+      )
+      .catch(() => undefined);
+
   useEffect(() => {
     load().catch(() => undefined);
+    loadThrottle();
   }, []);
 
   const save = async () => {
@@ -32,6 +45,18 @@ export default function FairUseAlerts() {
     try {
       const r = await api.put('/usage/settings', settings);
       setSettings(r.data);
+      try {
+        const t = await api.put('/usage/fair-use-throttle', {
+          autoThrottle: throttle.autoThrottle,
+          throttleProfile: throttle.throttleProfile,
+        });
+        setThrottle({
+          autoThrottle: !!t.data.autoThrottle,
+          throttleProfile: t.data.throttleProfile || '',
+        });
+      } catch {
+        /* parent may add route — thresholds still saved */
+      }
       setToast('Fair-use settings saved.');
       setTimeout(() => setToast(''), 3000);
     } finally {
@@ -96,6 +121,24 @@ export default function FairUseAlerts() {
               />
               SMS subscriber
             </label>
+            <div className="border-t border-slate-100 pt-3 space-y-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={throttle.autoThrottle}
+                  onChange={(e) => setThrottle((t) => ({ ...t, autoThrottle: e.target.checked }))}
+                />
+                Auto-throttle on fair-use breach
+              </label>
+              <FormField label="Throttle profile (MikroTik queue/profile name)">
+                <input
+                  className="input"
+                  placeholder="e.g. fair-use-throttle"
+                  value={throttle.throttleProfile}
+                  onChange={(e) => setThrottle((t) => ({ ...t, throttleProfile: e.target.value }))}
+                />
+              </FormField>
+            </div>
             <button type="button" className="btn-primary w-full" disabled={busy} onClick={save}>
               Save settings
             </button>
