@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ShieldCheck, Plus, Pencil, Trash2, UserPlus, Wallet } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ShieldCheck, Plus, Pencil, Trash2, UserPlus, Wallet, ExternalLink } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Modal, ModalFooter, FormField, PageHeader } from '../components/ui';
 import { api } from '../api';
@@ -73,17 +74,26 @@ export default function PanelRoles() {
         <div>
           <h2 className="text-sm font-semibold text-slate-700">Merchant portal accounts</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Login at <code className="text-slate-700">/merchant</code> — username is the email; initial password is the mobile number.
-            Recovery uses email + mobile.
+            Partners sign in at{' '}
+            <Link to="/merchant" className="text-sky-600 hover:underline font-medium">
+              /merchant
+            </Link>{' '}
+            (email = login; initial password = mobile). If you are already in the staff panel, sign out
+            there first (or use a private window). Recovery uses email + mobile.
           </p>
         </div>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => setEditCashier({ email: '', mobile: '' })}
-        >
-          <Wallet size={16} /> New Merchant
-        </button>
+        <div className="flex items-center gap-2">
+          <Link to="/merchant" className="btn-secondary inline-flex items-center gap-1.5 text-sm">
+            <ExternalLink size={14} /> Open portal
+          </Link>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => setEditCashier({ email: '', mobile: '' })}
+          >
+            <Wallet size={16} /> New Merchant
+          </button>
+        </div>
       </div>
       <div className="card mb-6 overflow-hidden">
         <table className="w-full text-sm">

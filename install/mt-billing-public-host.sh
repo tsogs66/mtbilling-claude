@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Configure this LXC/VM to host subscriber payment links on a DynDNS (or any)
 # public hostname — or bind pay links to this host's LAN IP.
@@ -182,6 +182,17 @@ write_nginx_full_locations() {
         try_files \$uri /index.html;
     }
 
+    # Merchant portal SPA
+    location = /merchant {
+        try_files /index.html =404;
+    }
+    location = /cashier {
+        return 302 /merchant;
+    }
+    location ^~ /merchant/ {
+        try_files \$uri /index.html;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -190,12 +201,21 @@ EOF
 
 write_nginx_payonly_locations() {
   cat <<EOF
-    # Public payment portal only (DynDNS / internet / Cloudflare Tunnel)
+    # Public payment + merchant partner portals (DynDNS / internet / Cloudflare Tunnel)
     # Important: omit \$uri/ so nginx does not 403 on a real dist/pay/ directory.
     location = /pay {
         try_files /index.html =404;
     }
     location ^~ /pay/ {
+        try_files \$uri /index.html;
+    }
+    location = /merchant {
+        try_files /index.html =404;
+    }
+    location = /cashier {
+        return 302 /merchant;
+    }
+    location ^~ /merchant/ {
         try_files \$uri /index.html;
     }
     location ^~ /api/public/ {
@@ -205,6 +225,58 @@ write_nginx_payonly_locations() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    # Merchant portal auth + APIs (not full staff panel)
+    location = /api/login {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/login;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location = /api/login/totp {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/login/totp;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location = /api/me {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/me;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location = /api/company/branding {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/company/branding;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location ^~ /api/merchant {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/merchant;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location ^~ /api/cashier {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/cashier;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location = /logo.png {
+        try_files /logo.png =404;
     }
     location ^~ /assets/ {
         try_files \$uri =404;

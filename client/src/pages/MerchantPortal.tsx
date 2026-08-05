@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
 } from 'lucide-react';
@@ -244,10 +244,9 @@ export default function MerchantPortal() {
     );
   }
 
-  // Staff (non-merchant) who land here — send to panel
-  if (user && !isMerchantPartnerRole(user.role)) {
-    return <Navigate to="/" replace />;
-  }
+  // Staff (Admin/etc.) already signed into the panel — do not bounce them away from /merchant
+  // (that looked like the page was broken). Offer sign-out so they can use a merchant account.
+  const staffBlockingMerchant = !!user && !isMerchantPartnerRole(user.role);
 
   return (
     <div className="subscriber-portal min-h-screen relative text-slate-100">
@@ -295,7 +294,34 @@ export default function MerchantPortal() {
           </div>
         )}
 
-        {!signedIn && (
+        {staffBlockingMerchant && (
+          <div className="portal-glass-strong rounded-2xl p-5 space-y-4">
+            <div>
+              <h1 className="text-xl font-bold">Merchant portal</h1>
+              <p className="text-sm text-slate-300/80 mt-1">
+                You are signed in as <span className="text-white font-medium">{user?.username}</span> (
+                {user?.role}). Merchant partners use a separate email login created under Panel Roles.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="portal-cta inline-flex items-center gap-1.5 text-sm"
+                onClick={() => {
+                  logout();
+                  setSelected(null);
+                }}
+              >
+                <LogOut size={14} /> Sign out staff session
+              </button>
+              <Link to="/" className="portal-cta inline-flex items-center gap-1.5 text-sm opacity-80">
+                <ArrowLeft size={14} /> Back to panel
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {!signedIn && !staffBlockingMerchant && (
           <div className="portal-glass-strong rounded-2xl p-5 space-y-4">
             <div>
               <h1 className="text-xl font-bold">Merchant sign-in</h1>
