@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { useCompany } from '../context/CompanyContext';
 import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
@@ -46,7 +45,6 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export default function MerchantPortal() {
   const { user, loading, login, logout, refresh } = useAuth();
-  const { company } = useCompany();
   const [theme, setTheme] = useState<PortalThemeId>('matrix');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -255,11 +253,8 @@ export default function MerchantPortal() {
       <div className="relative z-10 max-w-3xl mx-auto px-4 py-8 space-y-5">
         <header className="portal-glass-strong rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <Logo size="sm" variant="dark" />
-            <div className="min-w-0">
-              <div className="font-bold text-lg truncate">{company?.name || 'Merchant'}</div>
-              <div className="text-xs text-slate-300/80">Merchant portal</div>
-            </div>
+            <Logo size="sm" variant="dark" showText={false} />
+            <div className="font-bold text-lg truncate">Merchant portal</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {showInstallButton && (
