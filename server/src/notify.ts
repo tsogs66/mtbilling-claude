@@ -484,6 +484,29 @@ function record(n: {
     status: n.status,
     detail: n.detail,
   });
+
+  // System Logs (Logs page / `logs` table) — SMS send audit trail
+  if (n.channel === 'sms') {
+    const level = n.status === 'sent' || n.status === 'simulated' ? 'info' : 'warning';
+    const to = String(n.recipient || '—').trim() || '—';
+    const who = n.customer_name ? ` (${n.customer_name})` : '';
+    const kind = n.type ? ` [${n.type}]` : '';
+    const detail = n.detail ? ` — ${n.detail}` : '';
+    const preview = String(n.message || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+    const body = preview ? ` · "${preview}${preview.length >= 120 ? '…' : ''}"` : '';
+    try {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        level,
+        'sms',
+        `SMS ${n.status} → ${to}${who}${kind}${detail}${body}`
+      );
+    } catch {
+      /* never break delivery on log failure */
+    }
+  }
 }
 
 interface Client {

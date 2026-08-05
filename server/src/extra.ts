@@ -1137,6 +1137,26 @@ extraRouter.get('/logs/email', (req, res) => {
   res.json(rows);
 });
 
+extraRouter.get('/logs/sms', (req, res) => {
+  const cat = String(req.query.category || 'all');
+  let where = "channel = 'sms'";
+  if (cat === 'payment') {
+    where += " AND (type = 'payment_confirmation' OR subject LIKE '%Payment%' OR subject LIKE '%Receipt%')";
+  } else if (cat === 'reminder') {
+    where += " AND (type IN ('expiry_reminder','auto_disable') OR subject LIKE '%Reminder%' OR subject LIKE '%expire%' OR subject LIKE '%disabled%')";
+  } else if (cat === 'portal') {
+    where += " AND (type IN ('portal_password_reset','portal_activation','installation_success') OR subject LIKE '%Portal%' OR subject LIKE '%password%')";
+  } else if (cat === 'failed') {
+    where += " AND status = 'failed'";
+  }
+  const rows = db
+    .prepare(
+      `SELECT id, recipient, customer_name AS customer, subject, message, type, status, detail, created_at AS date
+       FROM notifications WHERE ${where} ORDER BY id DESC LIMIT 200`
+    )
+    .all();
+  res.json(rows);
+});
 // ---------------- License ----------------
 function hardwareId(): string {
   return panelHardwareId();

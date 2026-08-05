@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Code2, Globe, Mail, Monitor, Router, ShieldCheck } from 'lucide-react';
+import { Code2, Globe, Mail, MessageSquare, Monitor, Router, ShieldCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import { DataTable, LogPanel, PageHeader, StatusBadge, TabBar, TabPills, logBoxClass } from '../components/ui';
 import { api } from '../api';
@@ -10,6 +10,7 @@ const TABS = [
   { key: 'panel', label: 'Panel Logs', icon: Monitor },
   { key: 'nginx', label: 'Nginx Logs', icon: Globe },
   { key: 'email', label: 'Email Logs', icon: Mail },
+  { key: 'sms', label: 'SMS Logs', icon: MessageSquare },
   { key: 'audit', label: 'Audit Trail', icon: ShieldCheck },
 ] as const;
 
@@ -24,6 +25,14 @@ const EMAIL_SUBTABS = [
   { key: 'announcement', label: 'Announcements' },
 ];
 
+const SMS_SUBTABS = [
+  { key: 'all', label: 'All' },
+  { key: 'payment', label: 'Payment' },
+  { key: 'reminder', label: 'Reminders' },
+  { key: 'portal', label: 'Portal' },
+  { key: 'failed', label: 'Failed' },
+];
+
 export default function Logs() {
   const [tab, setTab] = useState('router');
   return (
@@ -31,7 +40,7 @@ export default function Logs() {
       <div className="max-w-5xl mx-auto">
         <PageHeader
           title="Log Viewer"
-          description="Browse router, panel, web server, and email delivery logs."
+          description="Browse router, panel, web server, email, and SMS delivery logs."
           icon={Code2}
         />
 
@@ -41,6 +50,7 @@ export default function Logs() {
         {tab === 'panel' && <PanelLogs />}
         {tab === 'nginx' && <NginxLogs />}
         {tab === 'email' && <EmailLogs />}
+        {tab === 'sms' && <SmsLogs />}
         {tab === 'audit' && <AuditTrail />}
       </div>
     </Layout>
@@ -161,6 +171,64 @@ function EmailLogs() {
           ]}
           rows={tableRows}
           emptyMessage="No email log entries found."
+        />
+      </LogPanel>
+    </div>
+  );
+}
+
+function SmsLogs() {
+  const [sub, setSub] = useState('all');
+  const [rows, setRows] = useState<any[]>([]);
+  const load = () => api.get(`/logs/sms?category=${sub}`).then((r) => setRows(r.data)).catch(() => setRows([]));
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sub]);
+
+  const title =
+    sub === 'payment'
+      ? 'Payment SMS'
+      : sub === 'reminder'
+        ? 'Reminder / disable SMS'
+        : sub === 'portal'
+          ? 'Portal / password SMS'
+          : sub === 'failed'
+            ? 'Failed SMS'
+            : 'All SMS';
+
+  const tableRows = rows.map((r) => ({
+    key: r.id,
+    cells: [
+      <span key="date" className="whitespace-nowrap text-slate-500">{new Date(r.date).toLocaleString()}</span>,
+      <StatusBadge key="status" status={r.status} />,
+      <div key="details" className="font-mono text-[12px] space-y-1">
+        <div className="text-slate-600">
+          To: {r.recipient || '—'}
+          {r.customer ? ` (${r.customer})` : ''}
+          {r.type ? <span className="text-slate-400"> · {r.type}</span> : null}
+        </div>
+        {r.subject && <div className="text-slate-800 font-semibold">{r.subject}</div>}
+        <div className="text-slate-600 whitespace-pre-wrap">{r.message}</div>
+        {r.detail && <div className="text-slate-400">{r.detail}</div>}
+      </div>,
+    ],
+  }));
+
+  return (
+    <div>
+      <div className="mb-4">
+        <TabPills tabs={SMS_SUBTABS} active={sub} onChange={setSub} />
+      </div>
+      <LogPanel title={title} onRefresh={load}>
+        <DataTable
+          columns={[
+            { key: 'date', label: 'Date', className: 'w-36' },
+            { key: 'status', label: 'Status' },
+            { key: 'details', label: 'Details' },
+          ]}
+          rows={tableRows}
+          emptyMessage="No SMS log entries yet. Sent messages appear here and in System Logs (source: sms)."
         />
       </LogPanel>
     </div>
