@@ -745,6 +745,9 @@ export default function SubscriberPay() {
                       </div>
                     </li>
                     <li>
+                      Click <b>Scan QRPH code to pay</b>.
+                    </li>
+                    <li>
                       Download the QR code and scan it with your desired online payment platform.
                       <div className="text-xs text-slate-500 mt-0.5">
                         Account activates/updates automatically upon successful payment.
