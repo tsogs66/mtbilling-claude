@@ -286,6 +286,17 @@ server {
         try_files \$uri /index.html;
     }
 
+    # Merchant portal SPA
+    location = /merchant {
+        try_files /index.html =404;
+    }
+    location = /cashier {
+        return 302 /merchant;
+    }
+    location ^~ /merchant/ {
+        try_files \$uri /index.html;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }

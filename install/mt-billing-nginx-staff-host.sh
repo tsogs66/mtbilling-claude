@@ -75,6 +75,16 @@ full_locations() {
     location ^~ /pay/ {
         try_files \$uri /index.html;
     }
+    # Merchant portal SPA — same pattern as /pay (avoid 403 if dist/merchant/ exists)
+    location = /merchant {
+        try_files /index.html =404;
+    }
+    location = /cashier {
+        return 302 /merchant;
+    }
+    location ^~ /merchant/ {
+        try_files \$uri /index.html;
+    }
     location / {
         try_files \$uri \$uri/ /index.html;
     }

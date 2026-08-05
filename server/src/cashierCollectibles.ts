@@ -96,7 +96,7 @@ function mapDeposit(row: any) {
     itemCount: row.item_count,
     note: row.note,
     proofImage: row.proof_image,
-    proofUrl: row.proof_image ? `/api/cashier-deposits/${row.id}/proof` : null,
+    proofUrl: row.proof_image ? `/api/merchant-deposits/${row.id}/proof` : null,
     status: row.status,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,

@@ -461,6 +461,18 @@ cashierRouter.get('/merchant-deposits/:id/proof', (req: AuthedRequest, res) => {
   if (!full) return res.status(404).json({ error: 'No proof on file' });
   res.sendFile(full);
 });
+// Legacy proof URL path (older collectible rows / clients)
+cashierRouter.get('/cashier-deposits/:id/proof', (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const deposit = getCashierDeposit(id);
+  if (!deposit) return res.status(404).json({ error: 'not found' });
+  const isAdmin = /admin/i.test(String(req.user?.role || ''));
+  const isOwner = req.user && Number(deposit.cashierUserId) === Number(req.user.id);
+  if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Forbidden' });
+  const full = resolveDepositProofPath(id);
+  if (!full) return res.status(404).json({ error: 'No proof on file' });
+  res.sendFile(full);
+});
 
 cashierRouter.post('/merchant-deposits/:id/accept', requireAdmin, (req: AuthedRequest, res) => {
   try {
