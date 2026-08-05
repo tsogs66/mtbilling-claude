@@ -1625,8 +1625,8 @@ export async function cashierCollectPayment(opts: {
     pushPortalActivity({
       pppoeUserId: Number(opts.pppoeUserId),
       type: 'payment',
-      title: 'Payment posted by cashier',
-      body: `₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} was posted by cashier ${opts.cashier.username}.`,
+      title: 'Payment posted by merchant',
+      body: `₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} was posted by merchant ${opts.cashier.username}.`,
       entityType: 'payment_link',
       entityId: Number(link.id),
       payload: {

@@ -23,8 +23,8 @@ export default function PanelRoles() {
     api.get('/roles').then((r) => setRoles(r.data));
     api.get('/panel-users').then((r) => setUsers(r.data));
     api
-      .get('/cashiers')
-      .then((r) => setCashiers(r.data.cashiers || []))
+      .get('/merchants')
+      .then((r) => setCashiers(r.data.merchants || r.data.cashiers || []))
       .catch(() => setCashiers([]));
   };
   useEffect(() => {
@@ -52,12 +52,12 @@ export default function PanelRoles() {
   };
 
   const delCashier = async (id: number) => {
-    if (!confirm('Delete this cashier account?')) return;
+    if (!confirm('Delete this merchant portal account?')) return;
     try {
-      await api.delete(`/cashiers/${id}`);
+      await api.delete(`/merchants/${id}`);
       load();
     } catch (e: any) {
-      alert(e?.response?.data?.error || 'Could not delete cashier');
+      alert(e?.response?.data?.error || 'Could not delete merchant');
     }
   };
 
@@ -65,15 +65,15 @@ export default function PanelRoles() {
     <Layout title="Panel Roles">
       <PageHeader
         title="Roles & Users"
-        description="Assign menu access by role. Create cashier portal accounts with email + mobile (initial password = mobile)."
+        description="Assign menu access by role. Create merchant portal accounts for business partners (email login, mobile = initial password)."
         icon={ShieldCheck}
       />
 
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-700">Cashier portal accounts</h2>
+          <h2 className="text-sm font-semibold text-slate-700">Merchant portal accounts</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Login at <code className="text-slate-700">/cashier</code> — username is the email; initial password is the mobile number.
+            Login at <code className="text-slate-700">/merchant</code> — username is the email; initial password is the mobile number.
             Recovery uses email + mobile.
           </p>
         </div>
@@ -82,7 +82,7 @@ export default function PanelRoles() {
           className="btn-primary"
           onClick={() => setEditCashier({ email: '', mobile: '' })}
         >
-          <Wallet size={16} /> New Cashier
+          <Wallet size={16} /> New Merchant
         </button>
       </div>
       <div className="card mb-6 overflow-hidden">
@@ -114,7 +114,7 @@ export default function PanelRoles() {
             {cashiers.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
-                  No cashier accounts yet.
+                  No merchant portal accounts yet.
                 </td>
               </tr>
             )}
@@ -213,7 +213,7 @@ export default function PanelRoles() {
         />
       )}
       {editCashier && (
-        <CashierModal
+        <MerchantModal
           cashier={editCashier}
           onClose={() => setEditCashier(null)}
           onSaved={() => {
@@ -323,7 +323,7 @@ function UserModal({ user, roles, onClose, onSaved }: any) {
   );
 }
 
-function CashierModal({ cashier, onClose, onSaved }: any) {
+function MerchantModal({ cashier, onClose, onSaved }: any) {
   const [form, setForm] = useState({
     email: cashier.email || '',
     mobile: cashier.mobile || '',
@@ -336,27 +336,27 @@ function CashierModal({ cashier, onClose, onSaved }: any) {
     setBusy(true);
     try {
       if (isEdit) {
-        await api.put(`/cashiers/${cashier.id}`, form);
+        await api.put(`/merchants/${cashier.id}`, form);
       } else {
-        await api.post('/cashiers', form);
+        await api.post('/merchants', form);
       }
       onSaved();
     } catch (e: any) {
-      alert(e?.response?.data?.error || 'Could not save cashier');
+      alert(e?.response?.data?.error || 'Could not save merchant');
     } finally {
       setBusy(false);
     }
   };
   return (
     <Modal
-      title={isEdit ? 'Edit Cashier' : 'New Cashier'}
+      title={isEdit ? 'Edit Merchant' : 'New Merchant'}
       onClose={onClose}
-      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Save Cashier" />}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Save Merchant" />}
     >
       <div className="space-y-3">
         <p className="text-xs text-slate-500">
-          Email is the login username. Initial password is the mobile number. Cashiers use{' '}
-          <code className="text-slate-700">/cashier</code> only (not the full staff panel).
+          Email is the login username. Initial password is the mobile number. Partners use{' '}
+          <code className="text-slate-700">/merchant</code> only (not the full staff panel).
         </p>
         <FormField label="Email" required>
           <input

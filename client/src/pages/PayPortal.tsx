@@ -90,7 +90,7 @@ export default function PayPortal() {
       .catch(() => setResendClients([]));
     loadConfig().catch(() => undefined);
     api
-      .get('/cashier-deposits', { params: { status: 'pending,accepted' } })
+      .get('/merchant-deposits', { params: { status: 'pending,accepted' } })
       .then((r) => setCashierDeposits(r.data.deposits || []))
       .catch(() => setCashierDeposits([]));
   };
@@ -696,7 +696,7 @@ export default function PayPortal() {
                         className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-amber-50 text-amber-800 ring-1 ring-amber-200"
                         title={l.cashierUsername || ''}
                       >
-                        Cashier{l.cashierUsername ? `: ${l.cashierUsername}` : ''}
+                        Merchant{l.cashierUsername ? `: ${l.cashierUsername}` : ''}
                       </span>
                     ) : (
                       <span className="inline-flex text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-sky-200">
@@ -769,10 +769,10 @@ export default function PayPortal() {
         <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
           <div>
             <div className="font-semibold text-slate-800 inline-flex items-center gap-2">
-              <Wallet size={18} className="text-amber-600" /> Cashier deposits
+              <Wallet size={18} className="text-amber-600" /> Merchant deposits
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Cashiers activate subscribers immediately. Accept a deposit when the cashier remits collections (single or bulk) with optional proof.
+              Merchant partners activate subscribers immediately. Accept a deposit when the merchant remits collections (single or bulk) with optional proof.
             </p>
           </div>
           <button type="button" className="btn-secondary text-sm" onClick={load}>
@@ -784,7 +784,7 @@ export default function PayPortal() {
             <thead>
               <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
                 <th className="py-2">Deposit</th>
-                <th className="py-2">Cashier</th>
+                <th className="py-2">Merchant</th>
                 <th className="py-2">Mode</th>
                 <th className="py-2">Items</th>
                 <th className="py-2">Amount</th>
@@ -818,7 +818,7 @@ export default function PayPortal() {
                           tone="sky"
                           onClick={async () => {
                             try {
-                              const r = await api.get(`/cashier-deposits/${d.id}/proof`, {
+                              const r = await api.get(`/merchant-deposits/${d.id}/proof`, {
                                 responseType: 'blob',
                               });
                               const url = URL.createObjectURL(r.data);
@@ -839,7 +839,7 @@ export default function PayPortal() {
                               if (!confirm(`Accept deposit #${d.id} (${peso(d.amountTotal)}) from ${d.cashierUsername}?`)) return;
                               setDepositBusyId(d.id);
                               try {
-                                await api.post(`/cashier-deposits/${d.id}/accept`);
+                                await api.post(`/merchant-deposits/${d.id}/accept`);
                                 show(`Deposit #${d.id} accepted`);
                                 load();
                               } catch (e: any) {
@@ -857,7 +857,7 @@ export default function PayPortal() {
                               const note = prompt('Reject reason (optional)') || '';
                               setDepositBusyId(d.id);
                               try {
-                                await api.post(`/cashier-deposits/${d.id}/reject`, { note });
+                                await api.post(`/merchant-deposits/${d.id}/reject`, { note });
                                 show(`Deposit #${d.id} rejected — items returned to cashier`);
                                 load();
                               } catch (e: any) {
@@ -879,7 +879,7 @@ export default function PayPortal() {
               {cashierDeposits.length === 0 && (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-slate-400">
-                    No cashier deposits yet.
+                    No merchant deposits yet.
                   </td>
                 </tr>
               )}
@@ -909,7 +909,7 @@ export default function PayPortal() {
         >
           <img
             src={depositProofPreview}
-            alt="Cashier deposit proof"
+            alt="Merchant deposit proof"
             className="max-h-[90vh] max-w-full rounded-xl shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />

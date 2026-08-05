@@ -29,8 +29,9 @@ function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   );
 }
 
-function isCashierRole(role?: string | null) {
-  return String(role || '').trim().toLowerCase() === 'cashier';
+function isMerchantPartnerRole(role?: string | null) {
+  const r = String(role || '').trim().toLowerCase();
+  return r === 'cashier' || r === 'merchant';
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -42,7 +43,7 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-export default function CashierPortal() {
+export default function MerchantPortal() {
   const { user, loading, login, logout, refresh } = useAuth();
   const { company } = useCompany();
   const [theme, setTheme] = useState<PortalThemeId>('matrix');
@@ -83,11 +84,11 @@ export default function CashierPortal() {
     setTimeout(() => setToast(''), 5000);
   };
 
-  const signedIn = !!user && isCashierRole(user.role);
+  const signedIn = !!user && isMerchantPartnerRole(user.role);
 
   const loadCollectibles = async () => {
     try {
-      const r = await api.get('/cashier/collectibles', { params: { status: 'open' } });
+      const r = await api.get('/merchant/collectibles', { params: { status: 'open' } });
       setOpenCollectibles(r.data.collectibles || []);
       setDepositSummary(r.data.summary || null);
       setSelectedCollectibleIds(new Set());
@@ -95,7 +96,7 @@ export default function CashierPortal() {
       setOpenCollectibles([]);
     }
     try {
-      const d = await api.get('/cashier/deposits');
+      const d = await api.get('/merchant/deposits');
       setMyDeposits(d.data.deposits || []);
     } catch {
       setMyDeposits([]);
@@ -105,14 +106,14 @@ export default function CashierPortal() {
   useEffect(() => {
     if (!signedIn) return;
     api
-      .get('/cashier/me')
+      .get('/merchant/me')
       .then((r) => {
         setTheme(r.data.theme === 'orbital' ? 'orbital' : 'matrix');
         setMustChange(!!r.data.mustChangePassword);
       })
       .catch(() => undefined);
-    api.get('/cashier/merchants').then((r) => setMerchants(r.data.merchants || [])).catch(() => setMerchants([]));
-    api.get('/cashier/recent').then((r) => setRecent(r.data.payments || [])).catch(() => setRecent([]));
+    api.get('/merchant/payment-merchants').then((r) => setMerchants(r.data.merchants || [])).catch(() => setMerchants([]));
+    api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => setRecent([]));
     void loadCollectibles();
   }, [signedIn]);
 
@@ -123,7 +124,7 @@ export default function CashierPortal() {
     }
     const t = setTimeout(() => {
       api
-        .get('/cashier/subscribers', { params: { q: q.trim() } })
+        .get('/merchant/subscribers', { params: { q: q.trim() } })
         .then((r) => setHits(r.data.subscribers || []))
         .catch(() => setHits([]));
     }, 250);
@@ -141,11 +142,11 @@ export default function CashierPortal() {
     try {
       const result = await login(email.trim(), password);
       if ('requiresTotp' in result && result.requiresTotp) {
-        show('This cashier account has 2FA enabled — use the staff login page.');
+        show('This merchant account has 2FA enabled — use the staff login page.');
         return;
       }
       await refresh();
-      const me = await api.get('/cashier/me').catch(() => null);
+      const me = await api.get('/merchant/me').catch(() => null);
       if (me?.data) {
         setTheme(me.data.theme === 'orbital' ? 'orbital' : 'matrix');
         setMustChange(!!me.data.mustChangePassword);
@@ -161,7 +162,7 @@ export default function CashierPortal() {
     e.preventDefault();
     setBusy(true);
     try {
-      const r = await publicApi.post('/public/cashier/forgot-password', {
+      const r = await publicApi.post('/public/merchant/forgot-password', {
         email: email.trim(),
         mobile: forgotMobile.trim(),
       });
@@ -177,7 +178,7 @@ export default function CashierPortal() {
   const saveTheme = async (next: PortalThemeId) => {
     setTheme(next);
     try {
-      await api.put('/cashier/theme', { theme: next });
+      await api.put('/merchant/theme', { theme: next });
     } catch {
       /* local theme still applies */
     }
@@ -187,7 +188,7 @@ export default function CashierPortal() {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.post('/cashier/change-password', {
+      await api.post('/merchant/change-password', {
         currentPassword: changeCurrent,
         newPassword: changeNext,
       });
@@ -207,7 +208,7 @@ export default function CashierPortal() {
     if (!selected) return;
     setCollectBusy(true);
     try {
-      const r = await api.post('/cashier/collect', {
+      const r = await api.post('/merchant/collect', {
         userId: selected.id,
         months,
         collectionType,
@@ -225,7 +226,7 @@ export default function CashierPortal() {
       setReference('');
       setProof(null);
       setMonths(1);
-      const recentR = await api.get('/cashier/recent');
+      const recentR = await api.get('/merchant/recent');
       setRecent(recentR.data.payments || []);
       await loadCollectibles();
     } catch (err: any) {
@@ -243,8 +244,8 @@ export default function CashierPortal() {
     );
   }
 
-  // Staff (non-cashier) who land here — send to panel
-  if (user && !isCashierRole(user.role)) {
+  // Staff (non-merchant) who land here — send to panel
+  if (user && !isMerchantPartnerRole(user.role)) {
     return <Navigate to="/" replace />;
   }
 
@@ -257,7 +258,7 @@ export default function CashierPortal() {
             <Logo size="sm" variant="dark" />
             <div className="min-w-0">
               <div className="font-bold text-lg truncate">{PRODUCT_TITLE}</div>
-              <div className="text-xs text-slate-300/80">Cashier portal · {company?.name || 'Payments'}</div>
+              <div className="text-xs text-slate-300/80">Merchant portal · {company?.name || 'Payments'}</div>
             </div>
           </div>
           {signedIn ? (
@@ -297,7 +298,7 @@ export default function CashierPortal() {
         {!signedIn && (
           <div className="portal-glass-strong rounded-2xl p-5 space-y-4">
             <div>
-              <h1 className="text-xl font-bold">Cashier sign-in</h1>
+              <h1 className="text-xl font-bold">Merchant sign-in</h1>
               <p className="text-sm text-slate-300/80 mt-1">Use the email and password provided by your admin.</p>
             </div>
             {!forgotOpen ? (
@@ -335,7 +336,7 @@ export default function CashierPortal() {
             ) : (
               <form className="space-y-3" onSubmit={doForgot}>
                 <p className="text-sm text-slate-300">
-                  Enter the cashier email and the mobile number on file. A temporary password is sent by email and/or SMS.
+                  Enter the merchant email and the mobile number on file. A temporary password is sent by email and/or SMS.
                 </p>
                 <label className="block text-sm">
                   <span className="text-xs text-slate-400">Email</span>
@@ -700,7 +701,7 @@ export default function CashierPortal() {
                       onClick={async () => {
                         setDepositBusy(true);
                         try {
-                          const r = await api.post('/cashier/deposits', {
+                          const r = await api.post('/merchant/deposits', {
                             collectibleIds: [...selectedCollectibleIds],
                             note: depositNote,
                             proofImage: depositProof,

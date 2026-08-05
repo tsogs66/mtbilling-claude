@@ -16,7 +16,7 @@ interface AuthCtx {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<
-    { requiresTotp: true; pendingToken: string } | { requiresTotp: false; isCashier?: boolean }
+    { requiresTotp: true; pendingToken: string } | { requiresTotp: false; isMerchantPartner?: boolean; isCashier?: boolean }
   >;
   completeTotpLogin: (pendingToken: string, code: string) => Promise<void>;
   logout: () => void;
@@ -121,12 +121,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { requiresTotp: true as const, pendingToken: r.data.pendingToken as string };
     }
     applySession(r.data);
-    const isCashier =
+    const role = String(r.data.user?.role || '').trim().toLowerCase();
+    const isMerchantPartner =
+      !!r.data.isMerchantPartner ||
       !!r.data.isCashier ||
-      String(r.data.user?.role || '')
-        .trim()
-        .toLowerCase() === 'cashier';
-    return { requiresTotp: false as const, isCashier };
+      role === 'cashier' ||
+      role === 'merchant';
+    return { requiresTotp: false as const, isMerchantPartner, isCashier: isMerchantPartner };
   };
 
   const completeTotpLogin = async (pendingToken: string, code: string) => {

@@ -20,7 +20,8 @@ import { notifyClientChannels, phonesMatch } from './notify.js';
 export const cashierRouter = Router();
 export const publicCashierRouter = Router();
 
-const CASHIER_ROLE = 'Cashier';
+const MERCHANT_ROLE = 'Merchant';
+const LEGACY_CASHIER_ROLE = 'Cashier';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizeEmail(raw: string) {
@@ -31,16 +32,22 @@ function normalizeMobile(raw: string) {
   return String(raw || '').trim();
 }
 
-function isCashierRole(role: string | null | undefined) {
-  return String(role || '').trim().toLowerCase() === 'cashier';
+function isMerchantPartnerRole(role: string | null | undefined) {
+  const r = String(role || '').trim().toLowerCase();
+  return r === 'merchant' || r === 'cashier';
 }
 
-function requireCashier(req: AuthedRequest, res: any, next: any) {
-  if (!req.user || !isCashierRole(req.user.role)) {
-    return res.status(403).json({ error: 'Cashier access only' });
+function requireMerchantPartner(req: AuthedRequest, res: any, next: any) {
+  if (!req.user || !isMerchantPartnerRole(req.user.role)) {
+    return res.status(403).json({ error: 'Merchant portal access only' });
   }
   next();
 }
+
+/** @deprecated alias */
+const requireCashier = requireMerchantPartner;
+const isCashierRole = isMerchantPartnerRole;
+
 
 function requireAdmin(req: AuthedRequest, res: any, next: any) {
   const role = String(req.user?.role || '');
@@ -50,15 +57,27 @@ function requireAdmin(req: AuthedRequest, res: any, next: any) {
   next();
 }
 
-function ensureCashierRoleExists() {
-  const row = db.prepare('SELECT id FROM roles WHERE lower(name) = ?').get('cashier') as { id: number } | undefined;
-  if (row) return;
-  db.prepare('INSERT INTO roles (name, description, permissions) VALUES (?, ?, ?)').run(
-    CASHIER_ROLE,
-    'Cashier portal — collect subscriber payments and upload proof',
-    JSON.stringify(['sales', 'invoices', 'dashboard', 'license'])
-  );
+function ensureMerchantRoleExists() {
+  const merchant = db.prepare('SELECT id FROM roles WHERE lower(name) = ?').get('merchant') as { id: number } | undefined;
+  if (!merchant) {
+    db.prepare('INSERT INTO roles (name, description, permissions) VALUES (?, ?, ?)').run(
+      MERCHANT_ROLE,
+      'Merchant portal — business partners who process subscriber payments',
+      JSON.stringify(['sales', 'invoices', 'dashboard', 'license'])
+    );
+  }
+  // Keep legacy Cashier role for existing accounts
+  const cashier = db.prepare('SELECT id FROM roles WHERE lower(name) = ?').get('cashier') as { id: number } | undefined;
+  if (!cashier) {
+    db.prepare('INSERT INTO roles (name, description, permissions) VALUES (?, ?, ?)').run(
+      LEGACY_CASHIER_ROLE,
+      'Legacy name for Merchant portal partners',
+      JSON.stringify(['sales', 'invoices', 'dashboard', 'license'])
+    );
+  }
 }
+const ensureCashierRoleExists = ensureMerchantRoleExists;
+
 
 function mapCashier(row: any) {
   return {
@@ -79,7 +98,7 @@ function generateTempPassword() {
 }
 
 // ---- Public: cashier forgot password (email + mobile) ----
-publicCashierRouter.post('/public/cashier/forgot-password', async (req, res) => {
+async function merchantForgotPassword(req: any, res: any) {
   const email = normalizeEmail(req.body?.email || '');
   const mobile = normalizeMobile(req.body?.mobile || req.body?.phone || '');
   if (!email || !mobile) {
@@ -92,20 +111,20 @@ publicCashierRouter.post('/public/cashier/forgot-password', async (req, res) => 
     )
     .get(email, email) as any;
   if (!user || !isCashierRole(user.role)) {
-    return res.status(400).json({ error: 'No cashier account matched that email and mobile number' });
+    return res.status(400).json({ error: 'No merchant account matched that email and mobile number' });
   }
   if (!phonesMatch(user.mobile, mobile)) {
-    return res.status(400).json({ error: 'No cashier account matched that email and mobile number' });
+    return res.status(400).json({ error: 'No merchant account matched that email and mobile number' });
   }
 
   const temp = generateTempPassword();
   const hash = bcrypt.hashSync(temp, 10);
   db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(hash, user.id);
 
-  const subject = 'Cashier portal temporary password';
+  const subject = 'Merchant portal temporary password';
   const message =
-    `Hi, your temporary cashier portal password is: ${temp}. ` +
-    `Sign in at /cashier with email ${user.email || user.username} and set a new password right away.`;
+    `Hi, your temporary merchant portal password is: ${temp}. ` +
+    `Sign in at /merchant with email ${user.email || user.username} and set a new password right away.`;
 
   try {
     await notifyClientChannels(
@@ -113,13 +132,13 @@ publicCashierRouter.post('/public/cashier/forgot-password', async (req, res) => 
       ['email', 'sms'],
       subject,
       message,
-      'cashier_password_reset'
+      'merchant_password_reset'
     );
   } catch (e: any) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       'warn',
       'cashier',
-      `Cashier password reset notify error for ${user.username}: ${e?.message || e}`
+      `Merchant password reset notify error for ${user.username}: ${e?.message || e}`
     );
   }
 
@@ -127,22 +146,35 @@ publicCashierRouter.post('/public/cashier/forgot-password', async (req, res) => 
     ok: true,
     message: 'If the account matched, a temporary password was sent to the email and/or mobile on file.',
   });
-});
+}
 
-// ---- Admin: cashier account CRUD ----
-cashierRouter.get('/cashiers', requireAdmin, (_req, res) => {
-  ensureCashierRoleExists();
-  const rows = db
+publicCashierRouter.post('/public/cashier/forgot-password', merchantForgotPassword);
+publicCashierRouter.post('/public/merchant/forgot-password', merchantForgotPassword);
+
+// ---- Admin: merchant portal account CRUD ----
+function listMerchantPartnerUsers() {
+  return db
     .prepare(
       `SELECT id, username, email, mobile, role, must_change_password, cashier_theme, created_at
-       FROM users WHERE lower(role) = 'cashier' ORDER BY id DESC`
+       FROM users WHERE lower(role) IN ('cashier', 'merchant') ORDER BY id DESC`
     )
     .all();
-  res.json({ cashiers: rows.map(mapCashier) });
+}
+
+cashierRouter.get('/cashiers', requireAdmin, (_req, res) => {
+  ensureMerchantRoleExists();
+  const merchants = listMerchantPartnerUsers().map(mapCashier);
+  res.json({ cashiers: merchants, merchants });
 });
 
-cashierRouter.post('/cashiers', requireAdmin, (req, res) => {
-  ensureCashierRoleExists();
+cashierRouter.get('/merchants', requireAdmin, (_req, res) => {
+  ensureMerchantRoleExists();
+  const merchants = listMerchantPartnerUsers().map(mapCashier);
+  res.json({ merchants, cashiers: merchants });
+});
+
+function createMerchantPartnerAccount(req: any, res: any) {
+  ensureMerchantRoleExists();
   const email = normalizeEmail(req.body?.email || '');
   const mobile = normalizeMobile(req.body?.mobile || req.body?.phone || '');
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Valid email is required (used as login username)' });
@@ -150,10 +182,10 @@ cashierRouter.post('/cashiers', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Mobile number is required (used as the initial password)' });
   }
 
-  const roleRow = db.prepare('SELECT name FROM roles WHERE lower(name) = ?').get('cashier') as
+  const roleRow = db.prepare('SELECT name FROM roles WHERE lower(name) = ?').get('merchant') as
     | { name: string }
     | undefined;
-  const roleName = roleRow?.name || CASHIER_ROLE;
+  const roleName = roleRow?.name || MERCHANT_ROLE;
 
   try {
     const info = db
@@ -166,22 +198,27 @@ cashierRouter.post('/cashiers', requireAdmin, (req, res) => {
     const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       'info',
-      'cashier',
-      `Cashier account created: ${email}`
+      'merchant',
+      `Merchant portal account created: ${email}`
     );
+    const mapped = mapCashier(row);
     res.status(201).json({
-      cashier: mapCashier(row),
+      cashier: mapped,
+      merchant: mapped,
       initialPasswordHint: 'Initial password is the mobile number provided.',
     });
   } catch {
     res.status(409).json({ error: 'A user with that email already exists.' });
   }
-});
+}
+
+cashierRouter.post('/cashiers', requireAdmin, createMerchantPartnerAccount);
+cashierRouter.post('/merchants', requireAdmin, createMerchantPartnerAccount);
 
 cashierRouter.put('/cashiers/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const ex = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
-  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Cashier not found' });
+  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Merchant not found' });
 
   const email = req.body?.email != null ? normalizeEmail(req.body.email) : normalizeEmail(ex.email || ex.username);
   const mobile = req.body?.mobile != null ? normalizeMobile(req.body.mobile) : normalizeMobile(ex.mobile || '');
@@ -206,28 +243,62 @@ cashierRouter.put('/cashiers/:id', requireAdmin, (req, res) => {
 cashierRouter.delete('/cashiers/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const ex = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
-  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Cashier not found' });
+  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Merchant not found' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
-// ---- Cashier portal session APIs ----
-cashierRouter.get('/cashier/me', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.put('/merchants/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Merchant not found' });
+  const email = req.body?.email != null ? normalizeEmail(req.body.email) : normalizeEmail(ex.email || ex.username);
+  const mobile = req.body?.mobile != null ? normalizeMobile(req.body.mobile) : normalizeMobile(ex.mobile || '');
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Valid email is required' });
+  if (mobile.replace(/\D/g, '').length < 6) return res.status(400).json({ error: 'Mobile number is required' });
+  try {
+    db.prepare('UPDATE users SET username = ?, email = ?, mobile = ? WHERE id = ?').run(email, email, mobile, id);
+    if (req.body?.resetPasswordToMobile) {
+      db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(
+        bcrypt.hashSync(mobile, 10),
+        id
+      );
+    }
+    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    const mapped = mapCashier(row);
+    res.json({ cashier: mapped, merchant: mapped });
+  } catch {
+    res.status(409).json({ error: 'Email already in use.' });
+  }
+});
+
+cashierRouter.delete('/merchants/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+  if (!ex || !isCashierRole(ex.role)) return res.status(404).json({ error: 'Merchant not found' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// ---- Merchant portal session APIs (and legacy /cashier/* aliases) ----
+function merchantMe(req: AuthedRequest, res: any) {
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as any;
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({
     ...sessionPayload(row),
     ...mapCashier(row),
   });
-});
+}
+cashierRouter.get('/cashier/me', requireCashier, merchantMe);
+cashierRouter.get('/merchant/me', requireCashier, merchantMe);
 
-cashierRouter.put('/cashier/theme', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.put('/merchant/theme', requireCashier, (req: AuthedRequest, res) => {
   const theme = String(req.body?.theme || '').toLowerCase() === 'orbital' ? 'orbital' : 'matrix';
   db.prepare('UPDATE users SET cashier_theme = ? WHERE id = ?').run(theme, req.user!.id);
   res.json({ theme });
 });
 
-cashierRouter.post('/cashier/change-password', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.post('/merchant/change-password', requireCashier, (req: AuthedRequest, res) => {
   const current = String(req.body?.currentPassword || '');
   const next = String(req.body?.newPassword || '');
   if (next.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
@@ -242,7 +313,7 @@ cashierRouter.post('/cashier/change-password', requireCashier, (req: AuthedReque
   res.json({ ok: true });
 });
 
-cashierRouter.get('/cashier/subscribers', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.get('/merchant/subscribers', requireCashier, (req: AuthedRequest, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (q.length < 2) {
     return res.json({ subscribers: [] });
@@ -263,11 +334,11 @@ cashierRouter.get('/cashier/subscribers', requireCashier, (req: AuthedRequest, r
   res.json({ subscribers: rows });
 });
 
-cashierRouter.get('/cashier/merchants', requireCashier, (_req, res) => {
+cashierRouter.get('/merchant/payment-merchants', requireCashier, (_req, res) => {
   res.json({ merchants: listPaymentMerchants({ activeOnly: true }) });
 });
 
-cashierRouter.get('/cashier/recent', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.get('/merchant/recent', requireCashier, (req: AuthedRequest, res) => {
   const rows = db
     .prepare(
       `SELECT pl.id, pl.amount, pl.months, pl.status, pl.pay_channel AS payChannel,
@@ -283,7 +354,7 @@ cashierRouter.get('/cashier/recent', requireCashier, (req: AuthedRequest, res) =
   res.json({ payments: rows });
 });
 
-cashierRouter.get('/cashier/collectibles', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.get('/merchant/collectibles', requireCashier, (req: AuthedRequest, res) => {
   const status = String(req.query.status || 'open');
   const statuses = status === 'all' ? undefined : status.split(',').map((s) => s.trim()).filter(Boolean);
   res.json({
@@ -296,13 +367,13 @@ cashierRouter.get('/cashier/collectibles', requireCashier, (req: AuthedRequest, 
   });
 });
 
-cashierRouter.get('/cashier/deposits', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.get('/merchant/deposits', requireCashier, (req: AuthedRequest, res) => {
   res.json({
     deposits: listCashierDeposits({ cashierUserId: req.user!.id, limit: 100 }),
   });
 });
 
-cashierRouter.post('/cashier/deposits', requireCashier, (req: AuthedRequest, res) => {
+cashierRouter.post('/merchant/deposits', requireCashier, (req: AuthedRequest, res) => {
   try {
     const ids = Array.isArray(req.body?.collectibleIds)
       ? req.body.collectibleIds
@@ -323,7 +394,7 @@ cashierRouter.post('/cashier/deposits', requireCashier, (req: AuthedRequest, res
   }
 });
 
-cashierRouter.post('/cashier/collect', requireCashier, async (req: AuthedRequest, res) => {
+cashierRouter.post('/merchant/collect', requireCashier, async (req: AuthedRequest, res) => {
   try {
     const userId = Number(req.body?.userId || req.body?.pppoeUserId);
     if (!userId) return res.status(400).json({ error: 'Select a subscriber' });
@@ -347,7 +418,7 @@ cashierRouter.post('/cashier/collect', requireCashier, async (req: AuthedRequest
 });
 
 // ---- Admin: cashier collectibles / deposits ----
-cashierRouter.get('/cashier-collectibles', requireAdmin, (req, res) => {
+cashierRouter.get('/merchant-collectibles', requireAdmin, (req, res) => {
   const cashierUserId = req.query.cashierUserId ? Number(req.query.cashierUserId) : undefined;
   const status = req.query.status ? String(req.query.status) : undefined;
   res.json({
@@ -362,7 +433,7 @@ cashierRouter.get('/cashier-collectibles', requireAdmin, (req, res) => {
   });
 });
 
-cashierRouter.get('/cashier-deposits', requireAdmin, (req, res) => {
+cashierRouter.get('/merchant-deposits', requireAdmin, (req, res) => {
   const status = req.query.status ? String(req.query.status) : 'pending';
   res.json({
     deposits: listCashierDeposits({
@@ -372,13 +443,13 @@ cashierRouter.get('/cashier-deposits', requireAdmin, (req, res) => {
   });
 });
 
-cashierRouter.get('/cashier-deposits/:id', requireAdmin, (req, res) => {
+cashierRouter.get('/merchant-deposits/:id', requireAdmin, (req, res) => {
   const deposit = getCashierDeposit(Number(req.params.id));
   if (!deposit) return res.status(404).json({ error: 'not found' });
   res.json({ deposit });
 });
 
-cashierRouter.get('/cashier-deposits/:id/proof', (req: AuthedRequest, res) => {
+cashierRouter.get('/merchant-deposits/:id/proof', (req: AuthedRequest, res) => {
   // Cashier owner or admin
   const id = Number(req.params.id);
   const deposit = getCashierDeposit(id);
@@ -391,7 +462,7 @@ cashierRouter.get('/cashier-deposits/:id/proof', (req: AuthedRequest, res) => {
   res.sendFile(full);
 });
 
-cashierRouter.post('/cashier-deposits/:id/accept', requireAdmin, (req: AuthedRequest, res) => {
+cashierRouter.post('/merchant-deposits/:id/accept', requireAdmin, (req: AuthedRequest, res) => {
   try {
     const deposit = acceptCashierDeposit({
       depositId: Number(req.params.id),
@@ -404,7 +475,7 @@ cashierRouter.post('/cashier-deposits/:id/accept', requireAdmin, (req: AuthedReq
   }
 });
 
-cashierRouter.post('/cashier-deposits/:id/reject', requireAdmin, (req: AuthedRequest, res) => {
+cashierRouter.post('/merchant-deposits/:id/reject', requireAdmin, (req: AuthedRequest, res) => {
   try {
     const deposit = rejectCashierDeposit({
       depositId: Number(req.params.id),
@@ -419,9 +490,13 @@ cashierRouter.post('/cashier-deposits/:id/reject', requireAdmin, (req: AuthedReq
 
 /** Optional: cashier login helper returning mustChangePassword (uses same /login). */
 export function cashierLoginExtras(user: any) {
+  const partner = isMerchantPartnerRole(user.role);
   return {
     mustChangePassword: Number(user.must_change_password) === 1,
     theme: user.cashier_theme === 'orbital' ? 'orbital' : 'matrix',
-    isCashier: isCashierRole(user.role),
+    isCashier: partner,
+    isMerchantPartner: partner,
   };
 }
+
+
