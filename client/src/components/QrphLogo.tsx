@@ -20,7 +20,7 @@ export default function QrphLogo({ className = 'h-9 w-auto' }: { className?: str
         <text x="58" y="40" fill="#CE1126" letterSpacing="-1">
           QR
         </text>
-        <text x="108" y="40" fill="#FFFFFF" letterSpacing="-1">
+        <text x="108" y="40" fill="#0033A0" letterSpacing="-1">
           Ph
         </text>
       </g>

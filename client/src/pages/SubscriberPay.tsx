@@ -839,7 +839,7 @@ export default function SubscriberPay() {
                   {paymongoBusy ? (
                     <Loader2 className="animate-spin" size={18} />
                   ) : (
-                    <QrphLogo className="h-9 w-auto shrink-0 rounded-md shadow-sm" />
+                    <QrphLogo className="h-9 w-auto shrink-0" />
                   )}
                   {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                 </button>
