@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { useCompany } from '../context/CompanyContext';
 import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
