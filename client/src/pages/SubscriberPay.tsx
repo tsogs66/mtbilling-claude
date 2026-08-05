@@ -829,12 +829,20 @@ export default function SubscriberPay() {
                 </div>
                 <button
                   type="button"
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
+                  className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
                   disabled={paymongoBusy}
                   onClick={() => void startPaymongo()}
                 >
-                  {paymongoBusy ? <Loader2 className="animate-spin" size={18} /> : <CreditCard size={18} />}
-                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online (QR Ph)'}
+                  {paymongoBusy ? (
+                    <Loader2 className="animate-spin" size={18} />
+                  ) : (
+                    <img
+                      src="/wallets/qrph.svg"
+                      alt="QR Ph"
+                      className="h-8 w-auto rounded-md shadow-sm ring-1 ring-white/25 bg-[#1B4F9C]"
+                    />
+                  )}
+                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                 </button>
                 {(manualGcash || manualMaya || manualCash) && (
                   <p className="text-center text-xs text-slate-400">
