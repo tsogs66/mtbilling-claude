@@ -5,6 +5,16 @@ import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
 import { cashierCollectPayment } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
+import {
+  listCashierCollectibles,
+  listCashierDeposits,
+  getCashierDeposit,
+  submitCashierDeposit,
+  acceptCashierDeposit,
+  rejectCashierDeposit,
+  resolveDepositProofPath,
+  cashierCollectibleSummary,
+} from './cashierCollectibles.js';
 import { notifyClientChannels, phonesMatch } from './notify.js';
 
 export const cashierRouter = Router();
@@ -273,14 +283,57 @@ cashierRouter.get('/cashier/recent', requireCashier, (req: AuthedRequest, res) =
   res.json({ payments: rows });
 });
 
+cashierRouter.get('/cashier/collectibles', requireCashier, (req: AuthedRequest, res) => {
+  const status = String(req.query.status || 'open');
+  const statuses = status === 'all' ? undefined : status.split(',').map((s) => s.trim()).filter(Boolean);
+  res.json({
+    collectibles: listCashierCollectibles({
+      cashierUserId: req.user!.id,
+      status: statuses,
+      limit: 300,
+    }),
+    summary: cashierCollectibleSummary(req.user!.id),
+  });
+});
+
+cashierRouter.get('/cashier/deposits', requireCashier, (req: AuthedRequest, res) => {
+  res.json({
+    deposits: listCashierDeposits({ cashierUserId: req.user!.id, limit: 100 }),
+  });
+});
+
+cashierRouter.post('/cashier/deposits', requireCashier, (req: AuthedRequest, res) => {
+  try {
+    const ids = Array.isArray(req.body?.collectibleIds)
+      ? req.body.collectibleIds
+      : String(req.body?.collectibleIds || '')
+          .split(',')
+          .map((x: string) => Number(x.trim()))
+          .filter(Boolean);
+    const deposit = submitCashierDeposit({
+      cashierUserId: req.user!.id,
+      cashierUsername: req.user!.username,
+      collectibleIds: ids,
+      note: req.body?.note,
+      proofImage: req.body?.proofImage,
+    });
+    res.status(201).json({ deposit });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not submit deposit' });
+  }
+});
+
 cashierRouter.post('/cashier/collect', requireCashier, async (req: AuthedRequest, res) => {
   try {
     const userId = Number(req.body?.userId || req.body?.pppoeUserId);
     if (!userId) return res.status(400).json({ error: 'Select a subscriber' });
+    const collectionType =
+      String(req.body?.collectionType || '').toLowerCase() === 'online' ? 'online' : 'cash';
     const result = await cashierCollectPayment({
       pppoeUserId: userId,
       months: req.body?.months,
       amount: req.body?.amount,
+      collectionType,
       channel: req.body?.channel,
       reference: req.body?.reference,
       proofImage: req.body?.proofImage,
@@ -290,6 +343,77 @@ cashierRouter.post('/cashier/collect', requireCashier, async (req: AuthedRequest
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Payment failed' });
+  }
+});
+
+// ---- Admin: cashier collectibles / deposits ----
+cashierRouter.get('/cashier-collectibles', requireAdmin, (req, res) => {
+  const cashierUserId = req.query.cashierUserId ? Number(req.query.cashierUserId) : undefined;
+  const status = req.query.status ? String(req.query.status) : undefined;
+  res.json({
+    collectibles: listCashierCollectibles({
+      cashierUserId: Number.isFinite(cashierUserId as number) ? cashierUserId : undefined,
+      status: status && status !== 'all' ? status.split(',') : undefined,
+      limit: 500,
+    }),
+    summary: cashierCollectibleSummary(
+      Number.isFinite(cashierUserId as number) ? (cashierUserId as number) : undefined
+    ),
+  });
+});
+
+cashierRouter.get('/cashier-deposits', requireAdmin, (req, res) => {
+  const status = req.query.status ? String(req.query.status) : 'pending';
+  res.json({
+    deposits: listCashierDeposits({
+      status: status === 'all' ? undefined : status.split(','),
+      limit: 200,
+    }),
+  });
+});
+
+cashierRouter.get('/cashier-deposits/:id', requireAdmin, (req, res) => {
+  const deposit = getCashierDeposit(Number(req.params.id));
+  if (!deposit) return res.status(404).json({ error: 'not found' });
+  res.json({ deposit });
+});
+
+cashierRouter.get('/cashier-deposits/:id/proof', (req: AuthedRequest, res) => {
+  // Cashier owner or admin
+  const id = Number(req.params.id);
+  const deposit = getCashierDeposit(id);
+  if (!deposit) return res.status(404).json({ error: 'not found' });
+  const isAdmin = /admin/i.test(String(req.user?.role || ''));
+  const isOwner = req.user && Number(deposit.cashierUserId) === Number(req.user.id);
+  if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Forbidden' });
+  const full = resolveDepositProofPath(id);
+  if (!full) return res.status(404).json({ error: 'No proof on file' });
+  res.sendFile(full);
+});
+
+cashierRouter.post('/cashier-deposits/:id/accept', requireAdmin, (req: AuthedRequest, res) => {
+  try {
+    const deposit = acceptCashierDeposit({
+      depositId: Number(req.params.id),
+      admin: { id: req.user!.id, username: req.user!.username },
+      note: req.body?.note,
+    });
+    res.json({ deposit });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Accept failed' });
+  }
+});
+
+cashierRouter.post('/cashier-deposits/:id/reject', requireAdmin, (req: AuthedRequest, res) => {
+  try {
+    const deposit = rejectCashierDeposit({
+      depositId: Number(req.params.id),
+      admin: { id: req.user!.id, username: req.user!.username },
+      note: req.body?.note,
+    });
+    res.json({ deposit });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Reject failed' });
   }
 });
 

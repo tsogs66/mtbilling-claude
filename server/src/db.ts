@@ -834,6 +834,52 @@ export function migrate() {
   for (const [col, type] of txCashierCols) {
     if (!columnExists('transactions', col)) db.exec(`ALTER TABLE transactions ADD COLUMN ${col} ${type}`);
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cashier_collectibles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cashier_user_id INTEGER NOT NULL,
+      cashier_username TEXT NOT NULL,
+      payment_link_id INTEGER,
+      transaction_id INTEGER,
+      pppoe_user_id INTEGER,
+      amount REAL NOT NULL,
+      months INTEGER DEFAULT 1,
+      collection_type TEXT NOT NULL,
+      pay_channel TEXT,
+      external_ref TEXT,
+      subscriber_username TEXT,
+      customer_name TEXT,
+      account_number TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      deposit_id INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      collected_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cashier_collectibles_cashier
+      ON cashier_collectibles(cashier_user_id, status, id);
+    CREATE INDEX IF NOT EXISTS idx_cashier_collectibles_deposit
+      ON cashier_collectibles(deposit_id);
+
+    CREATE TABLE IF NOT EXISTS cashier_deposits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cashier_user_id INTEGER NOT NULL,
+      cashier_username TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'bulk',
+      amount_total REAL NOT NULL,
+      item_count INTEGER NOT NULL,
+      note TEXT,
+      proof_image TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TEXT,
+      reviewed_by_user_id INTEGER,
+      reviewed_by_username TEXT,
+      review_note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cashier_deposits_status
+      ON cashier_deposits(status, id);
+  `);
 }
 
 /** Wipe seeded demo rows (routers, clients, sales, map, logs, etc.) once per database. Inventory is preserved. */

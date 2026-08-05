@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare, Wallet } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction, TabPills } from '../components/ui';
 import { api, peso } from '../api';
@@ -48,6 +48,9 @@ export default function PayPortal() {
   const [lanIp, setLanIp] = useState<string | null>(null);
   const [savingUrl, setSavingUrl] = useState(false);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
+  const [cashierDeposits, setCashierDeposits] = useState<any[]>([]);
+  const [depositBusyId, setDepositBusyId] = useState<number | null>(null);
+  const [depositProofPreview, setDepositProofPreview] = useState<string | null>(null);
 
   const show = (m: string) => {
     setToast(m);
@@ -86,6 +89,10 @@ export default function PayPortal() {
       })
       .catch(() => setResendClients([]));
     loadConfig().catch(() => undefined);
+    api
+      .get('/cashier-deposits', { params: { status: 'pending,accepted' } })
+      .then((r) => setCashierDeposits(r.data.deposits || []))
+      .catch(() => setCashierDeposits([]));
   };
 
   useEffect(() => {
@@ -758,6 +765,129 @@ export default function PayPortal() {
         </div>
       </Card>
 
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="font-semibold text-slate-800 inline-flex items-center gap-2">
+              <Wallet size={18} className="text-amber-600" /> Cashier deposits
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Cashiers activate subscribers immediately. Accept a deposit when the cashier remits collections (single or bulk) with optional proof.
+            </p>
+          </div>
+          <button type="button" className="btn-secondary text-sm" onClick={load}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                <th className="py-2">Deposit</th>
+                <th className="py-2">Cashier</th>
+                <th className="py-2">Mode</th>
+                <th className="py-2">Items</th>
+                <th className="py-2">Amount</th>
+                <th className="py-2">Status</th>
+                <th className="py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cashierDeposits.map((d) => (
+                <tr key={d.id} className="border-b border-slate-50 align-top">
+                  <td className="py-2.5">
+                    <div className="font-semibold">#{d.id}</div>
+                    <div className="text-[11px] text-slate-400">
+                      {String(d.createdAt || '').slice(0, 16).replace('T', ' ')}
+                    </div>
+                    {d.note && <div className="text-xs text-slate-500 mt-0.5">{d.note}</div>}
+                  </td>
+                  <td className="py-2.5 text-xs font-mono">{d.cashierUsername}</td>
+                  <td className="py-2.5 capitalize text-xs">{d.mode}</td>
+                  <td className="py-2.5">{d.itemCount}</td>
+                  <td className="py-2.5 font-semibold">{peso(d.amountTotal)}</td>
+                  <td className="py-2.5">
+                    <StatusBadge status={d.status === 'pending' ? 'For approval' : d.status} />
+                  </td>
+                  <td className="py-2.5">
+                    <div className="flex justify-end gap-1 flex-wrap">
+                      {(d.proofUrl || d.proofImage) && (
+                        <IconAction
+                          icon={ImageIcon}
+                          title="View deposit proof"
+                          tone="sky"
+                          onClick={async () => {
+                            try {
+                              const r = await api.get(`/cashier-deposits/${d.id}/proof`, {
+                                responseType: 'blob',
+                              });
+                              const url = URL.createObjectURL(r.data);
+                              setDepositProofPreview(url);
+                            } catch {
+                              show('Could not load deposit proof');
+                            }
+                          }}
+                        />
+                      )}
+                      {d.status === 'pending' && (
+                        <>
+                          <IconAction
+                            icon={Check}
+                            title="Accept as collected"
+                            tone="emerald"
+                            onClick={async () => {
+                              if (!confirm(`Accept deposit #${d.id} (${peso(d.amountTotal)}) from ${d.cashierUsername}?`)) return;
+                              setDepositBusyId(d.id);
+                              try {
+                                await api.post(`/cashier-deposits/${d.id}/accept`);
+                                show(`Deposit #${d.id} accepted`);
+                                load();
+                              } catch (e: any) {
+                                show(e?.response?.data?.error || 'Accept failed');
+                              } finally {
+                                setDepositBusyId(null);
+                              }
+                            }}
+                          />
+                          <IconAction
+                            icon={X}
+                            title="Reject (return to cashier)"
+                            tone="rose"
+                            onClick={async () => {
+                              const note = prompt('Reject reason (optional)') || '';
+                              setDepositBusyId(d.id);
+                              try {
+                                await api.post(`/cashier-deposits/${d.id}/reject`, { note });
+                                show(`Deposit #${d.id} rejected — items returned to cashier`);
+                                load();
+                              } catch (e: any) {
+                                show(e?.response?.data?.error || 'Reject failed');
+                              } finally {
+                                setDepositBusyId(null);
+                              }
+                            }}
+                          />
+                        </>
+                      )}
+                      {depositBusyId === d.id && (
+                        <span className="text-xs text-slate-400 self-center">…</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {cashierDeposits.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-slate-400">
+                    No cashier deposits yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
       {proofPreview && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
@@ -767,6 +897,22 @@ export default function PayPortal() {
           }}
         >
           <img src={proofPreview} alt="Payment proof" className="max-h-[90vh] max-w-full rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
+      {depositProofPreview && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => {
+            URL.revokeObjectURL(depositProofPreview);
+            setDepositProofPreview(null);
+          }}
+        >
+          <img
+            src={depositProofPreview}
+            alt="Cashier deposit proof"
+            className="max-h-[90vh] max-w-full rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </Layout>

@@ -16,6 +16,7 @@ import { getSettings as getNotifySettings } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 import { pushPortalActivity } from './portalExtras.js';
 import { getPaymentMerchant, listPaymentMerchants } from './paymentMerchants.js';
+import { createCashierCollectible } from './cashierCollectibles.js';
 
 const SESSION_REFRESH_MS = 2000;
 /** Cap how long any single request will wait on a router call before responding anyway. */
@@ -891,7 +892,7 @@ export async function recordPppoePayment(
     total,
   };
 
-  db.prepare(
+  const txInfo = db.prepare(
     'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     userId,
@@ -903,6 +904,7 @@ export async function recordPppoePayment(
     opts.cashierUserId != null ? Number(opts.cashierUserId) : null,
     opts.cashierUsername ? String(opts.cashierUsername) : null
   );
+  const transactionId = Number(txInfo.lastInsertRowid);
 
   const cashierNote = opts.cashierUsername ? ` cashier=${opts.cashierUsername}` : '';
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -985,6 +987,7 @@ export async function recordPppoePayment(
     discount,
     total,
     amount: total,
+    transactionId,
     sync,
     sessionRefresh,
     receipt,
@@ -1511,15 +1514,33 @@ export async function cashierCollectPayment(opts: {
   pppoeUserId: number;
   months?: number;
   amount?: number | null;
-  channel: string;
+  /** How the subscriber paid the cashier: cash or online */
+  collectionType?: 'cash' | 'online';
+  channel?: string;
   reference?: string;
   proofImage?: string | null;
   merchantId?: number | null;
   cashier: { id: number; username: string };
 }) {
-  const channel = String(opts.channel || '').toLowerCase().trim();
-  if (channel !== 'gcash' && channel !== 'maya' && channel !== 'cash') {
-    throw new Error('Select GCash, Maya, or Cash as the payment channel');
+  const collectionType = String(opts.collectionType || opts.channel || '').toLowerCase() === 'online'
+    ? 'online'
+    : String(opts.collectionType || '').toLowerCase() === 'cash'
+      ? 'cash'
+      : String(opts.channel || '').toLowerCase() === 'cash'
+        ? 'cash'
+        : 'online';
+
+  let channel = String(opts.channel || '').toLowerCase().trim();
+  if (collectionType === 'cash') {
+    channel = channel === 'gcash' || channel === 'maya' ? channel : 'cash';
+  } else {
+    if (channel !== 'gcash' && channel !== 'maya') {
+      // Online collection — require an e-wallet channel if not set
+      channel = channel === 'cash' ? 'gcash' : (channel || 'gcash');
+    }
+    if (channel !== 'gcash' && channel !== 'maya' && channel !== 'cash') {
+      throw new Error('Select GCash or Maya for online collection');
+    }
   }
 
   let merchantId: number | null = null;
@@ -1568,8 +1589,8 @@ export async function cashierCollectPayment(opts: {
     const file = `cashier-${String(link.token).slice(0, 20)}-${Date.now()}.${ext}`;
     fs.writeFileSync(path.join(dir, file), buf);
     proofPath = `pay-proofs/${file}`;
-  } else if (channel !== 'cash') {
-    throw new Error('Upload a payment proof screenshot');
+  } else if (collectionType === 'online') {
+    throw new Error('Upload a payment proof screenshot for online collections');
   }
 
   db.prepare(
@@ -1617,6 +1638,24 @@ export async function cashierCollectPayment(opts: {
     /* ignore */
   }
 
+  const subscriber = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
+  const txId = Number((payment as any)?.transactionId || (payment as any)?.id) || null;
+  const collectibleId = createCashierCollectible({
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+    paymentLinkId: link.id,
+    transactionId: txId,
+    pppoeUserId: opts.pppoeUserId,
+    amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
+    months: link.months || 1,
+    collectionType: collectionType as 'cash' | 'online',
+    payChannel: channel,
+    externalRef: reference,
+    subscriberUsername: subscriber?.username || null,
+    customerName: subscriber?.customer_name || null,
+    accountNumber: subscriber?.account_number || null,
+  });
+
   return {
     ok: true,
     linkId: link.id,
@@ -1624,9 +1663,11 @@ export async function cashierCollectPayment(opts: {
     amount: link.amount,
     months: link.months,
     channel,
+    collectionType,
     reference,
     merchantName,
     cashier: opts.cashier.username,
+    collectibleId,
     payment,
   };
 }
