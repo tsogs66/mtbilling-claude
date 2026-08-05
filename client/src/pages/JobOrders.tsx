@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ClipboardList, Plus, Pencil, Trash2, Wrench } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, DataTable, IconAction, Modal, ModalFooter, FormField, StatTile, StatusBadge, TabPills } from '../components/ui';
 import { api } from '../api';
+import { useAuth } from '../context/AuthContext';
 import { subscribePortalLive } from '../lib/portalLive';
 
 const TYPES = [
@@ -22,9 +23,12 @@ const STATUSES = [
 ];
 
 export default function JobOrders() {
+  const { user } = useAuth();
+  const isTech = /tech/i.test(String(user?.role || ''));
   const [jobs, setJobs] = useState<any[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState('');
+  const [myJobsOnly, setMyJobsOnly] = useState(isTech);
   const [edit, setEdit] = useState<any>(null);
   const [subs, setSubs] = useState<any[]>([]);
 
@@ -60,6 +64,12 @@ export default function JobOrders() {
     }).catch(() => {});
   }, []);
 
+  const visibleJobs = useMemo(() => {
+    if (!myJobsOnly || !user?.username) return jobs;
+    const me = String(user.username).toLowerCase();
+    return jobs.filter((j) => String(j.assigned_to || '').toLowerCase() === me);
+  }, [jobs, myJobsOnly, user?.username]);
+
   const del = async (id: number) => {
     if (!confirm('Delete this job order?')) return;
     await api.delete(`/job-orders/${id}`);
@@ -84,12 +94,25 @@ export default function JobOrders() {
           </button>
         }
       >
-        <div className="mb-4">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
           <TabPills
             tabs={STATUSES.map((s) => ({ key: s.key || 'all', label: s.label }))}
             active={status || 'all'}
             onChange={(k) => setStatus(k === 'all' ? '' : k)}
           />
+          {isTech && (
+            <button
+              type="button"
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition ${
+                myJobsOnly
+                  ? 'bg-sky-50 border-sky-300 text-sky-800'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+              onClick={() => setMyJobsOnly((v) => !v)}
+            >
+              My jobs
+            </button>
+          )}
         </div>
         <DataTable
           columns={[
@@ -100,7 +123,7 @@ export default function JobOrders() {
             { key: 'tech', label: 'Assigned' },
             { key: 'actions', label: '', align: 'right' },
           ]}
-          rows={jobs.map((j) => ({
+          rows={visibleJobs.map((j) => ({
             key: j.id,
             cells: [
               <span className="font-mono text-sm font-medium text-slate-800">{j.number}</span>,
@@ -119,7 +142,7 @@ export default function JobOrders() {
               </div>,
             ],
           }))}
-          emptyMessage="No job orders yet."
+          emptyMessage={myJobsOnly ? 'No jobs assigned to you.' : 'No job orders yet.'}
         />
       </Card>
 

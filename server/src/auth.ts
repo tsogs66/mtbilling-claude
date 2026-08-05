@@ -148,6 +148,23 @@ export function userHasPermission(roleName: string, permission: string): boolean
   return perms.includes(permission);
 }
 
+/**
+ * Require at least one of the listed permissions (Administrators with * always pass).
+ * Mount after requireAuth.
+ */
+export function requirePermission(...needed: string[]) {
+  return (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'missing token' });
+    if (needed.length === 0) return next();
+    if (needed.some((p) => userHasPermission(req.user!.role, p))) return next();
+    return res.status(403).json({
+      error: 'Forbidden',
+      code: 'PERMISSION_DENIED',
+      message: `Requires permission: ${needed.join(' or ')}`,
+    });
+  };
+}
+
 /** Build the session payload returned by /login and /me. */
 export function sessionPayload(user: { id: number; username: string; role: string }) {
   const license = getLicenseStatus();

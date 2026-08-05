@@ -166,6 +166,8 @@ settingsRouter.put('/settings/app', (req, res) => {
 });
 
 // ---------- Ngrok remote access (config + simulated tunnel status) ----------
+// NOTE: This does NOT start a real ngrok process. Prefer Cloudflare Tunnel
+// (System Settings → Cloudflare / /cloudflare) for production remote access.
 settingsRouter.post('/ngrok/toggle', (_req, res) => {
   const s = getApp();
   const starting = s.ngrok_status !== 'running';
@@ -175,8 +177,17 @@ settingsRouter.post('/ngrok/toggle', (_req, res) => {
   const status = starting ? 'running' : 'stopped';
   const url = starting ? `https://${Math.random().toString(36).slice(2, 10)}.${s.ngrok_region || 'ap'}.ngrok.io` : null;
   db.prepare('UPDATE app_settings SET ngrok_status = ?, ngrok_url = ? WHERE id = 1').run(status, url);
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'ngrok', `Tunnel ${status}${url ? ` at ${url}` : ''}`);
-  res.json({ status, url });
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'ngrok',
+    `SIMULATED tunnel ${status}${url ? ` at ${url}` : ''} — use Cloudflare Tunnel for real remote access`
+  );
+  res.json({
+    status,
+    url,
+    simulated: true,
+    message: 'Ngrok toggle is simulated. Use Cloudflare Tunnel for real public HTTPS access.',
+  });
 });
 
 // ---------- Cloudflare Tunnel (real cloudflared via install script) ----------
@@ -495,7 +506,15 @@ export const BACKUP_CATEGORIES: Record<string, string[]> = {
   clients: ['pppoe_users', 'profiles', 'ipoe_profiles', 'ipoe_plans', 'ipoe_lease_meta'],
   network: ['routers', 'naps', 'splitters', 'splitter_loss_reference', 'noc_devices', 'queues'],
   reports: ['transactions', 'payment_links', 'invoices', 'invoice_payments', 'expenses'],
-  operations: ['notifications', 'job_orders', 'ai_scripts', 'inventory', 'usage_alerts'],
+  operations: [
+    'notifications',
+    'job_orders',
+    'ai_scripts',
+    'inventory',
+    'usage_alerts',
+    'cashier_collectibles',
+    'cashier_deposits',
+  ],
 };
 
 function listExistingTables(): Set<string> {

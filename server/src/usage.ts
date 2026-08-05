@@ -240,6 +240,22 @@ async function pollUsageAndFairUseInner(opts?: { routerId?: number | null }) {
                   'fair_use_alert'
                 );
               }
+              // Optional auto-throttle: switch MikroTik PPP profile to configured throttle profile
+              try {
+                const { getFairUseThrottleSettings } = await import('./paymongo.js');
+                const { changePppoeUserPlan } = await import('./billing.js');
+                const th = getFairUseThrottleSettings();
+                if (th.autoThrottle && th.throttleProfile && th.throttleProfile !== user.profile) {
+                  await changePppoeUserPlan(user.id, th.throttleProfile);
+                  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+                    'warning',
+                    'fair-use',
+                    `Auto-throttled ${user.username}: ${user.profile} → ${th.throttleProfile}`
+                  );
+                }
+              } catch (e: any) {
+                console.error('[usage] auto-throttle', e?.message || e);
+              }
             }
             overCapSince.delete(key);
           }

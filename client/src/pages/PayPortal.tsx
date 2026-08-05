@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare, Wallet } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon, Send, Mail, MessageSquare, Wallet, CreditCard, BarChart3 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, Toolbar, StatusBadge, IconAction, TabPills } from '../components/ui';
+import { Card, Toolbar, StatusBadge, IconAction, TabPills, FormField } from '../components/ui';
 import { api, peso } from '../api';
 import { copyTextOrPrompt } from '../lib/clipboard';
+
+const PAYMONGO_METHODS = ['gcash', 'paymaya', 'qrph'] as const;
 
 const LINK_TTL_DAYS = 15;
 const RESEND_WITHIN_DAYS = 10;
@@ -52,6 +54,18 @@ export default function PayPortal() {
   const [depositBusyId, setDepositBusyId] = useState<number | null>(null);
   const [depositProofPreview, setDepositProofPreview] = useState<string | null>(null);
 
+  const [paymongoEnabled, setPaymongoEnabled] = useState(false);
+  const [paymongoSecret, setPaymongoSecret] = useState('');
+  const [paymongoPublic, setPaymongoPublic] = useState('');
+  const [paymongoWebhookSecret, setPaymongoWebhookSecret] = useState('');
+  const [paymongoSecretSet, setPaymongoSecretSet] = useState(false);
+  const [paymongoPublicSet, setPaymongoPublicSet] = useState(false);
+  const [paymongoWebhookSet, setPaymongoWebhookSet] = useState(false);
+  const [paymongoMethods, setPaymongoMethods] = useState<string[]>(['gcash', 'paymaya', 'qrph']);
+  const [paymongoWebhookUrl, setPaymongoWebhookUrl] = useState('');
+  const [paymongoBusy, setPaymongoBusy] = useState(false);
+  const [settlement, setSettlement] = useState<any>(null);
+
   const show = (m: string) => {
     setToast(m);
     setTimeout(() => setToast(''), 5000);
@@ -93,6 +107,62 @@ export default function PayPortal() {
       .get('/merchant-deposits', { params: { status: 'pending,accepted' } })
       .then((r) => setCashierDeposits(r.data.deposits || []))
       .catch(() => setCashierDeposits([]));
+    api
+      .get('/paymongo/settings')
+      .then((r) => {
+        const s = r.data || {};
+        setPaymongoEnabled(!!s.enabled);
+        setPaymongoMethods(Array.isArray(s.methods) && s.methods.length ? s.methods : ['gcash', 'paymaya', 'qrph']);
+        setPaymongoSecretSet(!!s.secretKeySet);
+        setPaymongoPublicSet(!!s.publicKeySet);
+        setPaymongoWebhookSet(!!s.webhookSecretSet);
+        setPaymongoWebhookUrl(s.webhookUrl || '');
+        setPaymongoSecret('');
+        setPaymongoPublic('');
+        setPaymongoWebhookSecret('');
+      })
+      .catch(() => undefined);
+    api
+      .get('/merchant-settlement')
+      .then((r) => setSettlement(r.data))
+      .catch(() => setSettlement(null));
+  };
+
+  const savePaymongo = async () => {
+    setPaymongoBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        enabled: paymongoEnabled,
+        methods: paymongoMethods,
+      };
+      if (paymongoSecret.trim()) body.secretKey = paymongoSecret.trim();
+      if (paymongoPublic.trim()) body.publicKey = paymongoPublic.trim();
+      if (paymongoWebhookSecret.trim()) body.webhookSecret = paymongoWebhookSecret.trim();
+      const r = await api.put('/paymongo/settings', body);
+      const s = r.data?.settings || r.data || {};
+      setPaymongoEnabled(!!s.enabled);
+      setPaymongoMethods(Array.isArray(s.methods) && s.methods.length ? s.methods : paymongoMethods);
+      setPaymongoSecretSet(!!s.secretKeySet);
+      setPaymongoPublicSet(!!s.publicKeySet);
+      setPaymongoWebhookSet(!!s.webhookSecretSet);
+      setPaymongoSecret('');
+      setPaymongoPublic('');
+      setPaymongoWebhookSecret('');
+      show('PayMongo settings saved');
+      const cfg = await api.get('/paymongo/settings').catch(() => null);
+      if (cfg?.data?.webhookUrl) setPaymongoWebhookUrl(cfg.data.webhookUrl);
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Could not save PayMongo settings');
+    } finally {
+      setPaymongoBusy(false);
+    }
+  };
+
+  const togglePaymongoMethod = (m: string) => {
+    setPaymongoMethods((prev) => {
+      if (prev.includes(m)) return prev.filter((x) => x !== m);
+      return [...prev, m];
+    });
   };
 
   useEffect(() => {
@@ -452,6 +522,117 @@ export default function PayPortal() {
             </div>
           )}
           {warning && <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">{warning}</div>}
+        </div>
+      </Card>
+
+      <Card className="mb-5">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+            <CreditCard size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-slate-800">PayMongo (GCash / Maya / QR Ph)</div>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Hosted checkout for subscriber pay links. Leave secret fields blank to keep the saved value.
+            </p>
+          </div>
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 shrink-0">
+            <input
+              type="checkbox"
+              className="rounded border-slate-300"
+              checked={paymongoEnabled}
+              onChange={(e) => setPaymongoEnabled(e.target.checked)}
+            />
+            Enabled
+          </label>
+        </div>
+        <div className="grid sm:grid-cols-3 gap-3 mb-3">
+          <FormField label={`Secret key${paymongoSecretSet ? ' (saved)' : ''}`}>
+            <input
+              className="input font-mono text-sm"
+              type="password"
+              autoComplete="off"
+              placeholder={paymongoSecretSet ? '••••••• (leave blank to keep)' : 'sk_live_… or sk_test_…'}
+              value={paymongoSecret}
+              onChange={(e) => setPaymongoSecret(e.target.value)}
+            />
+          </FormField>
+          <FormField label={`Public key${paymongoPublicSet ? ' (saved)' : ''}`}>
+            <input
+              className="input font-mono text-sm"
+              type="password"
+              autoComplete="off"
+              placeholder={paymongoPublicSet ? '••••••• (leave blank to keep)' : 'pk_live_… or pk_test_…'}
+              value={paymongoPublic}
+              onChange={(e) => setPaymongoPublic(e.target.value)}
+            />
+          </FormField>
+          <FormField label={`Webhook secret${paymongoWebhookSet ? ' (saved)' : ''}`}>
+            <input
+              className="input font-mono text-sm"
+              type="password"
+              autoComplete="off"
+              placeholder={paymongoWebhookSet ? '••••••• (leave blank to keep)' : 'whsk_…'}
+              value={paymongoWebhookSecret}
+              onChange={(e) => setPaymongoWebhookSecret(e.target.value)}
+            />
+          </FormField>
+        </div>
+        <div className="mb-3">
+          <div className="text-xs text-slate-500 mb-1.5">Payment methods</div>
+          <div className="flex flex-wrap gap-2">
+            {PAYMONGO_METHODS.map((m) => (
+              <label
+                key={m}
+                className={`inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border cursor-pointer ${
+                  paymongoMethods.includes(m)
+                    ? 'bg-indigo-50 border-indigo-200 text-indigo-800'
+                    : 'bg-white border-slate-200 text-slate-600'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="rounded border-slate-300"
+                  checked={paymongoMethods.includes(m)}
+                  onChange={() => togglePaymongoMethod(m)}
+                />
+                {m}
+              </label>
+            ))}
+          </div>
+          <input
+            className="input mt-2 font-mono text-xs"
+            placeholder="Or comma list: gcash,paymaya,qrph"
+            value={paymongoMethods.join(',')}
+            onChange={(e) =>
+              setPaymongoMethods(
+                e.target.value
+                  .split(',')
+                  .map((s) => s.trim().toLowerCase())
+                  .filter(Boolean)
+              )
+            }
+          />
+        </div>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="text-sm flex-1 min-w-[240px]">
+            <span className="text-xs text-slate-500">Webhook URL</span>
+            <input className="input mt-1 font-mono text-sm bg-slate-50" readOnly value={paymongoWebhookUrl || '—'} />
+          </label>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!paymongoWebhookUrl}
+            onClick={async () => {
+              const ok = await copyTextOrPrompt(paymongoWebhookUrl, 'PayMongo webhook URL — copy:');
+              show(ok ? 'Webhook URL copied' : 'Copy from the dialog');
+            }}
+          >
+            <Copy size={16} /> Copy
+          </button>
+          <button type="button" className="btn-primary" disabled={paymongoBusy} onClick={savePaymongo}>
+            <Save size={16} /> {paymongoBusy ? 'Saving…' : 'Save PayMongo'}
+          </button>
         </div>
       </Card>
 
@@ -886,6 +1067,82 @@ export default function PayPortal() {
             </tbody>
           </table>
         </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="font-semibold text-slate-800 inline-flex items-center gap-2">
+              <BarChart3 size={18} className="text-sky-600" /> Settlement report
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Collectibles and deposit totals by merchant/cashier.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary text-sm"
+            onClick={() =>
+              api
+                .get('/merchant-settlement')
+                .then((r) => setSettlement(r.data))
+                .catch(() => setSettlement(null))
+            }
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
+        <div className="overflow-auto mb-4">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                <th className="py-2">Cashier</th>
+                <th className="py-2 text-right">Open</th>
+                <th className="py-2 text-right">Submitted</th>
+                <th className="py-2 text-right">Collected</th>
+                <th className="py-2 text-right">Rejected</th>
+                <th className="py-2 text-right">Items</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(settlement?.byCashier || []).map((row: any) => (
+                <tr key={row.cashierUserId || row.cashierUsername} className="border-b border-slate-50">
+                  <td className="py-2.5 font-mono text-xs">{row.cashierUsername || '—'}</td>
+                  <td className="py-2.5 text-right">{peso(Number(row.openTotal) || 0)}</td>
+                  <td className="py-2.5 text-right">{peso(Number(row.submittedTotal) || 0)}</td>
+                  <td className="py-2.5 text-right">{peso(Number(row.collectedTotal) || 0)}</td>
+                  <td className="py-2.5 text-right">{peso(Number(row.rejectedTotal) || 0)}</td>
+                  <td className="py-2.5 text-right text-slate-500">{row.items ?? 0}</td>
+                </tr>
+              ))}
+              {(!settlement?.byCashier || settlement.byCashier.length === 0) && (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-slate-400">
+                    No settlement data yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {(settlement?.depositsByStatus || []).length > 0 && (
+          <div>
+            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Deposit status totals</div>
+            <div className="flex flex-wrap gap-2">
+              {(settlement.depositsByStatus || []).map((d: any) => (
+                <div
+                  key={String(d.status)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"
+                >
+                  <span className="capitalize text-slate-600">{d.status}</span>
+                  <span className="mx-1.5 text-slate-300">·</span>
+                  <span className="font-semibold text-slate-800">{peso(Number(d.total) || 0)}</span>
+                  <span className="text-xs text-slate-400 ml-1">({d.count})</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Card>
 
       {proofPreview && (

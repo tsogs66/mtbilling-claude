@@ -487,21 +487,28 @@ function record(n: {
 
   // System Logs (Logs page / `logs` table) — SMS send audit trail
   if (n.channel === 'sms') {
-    const level = n.status === 'sent' || n.status === 'simulated' ? 'info' : 'warning';
+    const level = n.status === 'sent' ? 'info' : n.status === 'simulated' ? 'warning' : 'warning';
     const to = String(n.recipient || '—').trim() || '—';
     const who = n.customer_name ? ` (${n.customer_name})` : '';
     const kind = n.type ? ` [${n.type}]` : '';
     const detail = n.detail ? ` — ${n.detail}` : '';
-    const preview = String(n.message || '')
+    let preview = String(n.message || '')
       .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120);
+      .trim();
+    // Never persist default/temp passwords in system logs
+    preview = preview
+      .replace(/default password:\s*\S+/gi, 'default password: [redacted]')
+      .replace(/temporary (?:merchant )?portal password is:\s*\S+/gi, 'temporary password is: [redacted]')
+      .replace(/password is:\s*\S+/gi, 'password is: [redacted]');
+    preview = preview.slice(0, 120);
+    const statusLabel =
+      n.status === 'simulated' ? 'SIMULATED (not delivered)' : n.status;
     const body = preview ? ` · "${preview}${preview.length >= 120 ? '…' : ''}"` : '';
     try {
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         level,
         'sms',
-        `SMS ${n.status} → ${to}${who}${kind}${detail}${body}`
+        `SMS ${statusLabel} → ${to}${who}${kind}${detail}${body}`
       );
     } catch {
       /* never break delivery on log failure */

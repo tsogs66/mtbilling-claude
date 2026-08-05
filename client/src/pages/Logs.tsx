@@ -177,6 +177,12 @@ function EmailLogs() {
   );
 }
 
+function redactSmsMessage(msg: unknown): string {
+  const text = String(msg ?? '');
+  if (/Default password:/i.test(text) || /password is:/i.test(text)) return '[redacted]';
+  return text;
+}
+
 function SmsLogs() {
   const [sub, setSub] = useState('all');
   const [rows, setRows] = useState<any[]>([]);
@@ -209,7 +215,7 @@ function SmsLogs() {
           {r.type ? <span className="text-slate-400"> · {r.type}</span> : null}
         </div>
         {r.subject && <div className="text-slate-800 font-semibold">{r.subject}</div>}
-        <div className="text-slate-600 whitespace-pre-wrap">{r.message}</div>
+        <div className="text-slate-600 whitespace-pre-wrap">{redactSmsMessage(r.message)}</div>
         {r.detail && <div className="text-slate-400">{r.detail}</div>}
       </div>,
     ],

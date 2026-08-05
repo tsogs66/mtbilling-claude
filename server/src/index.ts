@@ -12,8 +12,23 @@ import { db, initSchema, seed, migrate } from './db.js';
 import { getInstanceFingerprint, fingerprintsMatch } from './instance.js';
 import {
   signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable,
+  requirePermission, userHasPermission, permissionsForRole,
   signPendingTotpToken, verifyPendingTotpToken, tokenNeedsRefresh, type AuthedRequest,
 } from './auth.js';
+import { loginRateLimitCheck, loginRateLimitFail, loginRateLimitSuccess } from './loginRateLimit.js';
+import {
+  ensurePaymongoColumns,
+  getPaymongoSettings,
+  updatePaymongoSettings,
+  createPaymongoCheckout,
+  handlePaymongoWebhook,
+  verifyPaymongoSignature,
+  getBackupAutoSettings,
+  updateBackupAutoSettings,
+  getFairUseThrottleSettings,
+  updateFairUseThrottleSettings,
+} from './paymongo.js';
+import { startAutoBackupScheduler, runAutoBackupOnce } from './autoBackup.js';
 import { verifyTotpToken } from './totp.js';
 import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
 import {
@@ -266,7 +281,17 @@ if (corsOrigins.length) {
 }
 // Company logo + GCash/Maya QR images are stored as data-URLs in JSON
 // DB restore uploads arrive as base64 data-URLs (~33% larger than the .db file).
-app.use(express.json({ limit: '100mb' }));
+app.use(
+  express.json({
+    limit: '100mb',
+    verify: (req, _res, buf) => {
+      // Preserve raw bytes for PayMongo webhook HMAC verification
+      if (String(req.url || '').includes('/paymongo/webhook')) {
+        (req as any).rawBody = buf.toString('utf8');
+      }
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // Never let Cloudflare / intermediate proxies cache authenticated API JSON —
@@ -287,6 +312,16 @@ const PORT = Number(process.env.PORT) || 4000;
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const login = String(username || '').trim();
+  const ip = String(req.ip || req.socket.remoteAddress || '');
+  const limited = loginRateLimitCheck(ip, login);
+  if (!limited.ok) {
+    res.setHeader('Retry-After', String(limited.retryAfterSec));
+    return res.status(429).json({
+      error: `Too many failed sign-in attempts. Try again in ${Math.ceil(limited.retryAfterSec / 60)} minute(s).`,
+      code: 'LOGIN_RATE_LIMIT',
+      retryAfterSec: limited.retryAfterSec,
+    });
+  }
   const row = (db
     .prepare(
       `SELECT * FROM users WHERE username = ? OR lower(username) = lower(?) OR lower(COALESCE(email,'')) = lower(?) LIMIT 1`
@@ -305,11 +340,13 @@ app.post('/api/login', (req, res) => {
       }
     | null;
   if (!row || !bcrypt.compareSync(password || '', row.password_hash)) {
+    loginRateLimitFail(ip, login);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
   if (row.totp_enabled) {
     return res.json({ requiresTotp: true, pendingToken: signPendingTotpToken(row.id) });
   }
+  loginRateLimitSuccess(ip, login);
   const token = signToken({ id: row.id, username: row.username, role: row.role });
   const session = sessionPayload(row);
   res.json({ token, ...session, ...cashierLoginExtras(row) });
@@ -349,6 +386,7 @@ app.post('/api/login/totp', (req, res) => {
     return res.status(401).json({ error: 'Invalid authentication code.' });
   }
 
+  loginRateLimitSuccess(String(req.ip || ''), row.username);
   const token = signToken({ id: row.id, username: row.username, role: row.role });
   const session = sessionPayload(row);
   if (usedBackupCode) {
@@ -502,6 +540,54 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
   }
 });
 
+/** Public: PayMongo availability for a pay link page. */
+app.get('/api/public/paymongo/status', (_req, res) => {
+  ensurePaymongoColumns();
+  const s = getPaymongoSettings();
+  res.json({ enabled: s.enabled && s.secretKeySet, methods: s.methods });
+});
+
+/** Public: start PayMongo hosted checkout for a payment link token. */
+app.post('/api/public/pay/:token/paymongo', async (req, res) => {
+  try {
+    ensurePaymongoColumns();
+    const origin = String(req.headers.origin || req.headers.referer || '')
+      .replace(/\/pay\/.*$/i, '')
+      .replace(/\/$/, '');
+    const base =
+      origin ||
+      String(
+        (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)?.public_base_url || ''
+      ).replace(/\/$/, '');
+    const token = String(req.params.token);
+    const successUrl = `${base}/pay/${token}?paid=1`;
+    const cancelUrl = `${base}/pay/${token}?canceled=1`;
+    const result = await createPaymongoCheckout({ token, successUrl, cancelUrl });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not start PayMongo checkout' });
+  }
+});
+
+/** Public: PayMongo webhook — activates subscriber when checkout is paid. */
+app.post('/api/public/paymongo/webhook', async (req, res) => {
+  try {
+    ensurePaymongoColumns();
+    const raw =
+      typeof (req as any).rawBody === 'string'
+        ? (req as any).rawBody
+        : JSON.stringify(req.body || {});
+    const sig = String(req.headers['paymongo-signature'] || '');
+    if (!verifyPaymongoSignature(raw, sig)) {
+      return res.status(400).json({ error: 'Invalid signature' });
+    }
+    const result = await handlePaymongoWebhook(req.body);
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Webhook failed' });
+  }
+});
+
 /** Public liveness probe — Updater UI polls this without an Authorization header. */
 app.get('/api/health', (_req, res) => {
   const a = getApplianceProfile();
@@ -589,6 +675,53 @@ app.post('/api/sync/push', express.json({ limit: '80mb' }), syncAuth, (req, res)
 });
 
 app.use('/api', requireAuth);
+
+/** Path-based permission gates (UI menus already filter; this enforces on the API). */
+app.use('/api', (req: AuthedRequest, res, next) => {
+  if (!req.user) return next();
+  const p = (req.path || '').replace(/^\/api/, '') || req.url.split('?')[0];
+  const method = (req.method || 'GET').toUpperCase();
+  // Admins / * always pass via requirePermission check below
+  const rules: { re: RegExp; perms: string[]; writeOnly?: boolean }[] = [
+    { re: /^\/(roles|panel-users)(\/|$)/, perms: ['roles'] },
+    { re: /^\/(db\/backup|db\/backups|db\/restore)/, perms: ['settings'] },
+    { re: /^\/payment-links(\/|$)/, perms: ['sales'] },
+    { re: /^\/merchant-deposits(\/|$)/, perms: ['sales'] },
+    { re: /^\/merchants(\/|$)/, perms: ['roles'] },
+    { re: /^\/cashiers(\/|$)/, perms: ['roles'] },
+    { re: /^\/job-orders(\/|$)/, perms: ['job-orders'] },
+    { re: /^\/invoices(\/|$)/, perms: ['invoices'] },
+    { re: /^\/finance(\/|$)/, perms: ['finance'] },
+    { re: /^\/notifications(\/|$)/, perms: ['notifications'] },
+    { re: /^\/inventory(\/|$)/, perms: ['inventory'] },
+    { re: /^\/pppoe(\/|$)/, perms: ['pppoe'] },
+    { re: /^\/ipoe(\/|$)/, perms: ['ipoe'] },
+    { re: /^\/hotspot(\/|$)/, perms: ['hotspot'] },
+    { re: /^\/usage(\/|$)/, perms: ['pppoe'] },
+    { re: /^\/license(\/|$)/, perms: ['license'] },
+    { re: /^\/updater(\/|$)/, perms: ['updater'] },
+    { re: /^\/company(\/|$)/, perms: ['company'], writeOnly: true },
+    { re: /^\/settings(\/|$)/, perms: ['settings'], writeOnly: true },
+    { re: /^\/paymongo(\/|$)/, perms: ['settings', 'sales'] },
+    { re: /^\/sync\/(settings|now)/, perms: ['settings'] },
+  ];
+  for (const rule of rules) {
+    if (!rule.re.test(p)) continue;
+    if (rule.writeOnly && (method === 'GET' || method === 'HEAD' || method === 'OPTIONS')) return next();
+    // Merchant partners use /merchant/* with requireCashier — skip staff sales gate
+    if (/^\/merchant(\/|$)/.test(p)) return next();
+    const perms = rule.perms;
+    const role = req.user.role;
+    if (permissionsForRole(role).includes('*')) return next();
+    if (perms.some((x) => userHasPermission(role, x))) return next();
+    return res.status(403).json({
+      error: 'Forbidden',
+      code: 'PERMISSION_DENIED',
+      message: `Requires permission: ${perms.join(' or ')}`,
+    });
+  }
+  return next();
+});
 
 /**
  * Compare THIS panel's DB fingerprint to the Cloudflare public hostname.
@@ -2079,6 +2212,83 @@ app.get('/api/payment-links', (_req, res) => {
   });
 });
 
+// ---- PayMongo settings (staff) ----
+app.get('/api/paymongo/settings', (_req, res) => {
+  ensurePaymongoColumns();
+  const resolved = resolvePublicBaseUrl();
+  const base = String(resolved.baseUrl || '').replace(/\/$/, '');
+  res.json({
+    ...getPaymongoSettings(),
+    webhookUrl: base ? `${base}/api/public/paymongo/webhook` : '/api/public/paymongo/webhook',
+  });
+});
+
+app.put('/api/paymongo/settings', (req, res) => {
+  try {
+    ensurePaymongoColumns();
+    const settings = updatePaymongoSettings(req.body || {});
+    res.json({ settings });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not save PayMongo settings' });
+  }
+});
+
+app.get('/api/backup-auto/settings', (_req, res) => {
+  res.json(getBackupAutoSettings());
+});
+
+app.put('/api/backup-auto/settings', (req, res) => {
+  try {
+    res.json(updateBackupAutoSettings(req.body || {}));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not save backup settings' });
+  }
+});
+
+app.post('/api/backup-auto/run', async (_req, res) => {
+  try {
+    const result = await runAutoBackupOnce();
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Backup failed' });
+  }
+});
+
+/** Merchant settlement report — collected vs remitted vs accepted. */
+app.get('/api/merchant-settlement', (req, res) => {
+  const cashierUserId = req.query.cashierUserId ? Number(req.query.cashierUserId) : NaN;
+  const since = String(req.query.since || '').trim();
+  const hasCashier = Number.isFinite(cashierUserId) && cashierUserId > 0;
+  const collectSql = `SELECT status, COUNT(*) AS count, COALESCE(SUM(amount),0) AS total
+       FROM cashier_collectibles
+       WHERE (? = 0 OR cashier_user_id = ?)
+         AND (? = '' OR datetime(created_at) >= datetime(?))
+       GROUP BY status`;
+  const depositSql = `SELECT status, COUNT(*) AS count, COALESCE(SUM(amount_total),0) AS total
+       FROM cashier_deposits
+       WHERE (? = 0 OR cashier_user_id = ?)
+         AND (? = '' OR datetime(created_at) >= datetime(?))
+       GROUP BY status`;
+  const cid = hasCashier ? cashierUserId : 0;
+  const sinceArg = since || '';
+  const collect = db.prepare(collectSql).all(cid, cid, sinceArg, sinceArg);
+  const deposits = db.prepare(depositSql).all(cid, cid, sinceArg, sinceArg);
+  const byCashier = db
+    .prepare(
+      `SELECT cashier_user_id AS cashierUserId, cashier_username AS cashierUsername,
+              SUM(CASE WHEN status='open' THEN amount ELSE 0 END) AS openTotal,
+              SUM(CASE WHEN status='submitted' THEN amount ELSE 0 END) AS submittedTotal,
+              SUM(CASE WHEN status='collected' THEN amount ELSE 0 END) AS collectedTotal,
+              SUM(CASE WHEN status='rejected' THEN amount ELSE 0 END) AS rejectedTotal,
+              COUNT(*) AS items
+       FROM cashier_collectibles
+       GROUP BY cashier_user_id, cashier_username
+       ORDER BY openTotal + submittedTotal DESC`
+    )
+    .all();
+  res.json({ collectiblesByStatus: collect, depositsByStatus: deposits, byCashier });
+});
+
 // ---- Payment merchants + Local PC sync (staff) ----
 app.get('/api/sync/status', (_req, res) => {
   initDbSync();
@@ -2477,6 +2687,18 @@ app.post('/api/usage/alerts/:id/ack', (req, res) => {
 
 app.get('/api/usage/settings', (_req, res) => res.json(getFairUseSettings()));
 app.put('/api/usage/settings', (req, res) => res.json(updateFairUseSettings(req.body || {})));
+app.get('/api/usage/fair-use-throttle', (_req, res) => {
+  ensurePaymongoColumns();
+  res.json(getFairUseThrottleSettings());
+});
+app.put('/api/usage/fair-use-throttle', (req, res) => {
+  try {
+    ensurePaymongoColumns();
+    res.json(updateFairUseThrottleSettings(req.body || {}));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not save' });
+  }
+});
 app.post('/api/usage/poll', async (req, res) => {
   const routerId = req.body?.routerId ? Number(req.body.routerId) : null;
   const r = await pollUsageAndFairUse({ routerId });
@@ -4885,4 +5107,10 @@ server.listen(PORT, () => {
   setTimeout(() => startRouterSyncScheduler(ap.intervals.routerSync), ap.appliance ? 60_000 : 30_000);
   setTimeout(() => startNotifyScheduler(ap.intervals.notify), ap.appliance ? 90_000 : 45_000);
   setTimeout(() => startDbSyncScheduler(ap.intervals.dbSync ?? ap.intervals.routerSync), ap.appliance ? 75_000 : 40_000);
+  setTimeout(() => startAutoBackupScheduler(15 * 60 * 1000), ap.appliance ? 150_000 : 90_000);
+  try {
+    ensurePaymongoColumns();
+  } catch {
+    /* ignore */
+  }
 });

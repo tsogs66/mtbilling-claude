@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
-  Download, Share, X,
+  Download, Share, X, CloudOff,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -12,6 +12,12 @@ import Logo from '../components/Logo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
+import {
+  enqueue as enqueueOffline,
+  listPending,
+  flush as flushOfflineQueue,
+  isNetworkFailure,
+} from '../lib/merchantOfflineQueue';
 
 function PortalBackdrop({ theme }: { theme: PortalThemeId }) {
   if (theme === 'orbital') {
@@ -77,6 +83,7 @@ export default function MerchantPortal() {
   const [depositProof, setDepositProof] = useState<string | null>(null);
   const [depositBusy, setDepositBusy] = useState(false);
   const [myDeposits, setMyDeposits] = useState<any[]>([]);
+  const [offlinePending, setOfflinePending] = useState(0);
 
   const { showInstallButton, installed, iosHint, dismissIosHint, install } = usePortalInstall(theme, 'merchant');
 
@@ -86,6 +93,15 @@ export default function MerchantPortal() {
   };
 
   const signedIn = !!user && isMerchantPartnerRole(user.role);
+
+  const refreshOfflineCount = async () => {
+    try {
+      const pending = await listPending();
+      setOfflinePending(pending.length);
+    } catch {
+      setOfflinePending(0);
+    }
+  };
 
   const loadCollectibles = async () => {
     try {
@@ -104,6 +120,22 @@ export default function MerchantPortal() {
     }
   };
 
+  const tryFlushOffline = async () => {
+    if (!signedIn || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    try {
+      const result = await flushOfflineQueue(api);
+      await refreshOfflineCount();
+      if (result.synced > 0) {
+        show(`Synced ${result.synced} offline payment(s)`);
+        await loadCollectibles();
+        const recentR = await api.get('/merchant/recent').catch(() => null);
+        if (recentR?.data?.payments) setRecent(recentR.data.payments);
+      }
+    } catch {
+      /* keep queue */
+    }
+  };
+
   useEffect(() => {
     if (!signedIn) return;
     api
@@ -116,6 +148,24 @@ export default function MerchantPortal() {
     api.get('/merchant/payment-merchants').then((r) => setMerchants(r.data.merchants || [])).catch(() => setMerchants([]));
     api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => setRecent([]));
     void loadCollectibles();
+    void refreshOfflineCount();
+    void tryFlushOffline();
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const onOnline = () => {
+      void tryFlushOffline();
+    };
+    window.addEventListener('online', onOnline);
+    const interval = window.setInterval(() => {
+      void tryFlushOffline();
+    }, 30000);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signedIn]);
 
   useEffect(() => {
@@ -208,16 +258,17 @@ export default function MerchantPortal() {
     e.preventDefault();
     if (!selected) return;
     setCollectBusy(true);
+    const payload = {
+      userId: selected.id,
+      months,
+      collectionType,
+      channel: collectionType === 'cash' ? 'cash' : channel,
+      reference,
+      merchantId: collectionType === 'cash' && merchantId ? Number(merchantId) : null,
+      proofImage: proof,
+    };
     try {
-      const r = await api.post('/merchant/collect', {
-        userId: selected.id,
-        months,
-        collectionType,
-        channel: collectionType === 'cash' ? 'cash' : channel,
-        reference,
-        merchantId: collectionType === 'cash' && merchantId ? Number(merchantId) : null,
-        proofImage: proof,
-      });
+      const r = await api.post('/merchant/collect', payload);
       show(
         `Payment posted (${r.data.collectionType}): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — add to a deposit when ready.`
       );
@@ -231,7 +282,19 @@ export default function MerchantPortal() {
       setRecent(recentR.data.payments || []);
       await loadCollectibles();
     } catch (err: any) {
-      show(err?.response?.data?.error || 'Payment failed');
+      if (isNetworkFailure(err)) {
+        await enqueueOffline({ type: 'collect', payload });
+        await refreshOfflineCount();
+        show('Saved offline — will sync when online');
+        setSelected(null);
+        setQ('');
+        setHits([]);
+        setReference('');
+        setProof(null);
+        setMonths(1);
+      } else {
+        show(err?.response?.data?.error || 'Payment failed');
+      }
     } finally {
       setCollectBusy(false);
     }
@@ -277,6 +340,15 @@ export default function MerchantPortal() {
             )}
             {signedIn ? (
               <>
+                {offlinePending > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-200 bg-amber-500/20 border border-amber-400/30 rounded-full px-2 py-0.5"
+                    title="Pending offline payments"
+                  >
+                    <CloudOff size={12} />
+                    {offlinePending} offline
+                  </span>
+                )}
                 <button
                   type="button"
                   className="portal-cta inline-flex items-center gap-1.5 text-xs"
@@ -760,12 +832,13 @@ export default function MerchantPortal() {
                       disabled={depositBusy || selectedCollectibleIds.size === 0}
                       onClick={async () => {
                         setDepositBusy(true);
+                        const payload = {
+                          collectibleIds: [...selectedCollectibleIds],
+                          note: depositNote,
+                          proofImage: depositProof,
+                        };
                         try {
-                          const r = await api.post('/merchant/deposits', {
-                            collectibleIds: [...selectedCollectibleIds],
-                            note: depositNote,
-                            proofImage: depositProof,
-                          });
+                          const r = await api.post('/merchant/deposits', payload);
                           show(
                             `Submitted ${r.data.deposit.itemCount} payment(s) · ${peso(r.data.deposit.amountTotal)} for admin acceptance`
                           );
@@ -773,7 +846,16 @@ export default function MerchantPortal() {
                           setDepositProof(null);
                           await loadCollectibles();
                         } catch (err: any) {
-                          show(err?.response?.data?.error || 'Submit failed');
+                          if (isNetworkFailure(err)) {
+                            await enqueueOffline({ type: 'deposit', payload });
+                            await refreshOfflineCount();
+                            show('Saved offline — will sync when online');
+                            setDepositNote('');
+                            setDepositProof(null);
+                            setSelectedCollectibleIds(new Set());
+                          } else {
+                            show(err?.response?.data?.error || 'Submit failed');
+                          }
                         } finally {
                           setDepositBusy(false);
                         }
