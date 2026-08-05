@@ -273,7 +273,6 @@ export default function SubscriberPay() {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [copied, setCopied] = useState(false);
   const [paymongoEnabled, setPaymongoEnabled] = useState(false);
-  const [paymongoMethods, setPaymongoMethods] = useState<string[]>([]);
   const [manualGcash, setManualGcash] = useState(true);
   const [manualMaya, setManualMaya] = useState(true);
   const [manualCash, setManualCash] = useState(true);
@@ -693,91 +692,73 @@ export default function SubscriberPay() {
               </div>
             )}
 
-            {/* How to pay */}
-            <section className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
-              <div className="flex items-start gap-2 text-slate-800 font-semibold text-sm mb-2">
-                <Info size={16} className="text-sky-600 mt-0.5 shrink-0" />
-                How to pay
-              </div>
-              {paymongoEnabled && !manualGcash && !manualMaya ? (
-                <>
-                  <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
+            {/* How to pay — online + cash */}
+            <section className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 space-y-4">
+              {paymongoEnabled && (
+                <div>
+                  <div className="flex items-start gap-2 text-slate-800 font-semibold text-sm mb-2">
+                    <CreditCard size={16} className="text-sky-600 mt-0.5 shrink-0" />
+                    How to pay online
+                  </div>
+                  <ol className="text-sm text-slate-600 space-y-2 list-decimal pl-5">
                     <li>
-                      Tap <b>Pay online</b> to open secure PayMongo checkout
-                      {paymongoMethods.length
-                        ? ` (${paymongoMethods.map((m) => (m === 'paymaya' ? 'Maya' : m === 'qrph' ? 'QR Ph' : 'GCash')).join(' / ')})`
-                        : ' (GCash / Maya / QR Ph)'}
-                      .
+                      Tap <b>Pay Online</b> (QR Ph).
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        Supports GCash, Maya, and most Philippine banks.
+                      </div>
                     </li>
                     <li>
-                      Complete payment on PayMongo — your account <b>activates automatically</b> when payment
-                      succeeds.
+                      Download the QR code and scan it with your desired online payment platform.
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        Account activates/updates automatically upon successful payment.
+                      </div>
                     </li>
-                    {manualCash && (
-                      <li>
-                        Or pay <b>Cash</b> at a listed merchant below, then submit for ISP confirmation.
-                      </li>
-                    )}
                   </ol>
-                  <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
-                    <span className="font-semibold text-slate-800">Online payment:</span> PayMongo accepts GCash,
-                    Maya, and QR Ph in one checkout. You do not need to upload a receipt for online payments.
-                  </p>
-                </>
-              ) : paymongoEnabled ? (
-                <>
-                  <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
-                    <li>
-                      <b>Recommended:</b> Tap <b>Pay online</b> (PayMongo) for instant activation — no receipt upload.
-                    </li>
-                    {(manualGcash || manualMaya) && (
-                      <li>
-                        Or choose {(manualGcash && manualMaya) ? 'GCash / Maya' : manualGcash ? 'GCash' : 'Maya'}{' '}
-                        below, scan the QR, and submit your reference / proof for review.
-                      </li>
-                    )}
-                    {manualCash && <li>Or pay <b>Cash</b> at a merchant and submit for confirmation.</li>}
-                  </ol>
-                </>
-              ) : (
-                <>
-                  <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
-                    {(manualGcash || manualMaya) && (
-                      <>
-                        <li>
-                          Choose{' '}
-                          <b>
-                            {[manualGcash && 'GCash', manualMaya && 'Maya'].filter(Boolean).join(' or ')}
-                          </b>{' '}
-                          below (or scan with any bank app).
-                        </li>
-                        <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
-                        <li>
-                          Upload a screenshot or take a photo of your transaction — we will{' '}
-                          <b>automatically read the Reference / Transaction No.</b> from it.
-                        </li>
-                        <li>Or enter the <b>Reference / Transaction No.</b> manually and submit without a photo.</li>
-                      </>
-                    )}
-                    {manualCash && !(manualGcash || manualMaya) && (
-                      <li>Choose a merchant below, pay the exact amount in cash, then submit for confirmation.</li>
-                    )}
-                    {manualCash && (manualGcash || manualMaya) && (
-                      <li>Or pay <b>Cash</b> at a listed merchant and submit for confirmation.</li>
-                    )}
-                  </ol>
-                  {(manualGcash || manualMaya) && (
-                    <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
-                      <span className="font-semibold text-slate-800">QR Ph / InstaPay:</span> All payment QR codes on
-                      this page can be scanned and paid using{' '}
-                      <b>any participating Philippine bank</b> or e-wallet (GCash, Maya, BDO, BPI, UnionBank, and
-                      others) — not only the wallet shown on the QR.
-                    </p>
-                  )}
-                </>
+                </div>
               )}
+
+              {!paymongoEnabled && (manualGcash || manualMaya) && (
+                <div>
+                  <div className="flex items-start gap-2 text-slate-800 font-semibold text-sm mb-2">
+                    <Info size={16} className="text-sky-600 mt-0.5 shrink-0" />
+                    How to pay online
+                  </div>
+                  <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
+                    <li>
+                      Choose{' '}
+                      <b>{[manualGcash && 'GCash', manualMaya && 'Maya'].filter(Boolean).join(' or ')}</b> below
+                      (or scan with any bank app).
+                    </li>
+                    <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
+                    <li>
+                      Upload a screenshot or enter the <b>Reference / Transaction No.</b>, then submit for review.
+                    </li>
+                  </ol>
+                </div>
+              )}
+
+              {manualCash && (
+                <div className={paymongoEnabled || manualGcash || manualMaya ? 'border-t border-slate-200 pt-4' : ''}>
+                  <div className="flex items-start gap-2 text-slate-800 font-semibold text-sm mb-2">
+                    <Banknote size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                    How to pay cash
+                  </div>
+                  <ol className="text-sm text-slate-600 space-y-2 list-decimal pl-5">
+                    <li>Select from merchants listed below.</li>
+                    <li>
+                      Click <b>Submit cash payment for review</b>.
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        Account activates/updates upon payment validation from merchant.
+                      </div>
+                    </li>
+                  </ol>
+                </div>
+              )}
+
               {company.paymentInstructions && (
-                <p className="text-xs text-slate-500 mt-3 border-t border-slate-200 pt-3 whitespace-pre-wrap">{company.paymentInstructions}</p>
+                <p className="text-xs text-slate-500 border-t border-slate-200 pt-3 whitespace-pre-wrap">
+                  {company.paymentInstructions}
+                </p>
               )}
             </section>
 
@@ -790,15 +771,7 @@ export default function SubscriberPay() {
                   onClick={() => void startPaymongo()}
                 >
                   {paymongoBusy ? <Loader2 className="animate-spin" size={18} /> : <CreditCard size={18} />}
-                  {paymongoBusy
-                    ? 'Opening PayMongo…'
-                    : `Pay online — ${
-                        paymongoMethods.length
-                          ? paymongoMethods
-                              .map((m) => (m === 'paymaya' ? 'Maya' : m === 'qrph' ? 'QR Ph' : 'GCash'))
-                              .join(' / ')
-                          : 'GCash / Maya'
-                      }`}
+                  {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online (QR Ph)'}
                 </button>
                 {(manualGcash || manualMaya || manualCash) && (
                   <p className="text-center text-xs text-slate-400">
