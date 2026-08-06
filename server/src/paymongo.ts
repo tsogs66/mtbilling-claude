@@ -5,6 +5,7 @@
 import crypto from 'crypto';
 import { db } from './db.js';
 import { markPaymentLinkPaid } from './billing.js';
+import { sendPaymentConfirmationSms } from './notify.js';
 
 export type PaymongoSettings = {
   enabled: boolean;
@@ -378,6 +379,38 @@ export async function handlePaymongoWebhook(payload: any) {
       'paymongo',
       `Payment confirmed · token ${resolvedToken.slice(0, 8)}… · ${payId}${result.alreadyPaid ? ' (already paid)' : ''}`
     );
+
+    // SMS confirmation (payment + new due date) — fire-and-forget so webhook ACK stays fast.
+    if (!result.alreadyPaid) {
+      const payment = (result as any).payment;
+      const user = payment?.user;
+      const contact = String(user?.contact || '').trim();
+      const total = Number(payment?.total ?? payment?.amount ?? 0);
+      if (user && contact) {
+        sendPaymentConfirmationSms({ ...user, contact }, total)
+          .then((r) => {
+            db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+              r.sent ? 'info' : 'warning',
+              'paymongo',
+              `Payment SMS ${r.sent ? 'sent' : 'not sent'} to ${contact}: ${r.detail || ''}`
+            );
+          })
+          .catch((e: any) => {
+            db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+              'warning',
+              'paymongo',
+              `Payment SMS failed: ${e?.message || e}`
+            );
+          });
+      } else {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'paymongo',
+          `Payment SMS skipped — no phone on file for token ${resolvedToken.slice(0, 8)}…`
+        );
+      }
+    }
+
     return { ok: true, alreadyPaid: !!result.alreadyPaid, token: resolvedToken, paymentId: payId };
   } catch (e: any) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
