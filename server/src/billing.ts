@@ -1839,8 +1839,8 @@ export function isMerchantCashCancellable(link: any): {
   if (String(link.status) !== 'paid') return { ok: false, reason: 'Only processed payments can be cancelled' };
 
   const channel = String(link.pay_channel || '').toLowerCase();
-  if (channel === 'paymongo') {
-    return { ok: false, reason: 'PayMongo payments settle online and cannot be cancelled here' };
+  if (channel === 'paymongo' || channel === 'qrph') {
+    return { ok: false, reason: 'PayMongo / QRPH payments settle online and cannot be cancelled here' };
   }
 
   const collectible = db
@@ -1853,17 +1853,10 @@ export function isMerchantCashCancellable(link: any): {
       return { ok: false, reason: 'Online collections cannot be cancelled from the merchant portal', collectible };
     }
     const st = String(collectible.status || '').toLowerCase();
-    if (st === 'collected') {
-      return {
-        ok: false,
-        reason: 'This cash payment was already remitted and accepted — contact admin',
-        collectible,
-      };
-    }
     if (st === 'cancelled') {
       return { ok: false, reason: 'This payment was already cancelled', collectible };
     }
-    // open | submitted | rejected — cancellable (submitted is detached from deposit on cancel)
+    // open | submitted | rejected | collected — cancellable (collected notifies staff of remittance reverse)
     return { ok: true, collectible };
   }
 
@@ -2298,9 +2291,11 @@ export async function cancelCashierCashPayment(opts: {
   ).run(reason || `Cancelled by merchant ${opts.cashier.username}`, link.id);
 
   // Reverse remittance queue item (cash only) — detach from pending deposit if needed.
+  const collectibleWasCollected =
+    collectible?.id && String(collectible.status || '').toLowerCase() === 'collected';
   if (collectible?.id) {
     const st = String(collectible.status || '').toLowerCase();
-    if (st === 'open' || st === 'rejected' || st === 'submitted') {
+    if (st === 'open' || st === 'rejected' || st === 'submitted' || st === 'collected') {
       const depositId = collectible.deposit_id != null ? Number(collectible.deposit_id) : null;
       db.prepare(
         `UPDATE cashier_collectibles SET
@@ -2357,6 +2352,7 @@ export async function cancelCashierCashPayment(opts: {
         previousDue: currentDue,
         subscriptionDue: restoredDue,
         status: restoredStatus,
+        wasRemitted: !!collectibleWasCollected,
       },
     });
   } catch {
@@ -2366,8 +2362,12 @@ export async function cancelCashierCashPayment(opts: {
   try {
     notifyStaff({
       type: 'payment_submitted',
-      title: 'Merchant cash payment cancelled',
-      body: `${subscriberLabel(userId)} — ₱${amount.toLocaleString('en-PH', { maximumFractionDigits: 2 })} cancelled by ${opts.cashier.username}; due → ${restoredDue}`,
+      title: collectibleWasCollected
+        ? 'Merchant cancelled remitted cash payment'
+        : 'Merchant cash payment cancelled',
+      body: collectibleWasCollected
+        ? `${subscriberLabel(userId)} — ₱${amount.toLocaleString('en-PH', { maximumFractionDigits: 2 })} cancelled by ${opts.cashier.username} AFTER remittance was accepted; due → ${restoredDue}. Adjust remittance books if needed.`
+        : `${subscriberLabel(userId)} — ₱${amount.toLocaleString('en-PH', { maximumFractionDigits: 2 })} cancelled by ${opts.cashier.username}; due → ${restoredDue}`,
       entityType: 'payment_link',
       entityId: Number(link.id),
       pppoeUserId: userId,
@@ -2377,6 +2377,7 @@ export async function cancelCashierCashPayment(opts: {
         cashierUsername: opts.cashier.username,
         amount,
         subscriptionDue: restoredDue,
+        wasRemitted: !!collectibleWasCollected,
       },
     });
   } catch {

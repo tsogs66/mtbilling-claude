@@ -437,20 +437,27 @@ export default function MerchantPortal() {
 
   const confirmCancelCash = (payment: any) => {
     if (!payment?.id) return;
-    const canCancel =
+    const looksCash =
       payment.canCancel === true ||
-      (payment.canCancel == null && String(payment.payChannel || '').toLowerCase() === 'cash');
-    if (!canCancel) {
+      String(payment.collectionType || '').toLowerCase() === 'cash' ||
+      String(payment.payChannel || '').toLowerCase() === 'cash' ||
+      /^cash\b/i.test(String(payment.externalRef || ''));
+    if (!looksCash) {
       show(payment.cancelBlockedReason || 'Only cash payments can be cancelled');
       return;
     }
+    const remittedNote =
+      String(payment.collectibleStatus || '').toLowerCase() === 'collected'
+        ? `\n• This was already remitted — staff will be notified to adjust books`
+        : '';
     setActionConfirm({
       title: 'Cancel cash payment',
       body:
         `Cancel this cash payment for ${payment.username} (${peso(payment.amount)} · ${payment.months || 1} mo)?\n\n` +
         `• Due date will be reversed\n` +
         `• Subscriber will get an SMS if a phone is on file\n` +
-        `• Remittance queue item will be removed (even if already in a pending deposit)`,
+        `• Remittance queue item will be removed` +
+        remittedNote,
       confirmLabel: 'Cancel payment',
       danger: true,
       run: async () => {
@@ -1151,22 +1158,27 @@ export default function MerchantPortal() {
             <div className="portal-glass rounded-2xl p-4">
               <div className="font-semibold text-sm mb-1">Your recent activations</div>
               <p className="text-xs text-slate-400 mb-2">
-                Wrong subscriber? Use <b>Change subscriber</b>. Cash remittance payments can be <b>cancelled</b> (due reversed + SMS), including ones recorded as GCash/Maya cash collections.
+                Wrong subscriber? Use <b>Change subscriber</b>. Cash payments (including already remitted ones) can be <b>cancelled</b> — due reversed + SMS. QRPH / PayMongo cannot.
               </p>
               {recent.length === 0 ? (
                 <div className="text-xs text-slate-400 py-3 text-center">No payments posted yet.</div>
               ) : (
                 <ul className="divide-y divide-white/5 text-sm">
                   {recent.map((p) => {
-                    const isCash =
-                      p.canCancel === true ||
-                      String(p.collectionType || '').toLowerCase() === 'cash' ||
-                      String(p.payChannel || '').toLowerCase() === 'cash';
-                    const canCancel = p.canCancel === true || (p.canCancel == null && isCash);
+                    const channel = String(p.payChannel || '').toLowerCase();
+                    const isOnlineSettled = channel === 'paymongo' || channel === 'qrph';
+                    const looksCash =
+                      !isOnlineSettled &&
+                      (p.canCancel === true ||
+                        String(p.collectionType || '').toLowerCase() === 'cash' ||
+                        channel === 'cash' ||
+                        /^cash\b/i.test(String(p.externalRef || '')));
+                    // Always offer Cancel for cash-like rows; API enforces final rules.
+                    const canCancel = looksCash;
                     const busy = reassignBusy || cancelBusyId === p.id;
                     const channelLabel = [
                       String(p.payChannel || '').toUpperCase() || null,
-                      p.collectionType && String(p.collectionType).toLowerCase() === 'cash' && String(p.payChannel || '').toLowerCase() !== 'cash'
+                      p.collectionType && String(p.collectionType).toLowerCase() === 'cash' && channel !== 'cash'
                         ? 'cash remittance'
                         : null,
                     ]
