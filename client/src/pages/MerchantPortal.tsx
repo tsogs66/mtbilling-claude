@@ -458,7 +458,9 @@ export default function MerchantPortal() {
             ? 'SMS sent'
             : `SMS not sent (${r.data?.sms?.detail || 'n/a'})`;
           show(
-            `Cancelled ${r.data.username}: due ${String(r.data.previousDue || '').slice(0, 10)} → ${String(r.data.subscriptionDue || '').slice(0, 10)}. ${smsNote}.`
+            `Cancelled ${r.data.username}: due ${String(r.data.previousDue || '').slice(0, 10)} → ${String(r.data.subscriptionDue || '').slice(0, 10)}` +
+              (r.data.status ? ` · ${r.data.status}` : '') +
+              `. ${smsNote}.`
           );
           if (reassignId === payment.id) {
             setReassignId(null);
