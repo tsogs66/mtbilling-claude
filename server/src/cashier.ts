@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment, cancelCashierCashPayment } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment, cancelCashierCashPayment, isMerchantCashCancellable } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
@@ -349,14 +349,38 @@ cashierRouter.get('/merchant/recent', requireCashier, (req: AuthedRequest, res) 
               pl.cashier_username AS cashierUsername,
               pl.pppoe_user_id AS pppoeUserId,
               u.username, u.customer_name AS customer, u.account_number AS account,
-              u.subscription_due AS subscriptionDue
+              u.subscription_due AS subscriptionDue,
+              cc.collection_type AS collectionType,
+              cc.status AS collectibleStatus,
+              cc.id AS collectibleId
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
+       LEFT JOIN cashier_collectibles cc ON cc.id = (
+         SELECT c2.id FROM cashier_collectibles c2
+         WHERE c2.payment_link_id = pl.id
+         ORDER BY c2.id DESC LIMIT 1
+       )
        WHERE pl.cashier_user_id = ? AND pl.status = 'paid'
        ORDER BY pl.id DESC LIMIT 40`
     )
-    .all(req.user!.id);
-  res.json({ payments: rows });
+    .all(req.user!.id) as any[];
+
+  const payments = rows.map((row) => {
+    const check = isMerchantCashCancellable({
+      id: row.id,
+      status: row.status,
+      pay_channel: row.payChannel,
+      external_ref: row.externalRef,
+      cashier_user_id: req.user!.id,
+      pppoe_user_id: row.pppoeUserId,
+    });
+    return {
+      ...row,
+      canCancel: !!check.ok,
+      cancelBlockedReason: check.ok ? null : check.reason || null,
+    };
+  });
+  res.json({ payments });
 });
 
 /** Merchant: move a processed payment to a different subscriber (reverse old due, extend new). */
