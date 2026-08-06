@@ -93,6 +93,14 @@ export default function MerchantPortal() {
   const [reassignHits, setReassignHits] = useState<any[]>([]);
   const [reassignBusy, setReassignBusy] = useState(false);
   const [cancelBusyId, setCancelBusyId] = useState<number | null>(null);
+  /** In-app confirm — window.confirm is unreliable on iOS Safari / Home Screen PWAs. */
+  const [actionConfirm, setActionConfirm] = useState<null | {
+    title: string;
+    body: string;
+    confirmLabel: string;
+    danger?: boolean;
+    run: () => Promise<void>;
+  }>(null);
 
   const { showInstallButton, installed, iosHint, dismissIosHint, install } = usePortalInstall(theme, 'merchant');
 
@@ -392,72 +400,81 @@ export default function MerchantPortal() {
     }
   };
 
-  const confirmReassign = async (payment: any, target: any) => {
+  const confirmReassign = (payment: any, target: any) => {
     if (!payment?.id || !target?.id) return;
     if (Number(payment.pppoeUserId) === Number(target.id)) {
       show('Select a different subscriber');
       return;
     }
-    const ok = window.confirm(
-      `Move this payment (${peso(payment.amount)} · ${payment.months || 1} mo) from ${payment.username} to ${target.username}?\n\n` +
+    setActionConfirm({
+      title: 'Change subscriber',
+      body:
+        `Move this payment (${peso(payment.amount)} · ${payment.months || 1} mo) from ${payment.username} to ${target.username}?\n\n` +
         `• ${target.username} gets the due date extension\n` +
-        `• ${payment.username} due date is reversed`
-    );
-    if (!ok) return;
-    setReassignBusy(true);
-    try {
-      const r = await api.post(`/merchant/payments/${payment.id}/reassign`, { userId: target.id });
-      show(
-        `Reassigned: ${r.data.from?.username} due → ${String(r.data.from?.subscriptionDue || '').slice(0, 10)}; ` +
-          `${r.data.to?.username} due → ${String(r.data.to?.subscriptionDue || '').slice(0, 10)}`
-      );
-      setReassignId(null);
-      setReassignQ('');
-      setReassignHits([]);
-      const recentR = await api.get('/merchant/recent');
-      setRecent(recentR.data.payments || []);
-    } catch (err: any) {
-      show(err?.response?.data?.error || 'Reassign failed');
-    } finally {
-      setReassignBusy(false);
-    }
+        `• ${payment.username} due date is reversed`,
+      confirmLabel: 'Change subscriber',
+      run: async () => {
+        setReassignBusy(true);
+        try {
+          const r = await api.post(`/merchant/payments/${payment.id}/reassign`, { userId: target.id });
+          show(
+            `Reassigned: ${r.data.from?.username} due → ${String(r.data.from?.subscriptionDue || '').slice(0, 10)}; ` +
+              `${r.data.to?.username} due → ${String(r.data.to?.subscriptionDue || '').slice(0, 10)}`
+          );
+          setReassignId(null);
+          setReassignQ('');
+          setReassignHits([]);
+          const recentR = await api.get('/merchant/recent');
+          setRecent(recentR.data.payments || []);
+        } catch (err: any) {
+          show(err?.response?.data?.error || 'Reassign failed');
+        } finally {
+          setReassignBusy(false);
+        }
+      },
+    });
   };
 
-  const confirmCancelCash = async (payment: any) => {
+  const confirmCancelCash = (payment: any) => {
     if (!payment?.id) return;
     if (String(payment.payChannel || '').toLowerCase() !== 'cash') {
       show('Only cash payments can be cancelled');
       return;
     }
-    const ok = window.confirm(
-      `Cancel this cash payment for ${payment.username} (${peso(payment.amount)} · ${payment.months || 1} mo)?\n\n` +
+    setActionConfirm({
+      title: 'Cancel cash payment',
+      body:
+        `Cancel this cash payment for ${payment.username} (${peso(payment.amount)} · ${payment.months || 1} mo)?\n\n` +
         `• Due date will be reversed\n` +
         `• Subscriber will get an SMS if a phone is on file\n` +
-        `• Remittance queue item will be removed (if still open)`
-    );
-    if (!ok) return;
-    setCancelBusyId(payment.id);
-    try {
-      const r = await api.post(`/merchant/payments/${payment.id}/cancel`);
-      const smsNote = r.data?.sms?.sent
-        ? 'SMS sent'
-        : `SMS not sent (${r.data?.sms?.detail || 'n/a'})`;
-      show(
-        `Cancelled ${r.data.username}: due ${String(r.data.previousDue || '').slice(0, 10)} → ${String(r.data.subscriptionDue || '').slice(0, 10)}. ${smsNote}.`
-      );
-      if (reassignId === payment.id) {
-        setReassignId(null);
-        setReassignQ('');
-        setReassignHits([]);
-      }
-      const recentR = await api.get('/merchant/recent');
-      setRecent(recentR.data.payments || []);
-      await loadCollectibles();
-    } catch (err: any) {
-      show(err?.response?.data?.error || 'Cancel failed');
-    } finally {
-      setCancelBusyId(null);
-    }
+        `• Remittance queue item will be removed (if still open)`,
+      confirmLabel: 'Cancel payment',
+      danger: true,
+      run: async () => {
+        setCancelBusyId(payment.id);
+        try {
+          const r = await api.post(`/merchant/payments/${payment.id}/cancel`);
+          const smsNote = r.data?.sms?.sent
+            ? 'SMS sent'
+            : `SMS not sent (${r.data?.sms?.detail || 'n/a'})`;
+          show(
+            `Cancelled ${r.data.username}: due ${String(r.data.previousDue || '').slice(0, 10)} → ${String(r.data.subscriptionDue || '').slice(0, 10)}. ${smsNote}.`
+          );
+          if (reassignId === payment.id) {
+            setReassignId(null);
+            setReassignQ('');
+            setReassignHits([]);
+          }
+          const recentR = await api.get('/merchant/recent');
+          setRecent(recentR.data.payments || []);
+          await loadCollectibles();
+        } catch (err: any) {
+          show(err?.response?.data?.error || 'Cancel failed');
+        } finally {
+          setCancelBusyId(null);
+        }
+      },
+    });
   };
 
   if (loading) {
@@ -1245,7 +1262,115 @@ export default function MerchantPortal() {
         )}
       </div>
       {iosHint && <MerchantIosInstallHint onClose={dismissIosHint} />}
+      {actionConfirm && (
+        <MerchantActionConfirm
+          title={actionConfirm.title}
+          body={actionConfirm.body}
+          confirmLabel={actionConfirm.confirmLabel}
+          danger={actionConfirm.danger}
+          busy={reassignBusy || cancelBusyId != null}
+          onClose={() => {
+            if (reassignBusy || cancelBusyId != null) return;
+            setActionConfirm(null);
+          }}
+          onConfirm={async () => {
+            const run = actionConfirm.run;
+            try {
+              await run();
+            } finally {
+              setActionConfirm(null);
+            }
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function MerchantActionConfirm({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  const [working, setWorking] = useState(false);
+  const locked = busy || working;
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+        aria-label="Close"
+        disabled={locked}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="merchant-action-confirm-title"
+        className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 sm:p-6 portal-glass-strong border border-white/10 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+      >
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <h3 id="merchant-action-confirm-title" className="text-lg font-bold text-white">
+            {title}
+          </h3>
+          <button
+            type="button"
+            className="p-2 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50"
+            onClick={onClose}
+            disabled={locked}
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-sm text-slate-300/90 whitespace-pre-line leading-relaxed">{body}</p>
+        <div className="mt-5 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+          <button
+            type="button"
+            className="px-4 py-3 sm:py-2.5 rounded-xl text-sm font-semibold bg-white/10 hover:bg-white/15 text-white disabled:opacity-50"
+            onClick={onClose}
+            disabled={locked}
+          >
+            Keep
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-3 sm:py-2.5 rounded-xl text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 ${
+              danger
+                ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                : 'bg-sky-600 hover:bg-sky-500 text-white'
+            }`}
+            disabled={locked}
+            onClick={() => {
+              void (async () => {
+                setWorking(true);
+                try {
+                  await onConfirm();
+                } finally {
+                  setWorking(false);
+                }
+              })();
+            }}
+          >
+            {locked ? <Loader2 className="animate-spin" size={16} /> : null}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
