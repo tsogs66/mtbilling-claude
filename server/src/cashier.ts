@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment, cancelCashierCashPayment } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
@@ -374,6 +374,22 @@ cashierRouter.post('/merchant/payments/:id/reassign', requireCashier, async (req
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not reassign payment' });
+  }
+});
+
+/** Merchant: cancel a processed cash payment (reverse due + SMS). */
+cashierRouter.post('/merchant/payments/:id/cancel', requireCashier, async (req: AuthedRequest, res) => {
+  try {
+    const paymentLinkId = Number(req.params.id);
+    if (!paymentLinkId) return res.status(400).json({ error: 'Payment id required' });
+    const result = await cancelCashierCashPayment({
+      paymentLinkId,
+      cashier: { id: req.user!.id, username: req.user!.username },
+      reason: req.body?.reason,
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not cancel payment' });
   }
 });
 

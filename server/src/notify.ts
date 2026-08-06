@@ -704,6 +704,32 @@ export async function sendPaymentConfirmationSms(
   return { sent: r.status === 'sent', detail: r.detail };
 }
 
+/** SMS when a merchant cancels a cash payment and reverses the subscriber due date. */
+export async function sendPaymentCancelledSms(
+  client: Client,
+  amountPaid: number
+): Promise<{ sent: boolean; detail: string }> {
+  if (!client?.contact) return { sent: false, detail: 'no phone number on file' };
+  const subject = 'Payment Cancelled';
+  const message = fillTemplate(
+    'Hi {name}, your payment of {amount} for Account #{account} ({plan}) was cancelled. Your service due date is now {due}. Please contact your merchant if you have questions.',
+    { ...client, price: amountPaid }
+  );
+  const r = await deliver('sms', client.contact, subject, message);
+  record({
+    channel: 'sms',
+    recipient: client.contact,
+    client_id: client.id,
+    customer_name: client.customer_name,
+    subject,
+    message: formatSmsMessage(message),
+    type: 'payment_cancelled',
+    status: r.status,
+    detail: r.detail,
+  });
+  return { sent: r.status === 'sent', detail: r.detail };
+}
+
 async function sendTemplatedSms(
   client: Client,
   template: { subject: string; message: string },

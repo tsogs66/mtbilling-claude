@@ -1989,3 +1989,174 @@ export async function reassignCashierPayment(opts: {
   };
 }
 
+
+/**
+ * Merchant: cancel a processed cash payment — reverse due date, drop remittance
+ * queue item (if still open), and SMS the subscriber.
+ */
+export async function cancelCashierCashPayment(opts: {
+  paymentLinkId: number;
+  cashier: { id: number; username: string };
+  reason?: string | null;
+}) {
+  const link = db.prepare('SELECT * FROM payment_links WHERE id = ?').get(opts.paymentLinkId) as any;
+  if (!link) throw new Error('Payment not found');
+  if (Number(link.cashier_user_id) !== Number(opts.cashier.id)) {
+    throw new Error('You can only cancel payments you processed');
+  }
+  if (String(link.status) !== 'paid') throw new Error('Only processed payments can be cancelled');
+
+  const channel = String(link.pay_channel || '').toLowerCase();
+  if (channel !== 'cash') {
+    throw new Error('Only cash payments can be cancelled from the merchant portal');
+  }
+
+  const userId = Number(link.pppoe_user_id);
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) throw new Error('Subscriber not found');
+
+  const collectible = db
+    .prepare('SELECT * FROM cashier_collectibles WHERE payment_link_id = ? ORDER BY id DESC LIMIT 1')
+    .get(link.id) as any;
+  if (collectible) {
+    const st = String(collectible.status || '').toLowerCase();
+    if (st === 'collected') {
+      throw new Error('This cash payment was already remitted and accepted — contact admin');
+    }
+    if (st === 'submitted') {
+      throw new Error(
+        'This cash payment is in a pending remittance — ask admin to reject the deposit first'
+      );
+    }
+  }
+
+  const found = findCashierPaymentTransaction(link);
+  const receipt = found?.receipt || {};
+  if (receipt?.cancelledAt) {
+    throw new Error('This payment was already cancelled');
+  }
+
+  const months = Math.max(1, Math.floor(Number(receipt.months) || Number(link.months) || 1));
+  const previousDue = receipt.previousDue ? String(receipt.previousDue).slice(0, 10) : null;
+  const expectedNewDue = receipt.newDue ? String(receipt.newDue).slice(0, 10) : null;
+  const currentDue = String(user.subscription_due || '').slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const amount = Number(link.amount) || Number(receipt.total) || 0;
+
+  let restoredDue: string;
+  if (previousDue && expectedNewDue && currentDue === expectedNewDue) {
+    restoredDue = previousDue;
+  } else if (previousDue && expectedNewDue && currentDue > expectedNewDue) {
+    restoredDue = addMonthsPreserveDay(currentDue, -months);
+  } else if (previousDue && currentDue && currentDue === previousDue) {
+    throw new Error('Subscriber due date already looks reversed — contact admin');
+  } else if (currentDue) {
+    restoredDue = addMonthsPreserveDay(currentDue, -months);
+  } else if (previousDue) {
+    restoredDue = previousDue;
+  } else {
+    throw new Error('Could not determine the original due date to reverse');
+  }
+
+  const reason = opts.reason ? String(opts.reason).trim().slice(0, 240) : null;
+
+  db.prepare(`UPDATE pppoe_users SET subscription_due = ? WHERE id = ?`).run(restoredDue, userId);
+  const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+
+  const cancelReceipt = {
+    type: 'payment_cancelled',
+    months,
+    previousDue: currentDue,
+    newDue: restoredDue,
+    amount,
+    fromPaymentLinkId: Number(link.id),
+    fromTransactionId: found?.id || null,
+    cashier: opts.cashier.username,
+    reason,
+    at: new Date().toISOString(),
+  };
+  db.prepare(
+    `INSERT INTO transactions
+       (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    userId,
+    user.customer_name || user.username,
+    0,
+    'payment_cancelled',
+    new Date().toISOString(),
+    JSON.stringify(cancelReceipt),
+    opts.cashier.id,
+    opts.cashier.username
+  );
+
+  if (found?.id) {
+    try {
+      const patched = {
+        ...(typeof receipt === 'object' && receipt ? receipt : {}),
+        cancelledAt: new Date().toISOString(),
+        cancelledBy: opts.cashier.username,
+        cancelledDueRestored: restoredDue,
+        cancelReason: reason,
+      };
+      db.prepare('UPDATE transactions SET receipt_json = ? WHERE id = ?').run(
+        JSON.stringify(patched),
+        found.id
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  db.prepare(
+    `UPDATE payment_links SET
+       status = 'cancelled',
+       reviewed_at = datetime('now'),
+       review_note = ?
+     WHERE id = ?`
+  ).run(reason || `Cancelled by merchant ${opts.cashier.username}`, link.id);
+
+  if (collectible?.id && String(collectible.status).toLowerCase() === 'open') {
+    db.prepare(
+      `UPDATE cashier_collectibles SET status = 'rejected', collected_at = datetime('now')
+       WHERE id = ? AND status = 'open'`
+    ).run(collectible.id);
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'billing',
+    `Merchant ${opts.cashier.username} cancelled cash payment link #${link.id} for ${user.username}: due ${currentDue} → ${restoredDue}${reason ? ` (${reason})` : ''}`
+  );
+
+  scheduleRouterExpiry(updated, updated.expiration_profile).catch(() => undefined);
+  if (restoredDue < today) {
+    syncUserToRouter(updated, 'expire').catch(() => undefined);
+  } else {
+    syncUserToRouter(updated, 'restore').catch(() => undefined);
+  }
+
+  let sms: { sent: boolean; detail: string } = { sent: false, detail: 'skipped' };
+  try {
+    const contact = String(updated.contact || user.contact || '').trim();
+    if (contact) {
+      const { sendPaymentCancelledSms } = await import('./notify.js');
+      sms = await sendPaymentCancelledSms({ ...updated, contact }, amount);
+    } else {
+      sms = { sent: false, detail: 'no phone number on file' };
+    }
+  } catch (e: any) {
+    sms = { sent: false, detail: e?.message || 'SMS failed' };
+  }
+
+  return {
+    ok: true,
+    paymentLinkId: link.id,
+    months,
+    amount,
+    username: user.username,
+    previousDue: currentDue,
+    subscriptionDue: restoredDue,
+    sms,
+  };
+}

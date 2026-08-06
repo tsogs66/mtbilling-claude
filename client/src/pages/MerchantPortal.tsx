@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
-  Download, Share, X, CloudOff, ArrowRightLeft,
+  Download, Share, X, CloudOff, ArrowRightLeft, Ban,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -92,6 +92,7 @@ export default function MerchantPortal() {
   const [reassignQ, setReassignQ] = useState('');
   const [reassignHits, setReassignHits] = useState<any[]>([]);
   const [reassignBusy, setReassignBusy] = useState(false);
+  const [cancelBusyId, setCancelBusyId] = useState<number | null>(null);
 
   const { showInstallButton, installed, iosHint, dismissIosHint, install } = usePortalInstall(theme, 'merchant');
 
@@ -419,6 +420,43 @@ export default function MerchantPortal() {
       show(err?.response?.data?.error || 'Reassign failed');
     } finally {
       setReassignBusy(false);
+    }
+  };
+
+  const confirmCancelCash = async (payment: any) => {
+    if (!payment?.id) return;
+    if (String(payment.payChannel || '').toLowerCase() !== 'cash') {
+      show('Only cash payments can be cancelled');
+      return;
+    }
+    const ok = window.confirm(
+      `Cancel this cash payment for ${payment.username} (${peso(payment.amount)} · ${payment.months || 1} mo)?\n\n` +
+        `• Due date will be reversed\n` +
+        `• Subscriber will get an SMS if a phone is on file\n` +
+        `• Remittance queue item will be removed (if still open)`
+    );
+    if (!ok) return;
+    setCancelBusyId(payment.id);
+    try {
+      const r = await api.post(`/merchant/payments/${payment.id}/cancel`);
+      const smsNote = r.data?.sms?.sent
+        ? 'SMS sent'
+        : `SMS not sent (${r.data?.sms?.detail || 'n/a'})`;
+      show(
+        `Cancelled ${r.data.username}: due ${String(r.data.previousDue || '').slice(0, 10)} → ${String(r.data.subscriptionDue || '').slice(0, 10)}. ${smsNote}.`
+      );
+      if (reassignId === payment.id) {
+        setReassignId(null);
+        setReassignQ('');
+        setReassignHits([]);
+      }
+      const recentR = await api.get('/merchant/recent');
+      setRecent(recentR.data.payments || []);
+      await loadCollectibles();
+    } catch (err: any) {
+      show(err?.response?.data?.error || 'Cancel failed');
+    } finally {
+      setCancelBusyId(null);
     }
   };
 
@@ -1091,13 +1129,16 @@ export default function MerchantPortal() {
             <div className="portal-glass rounded-2xl p-4">
               <div className="font-semibold text-sm mb-1">Your recent activations</div>
               <p className="text-xs text-slate-400 mb-2">
-                Wrong subscriber? Use <b>Change subscriber</b> — the new account gets the due date extension and the old one is reversed.
+                Wrong subscriber? Use <b>Change subscriber</b>. Cash payments can also be <b>cancelled</b> (due date reversed + SMS).
               </p>
               {recent.length === 0 ? (
                 <div className="text-xs text-slate-400 py-3 text-center">No payments posted yet.</div>
               ) : (
                 <ul className="divide-y divide-white/5 text-sm">
-                  {recent.map((p) => (
+                  {recent.map((p) => {
+                    const isCash = String(p.payChannel || '').toLowerCase() === 'cash';
+                    const busy = reassignBusy || cancelBusyId === p.id;
+                    return (
                     <li key={p.id} className="py-2 space-y-2">
                       <div className="flex justify-between gap-3">
                         <div className="min-w-0">
@@ -1112,25 +1153,42 @@ export default function MerchantPortal() {
                           <div className="text-[11px] text-slate-400">
                             {String(p.paidAt || '').slice(0, 16).replace('T', ' ')}
                           </div>
-                          <button
-                            type="button"
-                            className="mt-1 text-[11px] text-sky-300 hover:text-sky-200 inline-flex items-center gap-1"
-                            disabled={reassignBusy}
-                            onClick={() => {
-                              if (reassignId === p.id) {
-                                setReassignId(null);
-                                setReassignQ('');
-                                setReassignHits([]);
-                              } else {
-                                setReassignId(p.id);
-                                setReassignQ('');
-                                setReassignHits([]);
-                              }
-                            }}
-                          >
-                            <ArrowRightLeft size={12} />
-                            {reassignId === p.id ? 'Cancel' : 'Change subscriber'}
-                          </button>
+                          <div className="mt-1 flex flex-col items-end gap-0.5">
+                            <button
+                              type="button"
+                              className="text-[11px] text-sky-300 hover:text-sky-200 inline-flex items-center gap-1"
+                              disabled={busy}
+                              onClick={() => {
+                                if (reassignId === p.id) {
+                                  setReassignId(null);
+                                  setReassignQ('');
+                                  setReassignHits([]);
+                                } else {
+                                  setReassignId(p.id);
+                                  setReassignQ('');
+                                  setReassignHits([]);
+                                }
+                              }}
+                            >
+                              <ArrowRightLeft size={12} />
+                              {reassignId === p.id ? 'Close' : 'Change subscriber'}
+                            </button>
+                            {isCash && (
+                              <button
+                                type="button"
+                                className="text-[11px] text-rose-300 hover:text-rose-200 inline-flex items-center gap-1"
+                                disabled={busy}
+                                onClick={() => void confirmCancelCash(p)}
+                              >
+                                {cancelBusyId === p.id ? (
+                                  <Loader2 className="animate-spin" size={12} />
+                                ) : (
+                                  <Ban size={12} />
+                                )}
+                                {cancelBusyId === p.id ? 'Cancelling…' : 'Cancel payment'}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                       {reassignId === p.id && (
@@ -1157,7 +1215,7 @@ export default function MerchantPortal() {
                                     <button
                                       type="button"
                                       className="w-full text-left px-2.5 py-2 hover:bg-white/5 disabled:opacity-50"
-                                      disabled={reassignBusy}
+                                      disabled={busy}
                                       onClick={() => void confirmReassign(p, s)}
                                     >
                                       <div className="font-medium text-sm">{s.username}</div>
@@ -1178,7 +1236,8 @@ export default function MerchantPortal() {
                         </div>
                       )}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>
