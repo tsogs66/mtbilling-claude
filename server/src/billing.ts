@@ -824,6 +824,54 @@ export async function syncUserToRouter(
   }
 }
 
+/**
+ * Push panel subscriber billing state to MikroTik after a payment cancel/reassign reverse.
+ * Always rewrites the PPP secret comment (due/status) — unlike expire-for-grace.
+ */
+async function syncReversedSubscriberToRouter(user: any): Promise<{ ok: boolean; error?: string }> {
+  if (!user?.router_id) return { ok: false, error: 'no router' };
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
+  if (!router?.host || !router?.api_user) return { ok: false, error: 'router-not-configured' };
+  const st = String(user.status || '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  try {
+    if (st === 'disabled') {
+      await updatePppSecret(router, user.username, {
+        comment: commentFromUser(user),
+      });
+      await setPppSecretEnabled(router, user.username, false);
+      try {
+        await removePppActiveByName(router, user.username);
+      } catch {
+        /* best-effort */
+      }
+      return { ok: true };
+    }
+    if (st === 'non-payment' || st === 'nonpayment' || st === 'expired') {
+      const expire =
+        user.expiration_profile && user.expiration_profile !== 'default'
+          ? user.expiration_profile
+          : 'non-payments';
+      try {
+        await ensurePppProfile(router, expire);
+      } catch {
+        /* profile may already exist */
+      }
+      await updatePppSecret(router, user.username, {
+        profile: expire,
+        comment: commentFromUser(user),
+        disabled: false,
+      });
+      await setPppSecretEnabled(router, user.username, true);
+      return { ok: true };
+    }
+    return syncUserToRouter(user, 'restore');
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 export async function recordPppoePayment(
   userId: number,
   opts: {
@@ -886,6 +934,7 @@ export async function recordPppoePayment(
     transactionAt,
     previousDue,
     newDue,
+    previousStatus,
     subtotal,
     discount,
     discountDays,
@@ -1862,7 +1911,36 @@ export async function reassignCashierPayment(opts: {
     throw new Error('Could not determine the original due date to reverse');
   }
 
-  db.prepare(`UPDATE pppoe_users SET subscription_due = ? WHERE id = ?`).run(restoredDue, oldUserId);
+  const receiptPrevStatus = String(receipt.previousStatus || '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  let restoredStatus = 'Active';
+  let restoredOnline = 1;
+  let restoredNonpaymentSince: string | null = null;
+  if (restoredDue < today) {
+    if (receiptPrevStatus === 'disabled') {
+      restoredStatus = 'Disabled';
+      restoredOnline = 0;
+    } else if (receiptPrevStatus === 'expired') {
+      restoredStatus = 'Expired';
+      restoredOnline = 0;
+      restoredNonpaymentSince = new Date().toISOString();
+    } else {
+      restoredStatus = 'non-payment';
+      restoredOnline = 1;
+      restoredNonpaymentSince = new Date().toISOString();
+    }
+  }
+
+  db.prepare(
+    `UPDATE pppoe_users SET
+       subscription_due = ?,
+       status = ?,
+       online = ?,
+       nonpayment_since = ?,
+       reminder_sent = NULL
+     WHERE id = ?`
+  ).run(restoredDue, restoredStatus, restoredOnline, restoredNonpaymentSince, oldUserId);
   const oldUpdated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(oldUserId) as any;
 
   const reverseReceipt = {
@@ -1870,6 +1948,7 @@ export async function reassignCashierPayment(opts: {
     months,
     previousDue: currentDue,
     newDue: restoredDue,
+    restoredStatus,
     fromPaymentLinkId: Number(link.id),
     fromTransactionId: found?.id || null,
     reassignedToUserId: newUserId,
@@ -1913,17 +1992,15 @@ export async function reassignCashierPayment(opts: {
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'billing',
-    `Merchant ${opts.cashier.username} reassigned payment link #${link.id}: ${oldUser.username} due ${currentDue} → ${restoredDue}; applying +${months}mo to ${newUser.username}`
+    `Merchant ${opts.cashier.username} reassigned payment link #${link.id}: ${oldUser.username} due ${currentDue} → ${restoredDue} (${restoredStatus}); applying +${months}mo to ${newUser.username}`
   );
 
-  // Refresh router schedule for the old subscriber (may now be overdue).
+  // Refresh router schedule / PPP comment+profile for the old subscriber.
   scheduleRouterExpiry(oldUpdated, oldUpdated.expiration_profile).catch(() => undefined);
-  if (restoredDue < today) {
-    syncUserToRouter(oldUpdated, 'expire').catch(() => undefined);
-  } else {
-    // Keep comment/due in sync on the router secret.
-    syncUserToRouter(oldUpdated, 'restore').catch(() => undefined);
-  }
+  await withTimeout(syncReversedSubscriberToRouter(oldUpdated), ROUTER_CALL_BUDGET_MS, {
+    ok: false,
+    error: 'Router is slow — continuing in the background',
+  });
 
   const payment = await recordPppoePayment(newUserId, {
     months,
@@ -2060,52 +2137,80 @@ export async function cancelCashierCashPayment(opts: {
 
   const reason = opts.reason ? String(opts.reason).trim().slice(0, 240) : null;
 
-  db.prepare(`UPDATE pppoe_users SET subscription_due = ? WHERE id = ?`).run(restoredDue, userId);
+  // Restore panel subscriber fields (due + status), not just the due date.
+  const receiptPrevStatus = String(receipt.previousStatus || '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  let restoredStatus = 'Active';
+  let restoredOnline = 1;
+  let restoredNonpaymentSince: string | null = null;
+  if (restoredDue < today) {
+    if (receiptPrevStatus === 'disabled') {
+      restoredStatus = 'Disabled';
+      restoredOnline = 0;
+    } else if (receiptPrevStatus === 'expired') {
+      restoredStatus = 'Expired';
+      restoredOnline = 0;
+      restoredNonpaymentSince = new Date().toISOString();
+    } else {
+      restoredStatus = 'non-payment';
+      restoredOnline = 1;
+      restoredNonpaymentSince = new Date().toISOString();
+    }
+  }
+
+  db.prepare(
+    `UPDATE pppoe_users SET
+       subscription_due = ?,
+       status = ?,
+       online = ?,
+       nonpayment_since = ?,
+       reminder_sent = NULL
+     WHERE id = ?`
+  ).run(restoredDue, restoredStatus, restoredOnline, restoredNonpaymentSince, userId);
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
 
   const cancelReceipt = {
+    ...(typeof receipt === 'object' && receipt ? receipt : {}),
     type: 'payment_cancelled',
     months,
     previousDue: currentDue,
     newDue: restoredDue,
-    amount,
+    restoredStatus,
+    originalAmount: amount,
+    amount: 0,
     fromPaymentLinkId: Number(link.id),
-    fromTransactionId: found?.id || null,
-    cashier: opts.cashier.username,
-    reason,
-    at: new Date().toISOString(),
+    cancelledAt: new Date().toISOString(),
+    cancelledBy: opts.cashier.username,
+    cancelReason: reason,
   };
-  db.prepare(
-    `INSERT INTO transactions
-       (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    userId,
-    user.customer_name || user.username,
-    0,
-    'payment_cancelled',
-    new Date().toISOString(),
-    JSON.stringify(cancelReceipt),
-    opts.cashier.id,
-    opts.cashier.username
-  );
 
+  // Mark the original payment transaction as cancelled (keep the row; zero the amount).
   if (found?.id) {
-    try {
-      const patched = {
-        ...(typeof receipt === 'object' && receipt ? receipt : {}),
-        cancelledAt: new Date().toISOString(),
-        cancelledBy: opts.cashier.username,
-        cancelledDueRestored: restoredDue,
-        cancelReason: reason,
-      };
-      db.prepare('UPDATE transactions SET receipt_json = ? WHERE id = ?').run(
-        JSON.stringify(patched),
-        found.id
-      );
-    } catch {
-      /* ignore */
-    }
+    db.prepare(
+      `UPDATE transactions SET
+         type = 'payment_cancelled',
+         amount = 0,
+         receipt_json = ?,
+         cashier_user_id = COALESCE(cashier_user_id, ?),
+         cashier_username = COALESCE(cashier_username, ?)
+       WHERE id = ?`
+    ).run(JSON.stringify(cancelReceipt), opts.cashier.id, opts.cashier.username, found.id);
+  } else {
+    db.prepare(
+      `INSERT INTO transactions
+         (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      userId,
+      user.customer_name || user.username,
+      0,
+      'payment_cancelled',
+      new Date().toISOString(),
+      JSON.stringify(cancelReceipt),
+      opts.cashier.id,
+      opts.cashier.username
+    );
   }
 
   db.prepare(
@@ -2126,14 +2231,26 @@ export async function cancelCashierCashPayment(opts: {
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'billing',
-    `Merchant ${opts.cashier.username} cancelled cash payment link #${link.id} for ${user.username}: due ${currentDue} → ${restoredDue}${reason ? ` (${reason})` : ''}`
+    `Merchant ${opts.cashier.username} cancelled cash payment link #${link.id} for ${user.username}: due ${currentDue} → ${restoredDue}, status → ${restoredStatus}${reason ? ` (${reason})` : ''}`
   );
 
+  // Rewrite MikroTik PPP comment/profile to match restored panel state (awaited, best-effort).
   scheduleRouterExpiry(updated, updated.expiration_profile).catch(() => undefined);
-  if (restoredDue < today) {
-    syncUserToRouter(updated, 'expire').catch(() => undefined);
-  } else {
-    syncUserToRouter(updated, 'restore').catch(() => undefined);
+  const routerSync = await withTimeout(syncReversedSubscriberToRouter(updated), ROUTER_CALL_BUDGET_MS, {
+    ok: false,
+    error: 'Router is slow — continuing in the background',
+  });
+  if (!routerSync.ok) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'mikrotik',
+      `Cancel payment for ${updated.username}: router sync ${routerSync.error || 'failed'}`
+    );
+    try {
+      enqueueRouterSync(updated.router_id, updated.id, routerSync.error || 'Cancel reverse sync failed');
+    } catch {
+      /* ignore */
+    }
   }
 
   let sms: { sent: boolean; detail: string } = { sent: false, detail: 'skipped' };
@@ -2157,6 +2274,8 @@ export async function cancelCashierCashPayment(opts: {
     username: user.username,
     previousDue: currentDue,
     subscriptionDue: restoredDue,
+    status: restoredStatus,
     sms,
+    routerSync,
   };
 }

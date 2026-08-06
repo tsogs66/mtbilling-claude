@@ -292,7 +292,9 @@ export default function SalesReport() {
               cells: [
                 <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
                 <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
-                <span className="text-slate-600">{t.type || '—'}</span>,
+                <span className={`font-medium ${String(t.type || '').includes('cancel') ? 'text-rose-600' : 'text-slate-600'}`}>
+                  {String(t.type || '—').replace(/_/g, ' ')}
+                </span>,
                 <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
                 <button
                   type="button"
@@ -343,7 +345,9 @@ export default function SalesReport() {
             cells: [
               <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
               <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
-              <span className="text-slate-600">{t.type || '—'}</span>,
+              <span className={`font-medium ${String(t.type || '').includes('cancel') ? 'text-rose-600' : 'text-slate-600'}`}>
+                  {String(t.type || '—').replace(/_/g, ' ')}
+                </span>,
               <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
               <button
                 type="button"
