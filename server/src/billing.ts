@@ -2090,22 +2090,16 @@ export async function cancelCashierCashPayment(opts: {
     opts.cashier.username
   );
 
+  // Remove the original payment row so it no longer appears in sales / transaction lists.
   if (found?.id) {
     try {
-      const patched = {
-        ...(typeof receipt === 'object' && receipt ? receipt : {}),
-        cancelledAt: new Date().toISOString(),
-        cancelledBy: opts.cashier.username,
-        cancelledDueRestored: restoredDue,
-        cancelReason: reason,
-      };
-      db.prepare('UPDATE transactions SET receipt_json = ? WHERE id = ?').run(
-        JSON.stringify(patched),
-        found.id
-      );
+      db.prepare(
+        `UPDATE cashier_collectibles SET transaction_id = NULL WHERE transaction_id = ?`
+      ).run(found.id);
     } catch {
       /* ignore */
     }
+    db.prepare('DELETE FROM transactions WHERE id = ? AND type = ?').run(found.id, 'payment');
   }
 
   db.prepare(
