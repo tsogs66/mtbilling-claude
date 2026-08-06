@@ -30,7 +30,8 @@ function sortOpenPaymentLinks(rows: any[]) {
 export default function PayPortal() {
   const [links, setLinks] = useState<any[]>([]);
   const [paidLinks, setPaidLinks] = useState<any[]>([]);
-  const [linksTab, setLinksTab] = useState<'open' | 'paid'>('open');
+  const [cancelledLinks, setCancelledLinks] = useState<any[]>([]);
+  const [linksTab, setLinksTab] = useState<'open' | 'paid' | 'cancelled'>('open');
   const [clients, setClients] = useState<any[]>([]);
   const [resendClients, setResendClients] = useState<any[]>([]);
   const [userId, setUserId] = useState('');
@@ -86,12 +87,21 @@ export default function PayPortal() {
 
   const load = () => {
     api.get('/payment-links').then((r) => {
-      const open = (r.data.links || []).filter((l: any) => l.status !== 'paid');
+      const open = (r.data.links || []).filter(
+        (l: any) => l.status !== 'paid' && l.status !== 'cancelled'
+      );
       const paid =
         r.data.paid ||
         (r.data.links || []).filter((l: any) => l.status === 'paid');
+      const cancelled =
+        r.data.cancelled ||
+        (r.data.links || []).filter(
+          (l: any) =>
+            l.status === 'cancelled' && String(l.payChannel || '').toLowerCase() === 'cash'
+        );
       setLinks(sortOpenPaymentLinks(open));
       setPaidLinks(paid);
+      setCancelledLinks(cancelled);
       setSelected(new Set());
       if (r.data.effective !== undefined) setEffective(r.data.effective);
       if (r.data.warning !== undefined) setWarning(r.data.warning);
@@ -181,7 +191,8 @@ export default function PayPortal() {
     load();
   }, []);
 
-  const visibleLinks = linksTab === 'paid' ? paidLinks : links;
+  const visibleLinks =
+    linksTab === 'paid' ? paidLinks : linksTab === 'cancelled' ? cancelledLinks : links;
   const awaitingCount = useMemo(
     () => links.filter((l) => l.status === 'submitted').length,
     [links]
@@ -205,7 +216,7 @@ export default function PayPortal() {
   };
 
   const switchLinksTab = (key: string) => {
-    setLinksTab(key === 'paid' ? 'paid' : 'open');
+    setLinksTab(key === 'paid' ? 'paid' : key === 'cancelled' ? 'cancelled' : 'open');
     setSelected(new Set());
   };
 
@@ -878,6 +889,7 @@ export default function PayPortal() {
                     : `Links (${links.length})`,
               },
               { key: 'paid', label: `Paid (${paidLinks.length})` },
+              { key: 'cancelled', label: `Cancelled (${cancelledLinks.length})` },
             ]}
           />
         </div>
@@ -885,10 +897,17 @@ export default function PayPortal() {
         <Toolbar
           left={
             <span>
-              {linksTab === 'paid' ? 'Paid subscribers' : 'Links'}{' '}
+              {linksTab === 'paid'
+                ? 'Paid subscribers'
+                : linksTab === 'cancelled'
+                  ? 'Cancelled cash payments'
+                  : 'Links'}{' '}
               <span className="font-semibold">{visibleLinks.length}</span>
               {linksTab === 'open' && awaitingCount > 0 ? (
                 <span className="text-sky-600"> · {awaitingCount} for approval (top)</span>
+              ) : null}
+              {linksTab === 'cancelled' ? (
+                <span className="text-slate-400"> · merchant cash cancels only</span>
               ) : null}
               {someSelected ? <span className="text-slate-400"> · {selected.size} selected</span> : null}
             </span>
@@ -918,7 +937,13 @@ export default function PayPortal() {
                     checked={allSelected}
                     disabled={!visibleLinks.length}
                     onChange={toggleAll}
-                    aria-label={linksTab === 'paid' ? 'Select all paid links' : 'Select all payment links'}
+                    aria-label={
+                      linksTab === 'paid'
+                        ? 'Select all paid links'
+                        : linksTab === 'cancelled'
+                          ? 'Select all cancelled links'
+                          : 'Select all payment links'
+                    }
                   />
                 </th>
                 <th className="py-2">Subscriber</th>
@@ -926,7 +951,9 @@ export default function PayPortal() {
                 <th className="py-2">From</th>
                 <th className="py-2">Status</th>
                 <th className="py-2">Proof / Ref</th>
-                <th className="py-2">{linksTab === 'paid' ? 'Paid' : 'Expires'}</th>
+                <th className="py-2">
+                  {linksTab === 'paid' ? 'Paid' : linksTab === 'cancelled' ? 'Cancelled' : 'Expires'}
+                </th>
                 <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -996,7 +1023,9 @@ export default function PayPortal() {
                   <td className="py-2.5 text-xs text-slate-500">
                     {linksTab === 'paid'
                       ? String(l.paidAt || l.paid_at || l.reviewedAt || '').slice(0, 16).replace('T', ' ')
-                      : String(l.expiresAt || l.expires_at || '').slice(0, 16).replace('T', ' ')}
+                      : linksTab === 'cancelled'
+                        ? String(l.reviewedAt || l.paidAt || '').slice(0, 16).replace('T', ' ')
+                        : String(l.expiresAt || l.expires_at || '').slice(0, 16).replace('T', ' ')}
                   </td>
                   <td className="py-2.5">
                     <div className="flex justify-end gap-1 flex-wrap">
@@ -1006,13 +1035,17 @@ export default function PayPortal() {
                       {l.status === 'submitted' && (
                         <IconAction icon={X} title="Reject" tone="rose" onClick={() => reject(l.id)} />
                       )}
-                      <IconAction icon={Copy} title="Copy link" tone="sky" onClick={() => copy(l)} />
-                      <IconAction
-                        icon={Link2}
-                        title="Open"
-                        tone="emerald"
-                        onClick={() => window.open(resolvePayUrl(l) || `/pay/${l.token}`, '_blank')}
-                      />
+                      {l.status !== 'cancelled' && (
+                        <>
+                          <IconAction icon={Copy} title="Copy link" tone="sky" onClick={() => copy(l)} />
+                          <IconAction
+                            icon={Link2}
+                            title="Open"
+                            tone="emerald"
+                            onClick={() => window.open(resolvePayUrl(l) || `/pay/${l.token}`, '_blank')}
+                          />
+                        </>
+                      )}
                       <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => remove(l.id)} />
                     </div>
                   </td>
@@ -1021,7 +1054,11 @@ export default function PayPortal() {
               {visibleLinks.length === 0 && (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-400">
-                    {linksTab === 'paid' ? 'No paid subscribers yet.' : 'No open payment links.'}
+                    {linksTab === 'paid'
+                      ? 'No paid subscribers yet.'
+                      : linksTab === 'cancelled'
+                        ? 'No cancelled cash payments yet.'
+                        : 'No open payment links.'}
                   </td>
                 </tr>
               )}
