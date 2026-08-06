@@ -2171,43 +2171,46 @@ export async function cancelCashierCashPayment(opts: {
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
 
   const cancelReceipt = {
+    ...(typeof receipt === 'object' && receipt ? receipt : {}),
     type: 'payment_cancelled',
     months,
     previousDue: currentDue,
     newDue: restoredDue,
     restoredStatus,
-    amount,
+    originalAmount: amount,
+    amount: 0,
     fromPaymentLinkId: Number(link.id),
-    fromTransactionId: found?.id || null,
-    cashier: opts.cashier.username,
-    reason,
-    at: new Date().toISOString(),
+    cancelledAt: new Date().toISOString(),
+    cancelledBy: opts.cashier.username,
+    cancelReason: reason,
   };
-  db.prepare(
-    `INSERT INTO transactions
-       (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    userId,
-    user.customer_name || user.username,
-    0,
-    'payment_cancelled',
-    new Date().toISOString(),
-    JSON.stringify(cancelReceipt),
-    opts.cashier.id,
-    opts.cashier.username
-  );
 
-  // Remove the original payment row so it no longer appears in sales / transaction lists.
+  // Mark the original payment transaction as cancelled (keep the row; zero the amount).
   if (found?.id) {
-    try {
-      db.prepare(
-        `UPDATE cashier_collectibles SET transaction_id = NULL WHERE transaction_id = ?`
-      ).run(found.id);
-    } catch {
-      /* ignore */
-    }
-    db.prepare('DELETE FROM transactions WHERE id = ? AND type = ?').run(found.id, 'payment');
+    db.prepare(
+      `UPDATE transactions SET
+         type = 'payment_cancelled',
+         amount = 0,
+         receipt_json = ?,
+         cashier_user_id = COALESCE(cashier_user_id, ?),
+         cashier_username = COALESCE(cashier_username, ?)
+       WHERE id = ?`
+    ).run(JSON.stringify(cancelReceipt), opts.cashier.id, opts.cashier.username, found.id);
+  } else {
+    db.prepare(
+      `INSERT INTO transactions
+         (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      userId,
+      user.customer_name || user.username,
+      0,
+      'payment_cancelled',
+      new Date().toISOString(),
+      JSON.stringify(cancelReceipt),
+      opts.cashier.id,
+      opts.cashier.username
+    );
   }
 
   db.prepare(
