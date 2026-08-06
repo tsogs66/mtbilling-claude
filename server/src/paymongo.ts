@@ -5,7 +5,9 @@
 import crypto from 'crypto';
 import { db } from './db.js';
 import { markPaymentLinkPaid } from './billing.js';
+import { fulfillCashierRemittancePaymongo, ensureCashierRemittanceColumns } from './cashierCollectibles.js';
 import { sendPaymentConfirmationSms } from './notify.js';
+import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 
 export type PaymongoSettings = {
   enabled: boolean;
@@ -201,11 +203,15 @@ function authHeader(sk: string) {
   return `Basic ${Buffer.from(`${sk}:`).toString('base64')}`;
 }
 
-/** Create a PayMongo Checkout Session v2 for a pending payment link. */
-export async function createPaymongoCheckout(opts: {
-  token: string;
+/** Low-level PayMongo Checkout Session v2 (subscriber pay links + merchant remittances). */
+export async function createPaymongoCheckoutSession(opts: {
+  amount: number;
+  description: string;
+  lineItemName: string;
+  referenceNumber: string;
   successUrl: string;
   cancelUrl: string;
+  metadata?: Record<string, string>;
 }) {
   ensurePaymongoColumns();
   const s = row();
@@ -213,18 +219,11 @@ export async function createPaymongoCheckout(opts: {
   const sk = String(s.paymongo_secret_key || '').trim();
   if (!sk) throw new Error('PayMongo secret key is not configured');
 
-  const link = db.prepare('SELECT * FROM payment_links WHERE token = ?').get(opts.token) as any;
-  if (!link) throw new Error('Payment link not found');
-  if (link.status === 'paid') throw new Error('Already paid');
-  if (link.status === 'expired' || (link.expires_at && Date.parse(link.expires_at) < Date.now())) {
-    throw new Error('Payment link expired');
-  }
-  const amountCentavos = Math.round(Number(link.amount) * 100);
+  const amountCentavos = Math.round(Number(opts.amount) * 100);
   if (!Number.isFinite(amountCentavos) || amountCentavos < 1000) {
     throw new Error('Amount must be at least ₱10.00 for PayMongo');
   }
 
-  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(link.pppoe_user_id) as any;
   const methods = String(s.paymongo_methods || DEFAULT_METHODS.join(','))
     .split(',')
     .map((x: string) => x.trim().toLowerCase())
@@ -236,10 +235,10 @@ export async function createPaymongoCheckout(opts: {
         send_email_receipt: false,
         show_description: true,
         show_line_items: true,
-        description: `Internet payment — ${user?.username || user?.account_number || 'subscriber'}`,
+        description: opts.description,
         line_items: [
           {
-            name: `${link.months || 1} month subscription`,
+            name: opts.lineItemName,
             quantity: 1,
             amount: amountCentavos,
             currency: 'PHP',
@@ -248,12 +247,8 @@ export async function createPaymongoCheckout(opts: {
         payment_method_types: methods.length ? methods : DEFAULT_METHODS,
         success_url: opts.successUrl,
         cancel_url: opts.cancelUrl,
-        reference_number: opts.token,
-        metadata: {
-          payment_link_token: opts.token,
-          payment_link_id: String(link.id),
-          pppoe_user_id: String(link.pppoe_user_id),
-        },
+        reference_number: opts.referenceNumber,
+        metadata: opts.metadata || {},
       },
     },
   };
@@ -284,17 +279,50 @@ export async function createPaymongoCheckout(opts: {
   const checkoutUrl = session?.attributes?.checkout_url;
   if (!checkoutUrl) throw new Error('PayMongo did not return a checkout URL');
 
+  return { checkoutId, checkoutUrl, referenceNumber: opts.referenceNumber };
+}
+
+/** Create a PayMongo Checkout Session v2 for a pending payment link. */
+export async function createPaymongoCheckout(opts: {
+  token: string;
+  successUrl: string;
+  cancelUrl: string;
+}) {
+  ensurePaymongoColumns();
+  const link = db.prepare('SELECT * FROM payment_links WHERE token = ?').get(opts.token) as any;
+  if (!link) throw new Error('Payment link not found');
+  if (link.status === 'paid') throw new Error('Already paid');
+  if (link.status === 'expired' || (link.expires_at && Date.parse(link.expires_at) < Date.now())) {
+    throw new Error('Payment link expired');
+  }
+
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(link.pppoe_user_id) as any;
+  const checkout = await createPaymongoCheckoutSession({
+    amount: Number(link.amount),
+    description: `Internet payment — ${user?.username || user?.account_number || 'subscriber'}`,
+    lineItemName: `${link.months || 1} month subscription`,
+    referenceNumber: opts.token,
+    successUrl: opts.successUrl,
+    cancelUrl: opts.cancelUrl,
+    metadata: {
+      kind: 'payment_link',
+      payment_link_token: opts.token,
+      payment_link_id: String(link.id),
+      pppoe_user_id: String(link.pppoe_user_id),
+    },
+  });
+
   db.prepare(
     `UPDATE payment_links SET paymongo_checkout_id = ?, pay_channel = COALESCE(pay_channel, 'paymongo') WHERE id = ?`
-  ).run(checkoutId || null, link.id);
+  ).run(checkout.checkoutId || null, link.id);
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'paymongo',
-    `Checkout created for token ${opts.token.slice(0, 8)}… · ${checkoutId || 'no-id'} · ₱${Number(link.amount).toFixed(2)}`
+    `Checkout created for token ${opts.token.slice(0, 8)}… · ${checkout.checkoutId || 'no-id'} · ₱${Number(link.amount).toFixed(2)}`
   );
 
-  return { checkoutId, checkoutUrl, token: opts.token };
+  return { checkoutId: checkout.checkoutId, checkoutUrl: checkout.checkoutUrl, token: opts.token };
 }
 
 function timingSafeEqualStr(a: string, b: string) {
@@ -347,6 +375,62 @@ export async function handlePaymongoWebhook(payload: any) {
 
   const checkoutId = eventData?.id || attrs.checkout_session_id || null;
   let resolvedToken = token ? String(token) : null;
+  const metaKind = String(attrs.metadata?.kind || attrs.payment_intent?.attributes?.metadata?.kind || '');
+  const payments = attrs.payments || [];
+  const payId = payments[0]?.id || attrs.payment_intent?.id || checkoutId || 'paymongo';
+  const sourceType = payments[0]?.attributes?.source?.type || payments[0]?.attributes?.source?.id || 'paymongo';
+
+  // Merchant cash remittance — funds go to ISP; auto-accept deposit (no subscriber activation).
+  ensureCashierRemittanceColumns();
+  const isRemittance =
+    metaKind === 'cashier_remittance' ||
+    (resolvedToken && String(resolvedToken).startsWith('crmt')) ||
+    (!!checkoutId &&
+      !!(db.prepare('SELECT id FROM cashier_deposits WHERE paymongo_checkout_id = ?').get(String(checkoutId)) as any));
+
+  if (isRemittance) {
+    try {
+      const result = fulfillCashierRemittancePaymongo({
+        remitToken: resolvedToken,
+        checkoutId: checkoutId ? String(checkoutId) : null,
+        paymentId: String(payId),
+      });
+      const dep = result.deposit;
+      if (!result.alreadyPaid && dep) {
+        try {
+          notifyStaff({
+            type: 'payment_paymongo_merchant',
+            title: 'Merchant cash remittance (PayMongo)',
+            body: `${dep.cashierUsername} remitted ₱${Number(dep.amountTotal || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })} via PayMongo (${dep.itemCount} cash payment${dep.itemCount === 1 ? '' : 's'})`,
+            entityType: 'cashier_deposit',
+            entityId: Number(dep.id),
+            status: 'accepted',
+            payload: {
+              cashierUserId: dep.cashierUserId,
+              cashierUsername: dep.cashierUsername,
+              paymentId: payId,
+              amount: dep.amountTotal,
+            },
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'paymongo',
+        `Merchant remittance confirmed · deposit #${dep?.id} · ${payId}${result.alreadyPaid ? ' (already)' : ''}`
+      );
+      return { ok: true, remittance: true, alreadyPaid: !!result.alreadyPaid, depositId: dep?.id, paymentId: payId };
+    } catch (e: any) {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'warning',
+        'paymongo',
+        `Merchant remittance fulfill failed: ${e?.message || e}`
+      );
+      throw e;
+    }
+  }
 
   if (!resolvedToken && checkoutId) {
     const rowLink = db
@@ -363,10 +447,6 @@ export async function handlePaymongoWebhook(payload: any) {
     );
     return { ok: false, error: 'missing payment link reference' };
   }
-
-  const payments = attrs.payments || [];
-  const payId = payments[0]?.id || attrs.payment_intent?.id || checkoutId || 'paymongo';
-  const sourceType = payments[0]?.attributes?.source?.type || payments[0]?.attributes?.source?.id || 'paymongo';
 
   try {
     db.prepare(
@@ -408,6 +488,39 @@ export async function handlePaymongoWebhook(payload: any) {
           'paymongo',
           `Payment SMS skipped — no phone on file for token ${resolvedToken.slice(0, 8)}…`
         );
+      }
+
+      // Merchant-initiated PayMongo: staff inbox only (no remittance queue — funds already with ISP).
+      try {
+        const linkRow = db
+          .prepare('SELECT * FROM payment_links WHERE token = ?')
+          .get(resolvedToken) as any;
+        const cashierId = linkRow?.cashier_user_id != null ? Number(linkRow.cashier_user_id) : null;
+        if (cashierId && Number.isFinite(cashierId)) {
+          try {
+            const who = subscriberLabel(Number(linkRow.pppoe_user_id));
+            const amt = Number(linkRow.amount) || total || 0;
+            notifyStaff({
+              type: 'payment_paymongo_merchant',
+              title: 'Merchant PayMongo payment',
+              body: `${who} paid ₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} via PayMongo (merchant ${linkRow.cashier_username || cashierId}) — funds settled online, no remittance`,
+              entityType: 'payment_link',
+              entityId: Number(linkRow.id),
+              pppoeUserId: Number(linkRow.pppoe_user_id) || null,
+              status: 'paid',
+              payload: {
+                cashierUserId: cashierId,
+                cashierUsername: linkRow.cashier_username || null,
+                paymentId: payId,
+                amount: amt,
+              },
+            });
+          } catch {
+            /* ignore staff notify failures */
+          }
+        }
+      } catch {
+        /* ignore */
       }
     }
 

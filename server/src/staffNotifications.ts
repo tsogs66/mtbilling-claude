@@ -7,7 +7,8 @@ export type StaffNotificationType =
   | 'ticket'
   | 'outage_report'
   | 'payment_link_created'
-  | 'payment_submitted';
+  | 'payment_submitted'
+  | 'payment_paymongo_merchant';
 
 export type StaffNotificationRow = {
   id: number;
@@ -75,6 +76,7 @@ function hrefFor(type: StaffNotificationType, entityId?: number | null): string 
       return entityId ? `/outage-monitor?report=${entityId}` : '/outage-monitor';
     case 'payment_link_created':
     case 'payment_submitted':
+    case 'payment_paymongo_merchant':
       return entityId ? `/pay-portal?highlight=${entityId}` : '/pay-portal';
     default:
       return null;

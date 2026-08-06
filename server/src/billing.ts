@@ -1660,21 +1660,38 @@ export async function cashierCollectPayment(opts: {
 
   const subscriber = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
   const txId = Number((payment as any)?.transactionId || (payment as any)?.id) || null;
-  const collectibleId = createCashierCollectible({
-    cashierUserId: opts.cashier.id,
-    cashierUsername: opts.cashier.username,
-    paymentLinkId: link.id,
-    transactionId: txId,
-    pppoeUserId: opts.pppoeUserId,
-    amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
-    months: link.months || 1,
-    collectionType: collectionType as 'cash' | 'online',
-    payChannel: channel,
-    externalRef: reference,
-    subscriberUsername: subscriber?.username || null,
-    customerName: subscriber?.customer_name || null,
-    accountNumber: subscriber?.account_number || null,
-  });
+  // Cash only — online collections settle to the ISP and skip the remittance queue.
+  const collectibleId =
+    collectionType === 'cash'
+      ? createCashierCollectible({
+          cashierUserId: opts.cashier.id,
+          cashierUsername: opts.cashier.username,
+          paymentLinkId: link.id,
+          transactionId: txId,
+          pppoeUserId: opts.pppoeUserId,
+          amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
+          months: link.months || 1,
+          collectionType: 'cash',
+          payChannel: channel,
+          externalRef: reference,
+          subscriberUsername: subscriber?.username || null,
+          customerName: subscriber?.customer_name || null,
+          accountNumber: subscriber?.account_number || null,
+        })
+      : null;
+
+  // Subscriber SMS confirmation (same template as PayMongo / admin payments).
+  try {
+    const contact = String(subscriber?.contact || (payment as any)?.user?.contact || '').trim();
+    const total = Number(link.amount) || Number((payment as any)?.total ?? (payment as any)?.amount) || 0;
+    const smsUser = (payment as any)?.user || subscriber;
+    if (smsUser && contact) {
+      const { sendPaymentConfirmationSms } = await import('./notify.js');
+      sendPaymentConfirmationSms({ ...smsUser, contact }, total).catch(() => undefined);
+    }
+  } catch {
+    /* never block collect on SMS failure */
+  }
 
   return {
     ok: true,
@@ -1689,5 +1706,56 @@ export async function cashierCollectPayment(opts: {
     cashier: opts.cashier.username,
     collectibleId,
     payment,
+  };
+}
+
+/**
+ * Merchant portal: start a PayMongo hosted checkout unique to the selected subscriber.
+ * Activation + SMS happen on the PayMongo webhook. No remittance queue (funds settle online).
+ */
+export async function cashierStartPaymongoCheckout(opts: {
+  pppoeUserId: number;
+  months?: number;
+  amount?: number | null;
+  cashier: { id: number; username: string };
+  successUrl: string;
+  cancelUrl: string;
+}) {
+  const { getPublicPayOptions, createPaymongoCheckout } = await import('./paymongo.js');
+  const optsPub = getPublicPayOptions();
+  if (!optsPub.paymongo) throw new Error('PayMongo is not enabled on this panel');
+
+  const link = createPaymentLink({
+    pppoeUserId: opts.pppoeUserId,
+    months: opts.months,
+    amount: opts.amount,
+    createdBy: 'cashier',
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+  });
+
+  db.prepare(
+    `UPDATE payment_links SET
+       pay_channel = 'paymongo',
+       cashier_user_id = ?,
+       cashier_username = ?
+     WHERE id = ?`
+  ).run(opts.cashier.id, opts.cashier.username, link.id);
+
+  const checkout = await createPaymongoCheckout({
+    token: link.token,
+    successUrl: opts.successUrl,
+    cancelUrl: opts.cancelUrl,
+  });
+
+  return {
+    ok: true,
+    linkId: link.id,
+    token: link.token,
+    amount: link.amount,
+    months: link.months,
+    checkoutUrl: checkout.checkoutUrl,
+    checkoutId: checkout.checkoutId,
+    cashier: opts.cashier.username,
   };
 }

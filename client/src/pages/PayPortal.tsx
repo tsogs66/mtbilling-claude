@@ -1037,7 +1037,7 @@ export default function PayPortal() {
               <Wallet size={18} className="text-amber-600" /> Merchant deposits
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Merchant partners activate subscribers immediately. Accept a deposit when the merchant remits collections (single or bulk) with optional proof.
+              Merchant partners activate subscribers immediately. <b>Cash</b> collections are remitted (deposit proof or PayMongo). Online / PayMongo subscriber payments settle to the ISP and are not queued.
             </p>
           </div>
           <button type="button" className="btn-secondary text-sm" onClick={load}>

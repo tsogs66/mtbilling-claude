@@ -3,19 +3,22 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
   listCashierDeposits,
   getCashierDeposit,
   submitCashierDeposit,
+  startCashierRemittancePaymongo,
+  cancelCashierRemittancePaymongo,
   acceptCashierDeposit,
   rejectCashierDeposit,
   resolveDepositProofPath,
   cashierCollectibleSummary,
 } from './cashierCollectibles.js';
 import { notifyClientChannels, phonesMatch } from './notify.js';
+import { getPublicPayOptions } from './paymongo.js';
 
 export const cashierRouter = Router();
 export const publicCashierRouter = Router();
@@ -394,6 +397,60 @@ cashierRouter.post('/merchant/deposits', requireCashier, (req: AuthedRequest, re
   }
 });
 
+/**
+ * Merchant remits selected cash collectibles via PayMongo (QR Ph / GCash / Maya).
+ * Webhook auto-accepts the remittance when paid.
+ */
+cashierRouter.post('/merchant/deposits/paymongo', requireCashier, async (req: AuthedRequest, res) => {
+  try {
+    const ids = Array.isArray(req.body?.collectibleIds)
+      ? req.body.collectibleIds
+      : String(req.body?.collectibleIds || '')
+          .split(',')
+          .map((x: string) => Number(x.trim()))
+          .filter(Boolean);
+    const origin = String(req.headers.origin || req.headers.referer || '')
+      .replace(/\/merchant\/?.*$/i, '')
+      .replace(/\/$/, '');
+    const base =
+      origin ||
+      String(
+        (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)?.public_base_url || ''
+      ).replace(/\/$/, '');
+    if (!base) {
+      return res.status(400).json({
+        error:
+          'Public base URL is not configured. Set it under Payment Links so PayMongo can return to the merchant portal.',
+      });
+    }
+    const successUrl = `${base}/merchant?remit=1&paid=1`;
+    const cancelUrl = `${base}/merchant?remit=1&canceled=1`;
+    const result = await startCashierRemittancePaymongo({
+      cashierUserId: req.user!.id,
+      cashierUsername: req.user!.username,
+      collectibleIds: ids,
+      note: req.body?.note,
+      successUrl,
+      cancelUrl,
+    });
+    res.status(201).json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not start PayMongo remittance' });
+  }
+});
+
+cashierRouter.post('/merchant/deposits/:id/cancel-paymongo', requireCashier, (req: AuthedRequest, res) => {
+  try {
+    const deposit = cancelCashierRemittancePaymongo({
+      depositId: Number(req.params.id),
+      cashierUserId: req.user!.id,
+    });
+    res.json({ deposit });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not cancel remittance' });
+  }
+});
+
 cashierRouter.post('/merchant/collect', requireCashier, async (req: AuthedRequest, res) => {
   try {
     const userId = Number(req.body?.userId || req.body?.pppoeUserId);
@@ -417,6 +474,48 @@ cashierRouter.post('/merchant/collect', requireCashier, async (req: AuthedReques
   }
 });
 
+/** Merchant: PayMongo status for the collect UI. */
+cashierRouter.get('/merchant/paymongo/status', requireCashier, (_req, res) => {
+  res.json(getPublicPayOptions());
+});
+
+/**
+ * Merchant: start PayMongo checkout for the selected subscriber.
+ * Unique checkout session per subscriber/amount; webhook activates + SMS (no remittance queue).
+ */
+cashierRouter.post('/merchant/collect/paymongo', requireCashier, async (req: AuthedRequest, res) => {
+  try {
+    const userId = Number(req.body?.userId || req.body?.pppoeUserId);
+    if (!userId) return res.status(400).json({ error: 'Select a subscriber' });
+    const origin = String(req.headers.origin || req.headers.referer || '')
+      .replace(/\/merchant\/?.*$/i, '')
+      .replace(/\/$/, '');
+    const base =
+      origin ||
+      String(
+        (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)?.public_base_url || ''
+      ).replace(/\/$/, '');
+    if (!base) {
+      return res.status(400).json({
+        error: 'Public base URL is not configured. Set it under Payment Links so PayMongo can return to the merchant portal.',
+      });
+    }
+    const successUrl = `${base}/merchant?paymongo=1&paid=1`;
+    const cancelUrl = `${base}/merchant?paymongo=1&canceled=1`;
+    const result = await cashierStartPaymongoCheckout({
+      pppoeUserId: userId,
+      months: req.body?.months,
+      amount: req.body?.amount,
+      cashier: { id: req.user!.id, username: req.user!.username },
+      successUrl,
+      cancelUrl,
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not start PayMongo checkout' });
+  }
+});
+
 // ---- Admin: cashier collectibles / deposits ----
 cashierRouter.get('/merchant-collectibles', requireAdmin, (req, res) => {
   const cashierUserId = req.query.cashierUserId ? Number(req.query.cashierUserId) : undefined;
@@ -425,6 +524,7 @@ cashierRouter.get('/merchant-collectibles', requireAdmin, (req, res) => {
     collectibles: listCashierCollectibles({
       cashierUserId: Number.isFinite(cashierUserId as number) ? cashierUserId : undefined,
       status: status && status !== 'all' ? status.split(',') : undefined,
+      collectionType: 'all',
       limit: 500,
     }),
     summary: cashierCollectibleSummary(
