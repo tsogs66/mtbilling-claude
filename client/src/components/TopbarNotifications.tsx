@@ -23,6 +23,7 @@ const LIVE_TYPES = new Set([
   'outage_report',
   'payment_link_created',
   'payment_submitted',
+  'payment_paymongo_merchant',
 ]);
 
 function iconFor(type: string) {
@@ -30,7 +31,7 @@ function iconFor(type: string) {
   if (type === 'ticket') return FileWarning;
   if (type === 'outage_report') return RadioTower;
   if (type === 'payment_link_created') return Link2;
-  if (type === 'payment_submitted') return Wallet;
+  if (type === 'payment_submitted' || type === 'payment_paymongo_merchant') return Wallet;
   return Bell;
 }
 

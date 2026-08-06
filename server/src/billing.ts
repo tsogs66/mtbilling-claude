@@ -1676,6 +1676,19 @@ export async function cashierCollectPayment(opts: {
     accountNumber: subscriber?.account_number || null,
   });
 
+  // Subscriber SMS confirmation (same template as PayMongo / admin payments).
+  try {
+    const contact = String(subscriber?.contact || (payment as any)?.user?.contact || '').trim();
+    const total = Number(link.amount) || Number((payment as any)?.total ?? (payment as any)?.amount) || 0;
+    const smsUser = (payment as any)?.user || subscriber;
+    if (smsUser && contact) {
+      const { sendPaymentConfirmationSms } = await import('./notify.js');
+      sendPaymentConfirmationSms({ ...smsUser, contact }, total).catch(() => undefined);
+    }
+  } catch {
+    /* never block collect on SMS failure */
+  }
+
   return {
     ok: true,
     linkId: link.id,
@@ -1689,5 +1702,56 @@ export async function cashierCollectPayment(opts: {
     cashier: opts.cashier.username,
     collectibleId,
     payment,
+  };
+}
+
+/**
+ * Merchant portal: start a PayMongo hosted checkout unique to the selected subscriber.
+ * Activation + SMS + remittance collectible happen on the PayMongo webhook.
+ */
+export async function cashierStartPaymongoCheckout(opts: {
+  pppoeUserId: number;
+  months?: number;
+  amount?: number | null;
+  cashier: { id: number; username: string };
+  successUrl: string;
+  cancelUrl: string;
+}) {
+  const { getPublicPayOptions, createPaymongoCheckout } = await import('./paymongo.js');
+  const optsPub = getPublicPayOptions();
+  if (!optsPub.paymongo) throw new Error('PayMongo is not enabled on this panel');
+
+  const link = createPaymentLink({
+    pppoeUserId: opts.pppoeUserId,
+    months: opts.months,
+    amount: opts.amount,
+    createdBy: 'cashier',
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+  });
+
+  db.prepare(
+    `UPDATE payment_links SET
+       pay_channel = 'paymongo',
+       cashier_user_id = ?,
+       cashier_username = ?
+     WHERE id = ?`
+  ).run(opts.cashier.id, opts.cashier.username, link.id);
+
+  const checkout = await createPaymongoCheckout({
+    token: link.token,
+    successUrl: opts.successUrl,
+    cancelUrl: opts.cancelUrl,
+  });
+
+  return {
+    ok: true,
+    linkId: link.id,
+    token: link.token,
+    amount: link.amount,
+    months: link.months,
+    checkoutUrl: checkout.checkoutUrl,
+    checkoutId: checkout.checkoutId,
+    cashier: opts.cashier.username,
   };
 }

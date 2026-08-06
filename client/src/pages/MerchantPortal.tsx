@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
-  Download, Share, X, CloudOff,
+  Download, Share, X, CloudOff, CreditCard,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useCompany } from '../context/CompanyContext';
 import Logo from '../components/Logo';
+import QrphLogo from '../components/QrphLogo';
 import { MatrixRain } from '../components/portal/MatrixRain';
 import { OrbitalNetwork } from '../components/themes/OrbitalNetwork';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
@@ -52,6 +53,7 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export default function MerchantPortal() {
   const { user, loading, login, logout, refresh } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { company } = useCompany();
   const [theme, setTheme] = useState<PortalThemeId>('matrix');
   const [email, setEmail] = useState('');
@@ -68,7 +70,7 @@ export default function MerchantPortal() {
   const [hits, setHits] = useState<any[]>([]);
   const [selected, setSelected] = useState<any | null>(null);
   const [months, setMonths] = useState(1);
-  const [collectionType, setCollectionType] = useState<'cash' | 'online'>('cash');
+  const [collectionType, setCollectionType] = useState<'cash' | 'online' | 'paymongo'>('cash');
   const [channel, setChannel] = useState<'gcash' | 'maya' | 'cash'>('cash');
   const [reference, setReference] = useState('');
   const [merchantId, setMerchantId] = useState('');
@@ -76,6 +78,8 @@ export default function MerchantPortal() {
   const [proof, setProof] = useState<string | null>(null);
   const [recent, setRecent] = useState<any[]>([]);
   const [collectBusy, setCollectBusy] = useState(false);
+  const [paymongoEnabled, setPaymongoEnabled] = useState(false);
+  const [paymongoBusy, setPaymongoBusy] = useState(false);
   const [openCollectibles, setOpenCollectibles] = useState<any[]>([]);
   const [depositSummary, setDepositSummary] = useState<any>(null);
   const [selectedCollectibleIds, setSelectedCollectibleIds] = useState<Set<number>>(new Set());
@@ -147,10 +151,33 @@ export default function MerchantPortal() {
       .catch(() => undefined);
     api.get('/merchant/payment-merchants').then((r) => setMerchants(r.data.merchants || [])).catch(() => setMerchants([]));
     api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => setRecent([]));
+    api
+      .get('/merchant/paymongo/status')
+      .then((r) => setPaymongoEnabled(!!r.data?.paymongo))
+      .catch(() => setPaymongoEnabled(false));
     void loadCollectibles();
     void refreshOfflineCount();
     void tryFlushOffline();
   }, [signedIn]);
+
+  useEffect(() => {
+    const paid = searchParams.get('paid');
+    const canceled = searchParams.get('canceled');
+    const fromPm = searchParams.get('paymongo');
+    if (fromPm !== '1') return;
+    if (paid === '1') {
+      show('PayMongo payment received — subscriber will activate shortly. Check open collectibles after confirmation.');
+      void loadCollectibles();
+      api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => undefined);
+    } else if (canceled === '1') {
+      show('PayMongo checkout was canceled');
+    }
+    searchParams.delete('paid');
+    searchParams.delete('canceled');
+    searchParams.delete('paymongo');
+    setSearchParams(searchParams, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -257,11 +284,15 @@ export default function MerchantPortal() {
   const collect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selected) return;
+    if (collectionType === 'paymongo') {
+      await startPaymongo();
+      return;
+    }
     setCollectBusy(true);
     const payload = {
       userId: selected.id,
       months,
-      collectionType,
+      collectionType: collectionType === 'online' ? 'online' : 'cash',
       channel: collectionType === 'cash' ? 'cash' : channel,
       reference,
       merchantId: collectionType === 'cash' && merchantId ? Number(merchantId) : null,
@@ -270,7 +301,7 @@ export default function MerchantPortal() {
     try {
       const r = await api.post('/merchant/collect', payload);
       show(
-        `Payment posted (${r.data.collectionType}): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — add to a deposit when ready.`
+        `Payment posted (${r.data.collectionType}): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Add to a deposit when ready.`
       );
       setSelected(null);
       setQ('');
@@ -297,6 +328,24 @@ export default function MerchantPortal() {
       }
     } finally {
       setCollectBusy(false);
+    }
+  };
+
+  const startPaymongo = async () => {
+    if (!selected) return;
+    setPaymongoBusy(true);
+    try {
+      const r = await api.post('/merchant/collect/paymongo', {
+        userId: selected.id,
+        months,
+      });
+      const url = r.data?.checkoutUrl;
+      if (!url) throw new Error('No checkout URL returned');
+      show(`Opening PayMongo for ${selected.username} · ${peso(r.data.amount)}…`);
+      window.location.href = url;
+    } catch (err: any) {
+      show(err?.response?.data?.error || err?.message || 'Could not start PayMongo');
+      setPaymongoBusy(false);
     }
   };
 
@@ -535,8 +584,9 @@ export default function MerchantPortal() {
               <div>
                 <h2 className="font-bold text-lg">Collect payment</h2>
                 <p className="text-sm text-slate-300/80 mt-0.5">
-                  Search a subscriber, choose <b>cash</b> or <b>online</b>, and post payment. The account activates immediately.
-                  Remit collections below (select multiple) with deposit proof for admin acceptance. Logged as <b>{user?.username}</b>.
+                  Search a subscriber, choose <b>cash</b>, <b>online</b>, or <b>PayMongo</b> (unique checkout per subscriber).
+                  Cash/online post immediately; PayMongo activates after the subscriber pays (SMS confirmation + remittance collectible).
+                  Remit collections below with deposit proof. Logged as <b>{user?.username}</b>.
                 </p>
               </div>
 
@@ -606,11 +656,17 @@ export default function MerchantPortal() {
                   <div>
                     <div className="text-xs text-slate-400 mb-1.5">Payment received as</div>
                     <div className="flex flex-wrap gap-2">
-                      {(['cash', 'online'] as const).map((c) => (
+                      {(
+                        [
+                          'cash',
+                          'online',
+                          ...(paymongoEnabled ? (['paymongo'] as const) : []),
+                        ] as const
+                      ).map((c) => (
                         <button
                           key={c}
                           type="button"
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase inline-flex items-center gap-1.5 ${
                             collectionType === c ? 'bg-emerald-500/30 ring-1 ring-emerald-300/50' : 'bg-white/5'
                           }`}
                           onClick={() => {
@@ -618,11 +674,36 @@ export default function MerchantPortal() {
                             setChannel(c === 'cash' ? 'cash' : 'gcash');
                           }}
                         >
-                          {c}
+                          {c === 'paymongo' ? (
+                            <>
+                              <QrphLogo className="h-5 w-auto" />
+                              PayMongo
+                            </>
+                          ) : (
+                            c
+                          )}
                         </button>
                       ))}
                     </div>
                   </div>
+                  {collectionType === 'paymongo' && (
+                    <div className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-3 py-2.5 text-sm text-sky-100 space-y-2">
+                      <p>
+                        Opens a <b>unique PayMongo checkout</b> for <b>{selected.username}</b> (
+                        {peso(amountPreview)} · {months} mo). Subscriber pays via QR Ph / GCash / Maya. Account
+                        activates on success; SMS confirmation is sent; a remittance collectible is opened for you.
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-primary w-full justify-center gap-2"
+                        disabled={paymongoBusy}
+                        onClick={() => void startPaymongo()}
+                      >
+                        {paymongoBusy ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
+                        {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online with PayMongo'}
+                      </button>
+                    </div>
+                  )}
                   {collectionType === 'online' && (
                     <div className="flex flex-wrap gap-2">
                       {(['gcash', 'maya'] as const).map((c) => (
@@ -656,48 +737,52 @@ export default function MerchantPortal() {
                       </select>
                     </label>
                   )}
-                  <label className="block text-sm">
-                    <span className="text-xs text-slate-400">
-                      {collectionType === 'cash' ? 'Note / receipt ref (optional)' : 'Reference number'}
-                    </span>
-                    <input
-                      className="input mt-1 bg-black/30 border-white/10 text-white"
-                      value={reference}
-                      onChange={(e) => setReference(e.target.value)}
-                      required={collectionType === 'online'}
-                    />
-                  </label>
-                  <label className="block text-sm">
-                    <span className="text-xs text-slate-400">
-                      Subscriber payment proof {collectionType === 'cash' ? '(optional)' : '(required)'}
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="mt-1 block w-full text-xs"
-                      onChange={async (e) => {
-                        const f = e.target.files?.[0];
-                        if (!f) {
-                          setProof(null);
-                          return;
-                        }
-                        try {
-                          setProof(await fileToDataUrl(f));
-                        } catch {
-                          show('Could not read image');
-                        }
-                      }}
-                    />
-                    {proof && (
-                      <div className="mt-2 text-xs text-emerald-300 inline-flex items-center gap-1">
-                        <Upload size={12} /> Screenshot attached
-                      </div>
-                    )}
-                  </label>
-                  <button type="submit" className="btn-primary w-full justify-center" disabled={collectBusy}>
-                    {collectBusy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                    {collectBusy ? 'Posting…' : 'Post payment & activate'}
-                  </button>
+                  {collectionType !== 'paymongo' && (
+                    <>
+                      <label className="block text-sm">
+                        <span className="text-xs text-slate-400">
+                          {collectionType === 'cash' ? 'Note / receipt ref (optional)' : 'Reference number'}
+                        </span>
+                        <input
+                          className="input mt-1 bg-black/30 border-white/10 text-white"
+                          value={reference}
+                          onChange={(e) => setReference(e.target.value)}
+                          required={collectionType === 'online'}
+                        />
+                      </label>
+                      <label className="block text-sm">
+                        <span className="text-xs text-slate-400">
+                          Subscriber payment proof {collectionType === 'cash' ? '(optional)' : '(required)'}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="mt-1 block w-full text-xs"
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) {
+                              setProof(null);
+                              return;
+                            }
+                            try {
+                              setProof(await fileToDataUrl(f));
+                            } catch {
+                              show('Could not read image');
+                            }
+                          }}
+                        />
+                        {proof && (
+                          <div className="mt-2 text-xs text-emerald-300 inline-flex items-center gap-1">
+                            <Upload size={12} /> Screenshot attached
+                          </div>
+                        )}
+                      </label>
+                      <button type="submit" className="btn-primary w-full justify-center" disabled={collectBusy}>
+                        {collectBusy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                        {collectBusy ? 'Posting…' : 'Post payment & activate'}
+                      </button>
+                    </>
+                  )}
                 </form>
               )}
             </div>

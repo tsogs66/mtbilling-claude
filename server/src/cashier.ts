@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
@@ -16,6 +16,7 @@ import {
   cashierCollectibleSummary,
 } from './cashierCollectibles.js';
 import { notifyClientChannels, phonesMatch } from './notify.js';
+import { getPublicPayOptions } from './paymongo.js';
 
 export const cashierRouter = Router();
 export const publicCashierRouter = Router();
@@ -414,6 +415,48 @@ cashierRouter.post('/merchant/collect', requireCashier, async (req: AuthedReques
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Payment failed' });
+  }
+});
+
+/** Merchant: PayMongo status for the collect UI. */
+cashierRouter.get('/merchant/paymongo/status', requireCashier, (_req, res) => {
+  res.json(getPublicPayOptions());
+});
+
+/**
+ * Merchant: start PayMongo checkout for the selected subscriber.
+ * Unique checkout session per subscriber/amount; webhook activates + SMS + collectible.
+ */
+cashierRouter.post('/merchant/collect/paymongo', requireCashier, async (req: AuthedRequest, res) => {
+  try {
+    const userId = Number(req.body?.userId || req.body?.pppoeUserId);
+    if (!userId) return res.status(400).json({ error: 'Select a subscriber' });
+    const origin = String(req.headers.origin || req.headers.referer || '')
+      .replace(/\/merchant\/?.*$/i, '')
+      .replace(/\/$/, '');
+    const base =
+      origin ||
+      String(
+        (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)?.public_base_url || ''
+      ).replace(/\/$/, '');
+    if (!base) {
+      return res.status(400).json({
+        error: 'Public base URL is not configured. Set it under Payment Links so PayMongo can return to the merchant portal.',
+      });
+    }
+    const successUrl = `${base}/merchant?paymongo=1&paid=1`;
+    const cancelUrl = `${base}/merchant?paymongo=1&canceled=1`;
+    const result = await cashierStartPaymongoCheckout({
+      pppoeUserId: userId,
+      months: req.body?.months,
+      amount: req.body?.amount,
+      cashier: { id: req.user!.id, username: req.user!.username },
+      successUrl,
+      cancelUrl,
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not start PayMongo checkout' });
   }
 });
 

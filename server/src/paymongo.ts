@@ -5,7 +5,9 @@
 import crypto from 'crypto';
 import { db } from './db.js';
 import { markPaymentLinkPaid } from './billing.js';
+import { createCashierCollectible } from './cashierCollectibles.js';
 import { sendPaymentConfirmationSms } from './notify.js';
+import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 
 export type PaymongoSettings = {
   enabled: boolean;
@@ -407,6 +409,67 @@ export async function handlePaymongoWebhook(payload: any) {
           'warning',
           'paymongo',
           `Payment SMS skipped — no phone on file for token ${resolvedToken.slice(0, 8)}…`
+        );
+      }
+
+      // Merchant-initiated PayMongo: open a remittance collectible + staff inbox ping.
+      try {
+        const linkRow = db
+          .prepare('SELECT * FROM payment_links WHERE token = ?')
+          .get(resolvedToken) as any;
+        const cashierId = linkRow?.cashier_user_id != null ? Number(linkRow.cashier_user_id) : null;
+        if (cashierId && Number.isFinite(cashierId)) {
+          const subscriber = db
+            .prepare('SELECT * FROM pppoe_users WHERE id = ?')
+            .get(Number(linkRow.pppoe_user_id)) as any;
+          const existing = db
+            .prepare('SELECT id FROM cashier_collectibles WHERE payment_link_id = ? LIMIT 1')
+            .get(Number(linkRow.id)) as { id?: number } | undefined;
+          if (!existing?.id) {
+            const txId = Number(payment?.transactionId || payment?.id) || null;
+            createCashierCollectible({
+              cashierUserId: cashierId,
+              cashierUsername: String(linkRow.cashier_username || 'merchant'),
+              paymentLinkId: Number(linkRow.id),
+              transactionId: txId,
+              pppoeUserId: Number(linkRow.pppoe_user_id),
+              amount: Number(linkRow.amount) || total || 0,
+              months: linkRow.months || 1,
+              collectionType: 'online',
+              payChannel: String(linkRow.pay_channel || sourceType || 'paymongo').slice(0, 32),
+              externalRef: String(payId),
+              subscriberUsername: subscriber?.username || null,
+              customerName: subscriber?.customer_name || null,
+              accountNumber: subscriber?.account_number || null,
+            });
+          }
+          try {
+            const who = subscriberLabel(Number(linkRow.pppoe_user_id));
+            const amt = Number(linkRow.amount) || total || 0;
+            notifyStaff({
+              type: 'payment_paymongo_merchant',
+              title: 'Merchant PayMongo payment',
+              body: `${who} paid ₱${amt.toLocaleString('en-PH', { maximumFractionDigits: 2 })} via PayMongo (merchant ${linkRow.cashier_username || cashierId})`,
+              entityType: 'payment_link',
+              entityId: Number(linkRow.id),
+              pppoeUserId: Number(linkRow.pppoe_user_id) || null,
+              status: 'paid',
+              payload: {
+                cashierUserId: cashierId,
+                cashierUsername: linkRow.cashier_username || null,
+                paymentId: payId,
+                amount: amt,
+              },
+            });
+          } catch {
+            /* ignore staff notify failures */
+          }
+        }
+      } catch (e: any) {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'paymongo',
+          `Merchant collectible create failed: ${e?.message || e}`
         );
       }
     }

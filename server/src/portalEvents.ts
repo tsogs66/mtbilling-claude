@@ -9,6 +9,7 @@ export type PortalLiveEvent = {
     | 'ping'
     | 'payment_link_created'
     | 'payment_submitted'
+    | 'payment_paymongo_merchant'
     | 'outage_notice'
     | 'portal_activity'
     | 'addon_request'
