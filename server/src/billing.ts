@@ -1759,3 +1759,233 @@ export async function cashierStartPaymongoCheckout(opts: {
     cashier: opts.cashier.username,
   };
 }
+
+function findCashierPaymentTransaction(link: any): { id: number; receipt: any } | null {
+  const cashierId = link.cashier_user_id != null ? Number(link.cashier_user_id) : null;
+  const userId = Number(link.pppoe_user_id);
+  const linkMonths = Math.max(1, Math.floor(Number(link.months) || 1));
+  const linkAmount = Number(link.amount) || 0;
+  const paidAt = Date.parse(String(link.paid_at || link.created_at || '')) || 0;
+
+  const rows = db
+    .prepare(
+      `SELECT id, receipt_json, amount, created_at FROM transactions
+       WHERE pppoe_user_id = ? AND type = 'payment'
+         AND (? IS NULL OR cashier_user_id = ?)
+       ORDER BY id DESC LIMIT 25`
+    )
+    .all(userId, cashierId, cashierId) as any[];
+
+  for (const row of rows) {
+    let receipt: any = null;
+    try {
+      receipt = row.receipt_json ? JSON.parse(String(row.receipt_json)) : null;
+    } catch {
+      receipt = null;
+    }
+    if (receipt?.reassignedToUserId) continue; // superseded by a later reassignment
+    const months = Math.max(1, Math.floor(Number(receipt?.months) || 1));
+    if (months !== linkMonths) continue;
+    if (linkAmount > 0 && Math.abs((Number(row.amount) || 0) - linkAmount) > 0.05) continue;
+    if (paidAt) {
+      const txAt = Date.parse(String(row.created_at || '')) || 0;
+      // Reassigned payments create a fresh tx — allow a wider window from original paid_at
+      if (txAt && paidAt && txAt < paidAt - 60_000) continue;
+    }
+    return { id: Number(row.id), receipt: receipt || getTransactionReceipt(Number(row.id)) };
+  }
+
+  const collectible = db
+    .prepare(
+      `SELECT transaction_id AS transactionId FROM cashier_collectibles
+       WHERE payment_link_id = ? AND transaction_id IS NOT NULL
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(Number(link.id)) as { transactionId?: number } | undefined;
+  if (collectible?.transactionId) {
+    const receipt = getTransactionReceipt(Number(collectible.transactionId));
+    if (receipt && !(receipt as any).reassignedToUserId) {
+      return { id: Number(collectible.transactionId), receipt };
+    }
+  }
+  return null;
+}
+
+/**
+ * Merchant: move a processed payment from one subscriber to another.
+ * Old subscriber due date is reversed; new subscriber gets the extension.
+ */
+export async function reassignCashierPayment(opts: {
+  paymentLinkId: number;
+  newPppoeUserId: number;
+  cashier: { id: number; username: string };
+}) {
+  const link = db.prepare('SELECT * FROM payment_links WHERE id = ?').get(opts.paymentLinkId) as any;
+  if (!link) throw new Error('Payment not found');
+  if (Number(link.cashier_user_id) !== Number(opts.cashier.id)) {
+    throw new Error('You can only reassign payments you processed');
+  }
+  if (String(link.status) !== 'paid') throw new Error('Only processed payments can be reassigned');
+
+  const oldUserId = Number(link.pppoe_user_id);
+  const newUserId = Number(opts.newPppoeUserId);
+  if (!newUserId || !Number.isFinite(newUserId)) throw new Error('Select the new subscriber');
+  if (oldUserId === newUserId) throw new Error('Select a different subscriber');
+
+  const oldUser = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(oldUserId) as any;
+  if (!oldUser) throw new Error('Original subscriber not found');
+  const newUser = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(newUserId) as any;
+  if (!newUser) throw new Error('New subscriber not found');
+
+  const found = findCashierPaymentTransaction(link);
+  const receipt = found?.receipt || {};
+
+  const months = Math.max(1, Math.floor(Number(receipt.months) || Number(link.months) || 1));
+  const previousDue = receipt.previousDue ? String(receipt.previousDue).slice(0, 10) : null;
+  const expectedNewDue = receipt.newDue ? String(receipt.newDue).slice(0, 10) : null;
+  const currentDue = String(oldUser.subscription_due || '').slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+
+  let restoredDue: string;
+  if (previousDue && expectedNewDue && currentDue === expectedNewDue) {
+    restoredDue = previousDue;
+  } else if (previousDue && expectedNewDue && currentDue > expectedNewDue) {
+    // Later payments stacked on top — peel off this payment's months.
+    restoredDue = addMonthsPreserveDay(currentDue, -months);
+  } else if (previousDue && currentDue && currentDue === previousDue) {
+    throw new Error('Original subscriber due date already looks reversed — contact admin');
+  } else if (currentDue) {
+    restoredDue = addMonthsPreserveDay(currentDue, -months);
+  } else if (previousDue) {
+    restoredDue = previousDue;
+  } else {
+    throw new Error('Could not determine the original due date to reverse');
+  }
+
+  db.prepare(`UPDATE pppoe_users SET subscription_due = ? WHERE id = ?`).run(restoredDue, oldUserId);
+  const oldUpdated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(oldUserId) as any;
+
+  const reverseReceipt = {
+    type: 'payment_reassign_out',
+    months,
+    previousDue: currentDue,
+    newDue: restoredDue,
+    fromPaymentLinkId: Number(link.id),
+    fromTransactionId: found?.id || null,
+    reassignedToUserId: newUserId,
+    reassignedToUsername: newUser.username,
+    cashier: opts.cashier.username,
+    at: new Date().toISOString(),
+  };
+  db.prepare(
+    `INSERT INTO transactions
+       (pppoe_user_id, customer_name, amount, type, created_at, receipt_json, cashier_user_id, cashier_username)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    oldUserId,
+    oldUser.customer_name || oldUser.username,
+    0,
+    'payment_reassign_out',
+    new Date().toISOString(),
+    JSON.stringify(reverseReceipt),
+    opts.cashier.id,
+    opts.cashier.username
+  );
+
+  if (found?.id) {
+    try {
+      const patched = {
+        ...(typeof receipt === 'object' && receipt ? receipt : {}),
+        reassignedToUserId: newUserId,
+        reassignedToUsername: newUser.username,
+        reassignedAt: new Date().toISOString(),
+        reassignedBy: opts.cashier.username,
+      };
+      db.prepare('UPDATE transactions SET receipt_json = ? WHERE id = ?').run(
+        JSON.stringify(patched),
+        found.id
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'billing',
+    `Merchant ${opts.cashier.username} reassigned payment link #${link.id}: ${oldUser.username} due ${currentDue} → ${restoredDue}; applying +${months}mo to ${newUser.username}`
+  );
+
+  // Refresh router schedule for the old subscriber (may now be overdue).
+  scheduleRouterExpiry(oldUpdated, oldUpdated.expiration_profile).catch(() => undefined);
+  if (restoredDue < today) {
+    syncUserToRouter(oldUpdated, 'expire').catch(() => undefined);
+  } else {
+    // Keep comment/due in sync on the router secret.
+    syncUserToRouter(oldUpdated, 'restore').catch(() => undefined);
+  }
+
+  const payment = await recordPppoePayment(newUserId, {
+    months,
+    source: `cashier-reassign:${opts.cashier.username}:link:${link.id}`,
+    external_ref: link.external_ref || undefined,
+    cashierUserId: opts.cashier.id,
+    cashierUsername: opts.cashier.username,
+  });
+
+  db.prepare('UPDATE payment_links SET pppoe_user_id = ? WHERE id = ?').run(newUserId, link.id);
+  try {
+    db.prepare(
+      `UPDATE cashier_collectibles SET
+         pppoe_user_id = ?,
+         subscriber_username = ?,
+         customer_name = ?,
+         account_number = ?,
+         transaction_id = COALESCE(?, transaction_id)
+       WHERE payment_link_id = ?`
+    ).run(
+      newUserId,
+      newUser.username || null,
+      newUser.customer_name || null,
+      newUser.account_number || null,
+      Number((payment as any)?.transactionId) || null,
+      link.id
+    );
+  } catch {
+    /* ignore if no collectible */
+  }
+
+  // SMS confirmation for the new subscriber (same as a fresh payment).
+  try {
+    const contact = String((payment as any)?.user?.contact || newUser.contact || '').trim();
+    const total = Number(link.amount) || Number((payment as any)?.total ?? (payment as any)?.amount) || 0;
+    const smsUser = (payment as any)?.user || newUser;
+    if (smsUser && contact) {
+      const { sendPaymentConfirmationSms } = await import('./notify.js');
+      sendPaymentConfirmationSms({ ...smsUser, contact }, total).catch(() => undefined);
+    }
+  } catch {
+    /* never block on SMS */
+  }
+
+  return {
+    ok: true,
+    paymentLinkId: link.id,
+    months,
+    amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
+    from: {
+      userId: oldUserId,
+      username: oldUser.username,
+      previousDue: currentDue,
+      subscriptionDue: restoredDue,
+    },
+    to: {
+      userId: newUserId,
+      username: newUser.username,
+      previousDue: (payment as any)?.previousDue,
+      subscriptionDue: (payment as any)?.subscriptionDue,
+    },
+    payment,
+  };
+}
+

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment, cashierStartPaymongoCheckout } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
@@ -347,7 +347,9 @@ cashierRouter.get('/merchant/recent', requireCashier, (req: AuthedRequest, res) 
       `SELECT pl.id, pl.amount, pl.months, pl.status, pl.pay_channel AS payChannel,
               pl.external_ref AS externalRef, pl.paid_at AS paidAt, pl.created_at AS createdAt,
               pl.cashier_username AS cashierUsername,
-              u.username, u.customer_name AS customer, u.account_number AS account
+              pl.pppoe_user_id AS pppoeUserId,
+              u.username, u.customer_name AS customer, u.account_number AS account,
+              u.subscription_due AS subscriptionDue
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
        WHERE pl.cashier_user_id = ? AND pl.status = 'paid'
@@ -355,6 +357,24 @@ cashierRouter.get('/merchant/recent', requireCashier, (req: AuthedRequest, res) 
     )
     .all(req.user!.id);
   res.json({ payments: rows });
+});
+
+/** Merchant: move a processed payment to a different subscriber (reverse old due, extend new). */
+cashierRouter.post('/merchant/payments/:id/reassign', requireCashier, async (req: AuthedRequest, res) => {
+  try {
+    const paymentLinkId = Number(req.params.id);
+    const newUserId = Number(req.body?.userId || req.body?.pppoeUserId || req.body?.newUserId);
+    if (!paymentLinkId) return res.status(400).json({ error: 'Payment id required' });
+    if (!newUserId) return res.status(400).json({ error: 'Select the new subscriber' });
+    const result = await reassignCashierPayment({
+      paymentLinkId,
+      newPppoeUserId: newUserId,
+      cashier: { id: req.user!.id, username: req.user!.username },
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not reassign payment' });
+  }
 });
 
 cashierRouter.get('/merchant/collectibles', requireCashier, (req: AuthedRequest, res) => {
