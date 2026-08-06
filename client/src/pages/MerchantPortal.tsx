@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
-  Download, Share, X, CloudOff,
+  Download, Share, X, CloudOff, ArrowRightLeft,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -88,6 +88,10 @@ export default function MerchantPortal() {
   const [depositBusy, setDepositBusy] = useState(false);
   const [myDeposits, setMyDeposits] = useState<any[]>([]);
   const [offlinePending, setOfflinePending] = useState(0);
+  const [reassignId, setReassignId] = useState<number | null>(null);
+  const [reassignQ, setReassignQ] = useState('');
+  const [reassignHits, setReassignHits] = useState<any[]>([]);
+  const [reassignBusy, setReassignBusy] = useState(false);
 
   const { showInstallButton, installed, iosHint, dismissIosHint, install } = usePortalInstall(theme, 'merchant');
 
@@ -231,6 +235,20 @@ export default function MerchantPortal() {
     return () => clearTimeout(t);
   }, [q, signedIn]);
 
+  useEffect(() => {
+    if (!signedIn || reassignId == null || reassignQ.trim().length < 2) {
+      setReassignHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      api
+        .get('/merchant/subscribers', { params: { q: reassignQ.trim() } })
+        .then((r) => setReassignHits(r.data.subscribers || []))
+        .catch(() => setReassignHits([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [reassignQ, reassignId, signedIn]);
+
   const amountPreview = useMemo(() => {
     if (!selected) return 0;
     return (Number(selected.price) || 0) * Math.max(1, months);
@@ -370,6 +388,37 @@ export default function MerchantPortal() {
     } catch (err: any) {
       show(err?.response?.data?.error || err?.message || 'Could not start PayMongo');
       setPaymongoBusy(false);
+    }
+  };
+
+  const confirmReassign = async (payment: any, target: any) => {
+    if (!payment?.id || !target?.id) return;
+    if (Number(payment.pppoeUserId) === Number(target.id)) {
+      show('Select a different subscriber');
+      return;
+    }
+    const ok = window.confirm(
+      `Move this payment (${peso(payment.amount)} · ${payment.months || 1} mo) from ${payment.username} to ${target.username}?\n\n` +
+        `• ${target.username} gets the due date extension\n` +
+        `• ${payment.username} due date is reversed`
+    );
+    if (!ok) return;
+    setReassignBusy(true);
+    try {
+      const r = await api.post(`/merchant/payments/${payment.id}/reassign`, { userId: target.id });
+      show(
+        `Reassigned: ${r.data.from?.username} due → ${String(r.data.from?.subscriptionDue || '').slice(0, 10)}; ` +
+          `${r.data.to?.username} due → ${String(r.data.to?.subscriptionDue || '').slice(0, 10)}`
+      );
+      setReassignId(null);
+      setReassignQ('');
+      setReassignHits([]);
+      const recentR = await api.get('/merchant/recent');
+      setRecent(recentR.data.payments || []);
+    } catch (err: any) {
+      show(err?.response?.data?.error || 'Reassign failed');
+    } finally {
+      setReassignBusy(false);
     }
   };
 
@@ -1040,23 +1089,94 @@ export default function MerchantPortal() {
             </div>
 
             <div className="portal-glass rounded-2xl p-4">
-              <div className="font-semibold text-sm mb-2">Your recent activations</div>
+              <div className="font-semibold text-sm mb-1">Your recent activations</div>
+              <p className="text-xs text-slate-400 mb-2">
+                Wrong subscriber? Use <b>Change subscriber</b> — the new account gets the due date extension and the old one is reversed.
+              </p>
               {recent.length === 0 ? (
                 <div className="text-xs text-slate-400 py-3 text-center">No payments posted yet.</div>
               ) : (
                 <ul className="divide-y divide-white/5 text-sm">
                   {recent.map((p) => (
-                    <li key={p.id} className="py-2 flex justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{p.username}</div>
-                        <div className="text-xs text-slate-400 truncate">
-                          {p.customer} · {String(p.payChannel || '').toUpperCase()} · {p.externalRef || '—'}
+                    <li key={p.id} className="py-2 space-y-2">
+                      <div className="flex justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{p.username}</div>
+                          <div className="text-xs text-slate-400 truncate">
+                            {p.customer} · {String(p.payChannel || '').toUpperCase()} · {p.externalRef || '—'}
+                            {p.months ? ` · ${p.months}mo` : ''}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-semibold">{peso(p.amount)}</div>
+                          <div className="text-[11px] text-slate-400">
+                            {String(p.paidAt || '').slice(0, 16).replace('T', ' ')}
+                          </div>
+                          <button
+                            type="button"
+                            className="mt-1 text-[11px] text-sky-300 hover:text-sky-200 inline-flex items-center gap-1"
+                            disabled={reassignBusy}
+                            onClick={() => {
+                              if (reassignId === p.id) {
+                                setReassignId(null);
+                                setReassignQ('');
+                                setReassignHits([]);
+                              } else {
+                                setReassignId(p.id);
+                                setReassignQ('');
+                                setReassignHits([]);
+                              }
+                            }}
+                          >
+                            <ArrowRightLeft size={12} />
+                            {reassignId === p.id ? 'Cancel' : 'Change subscriber'}
+                          </button>
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <div className="font-semibold">{peso(p.amount)}</div>
-                        <div className="text-[11px] text-slate-400">{String(p.paidAt || '').slice(0, 16).replace('T', ' ')}</div>
-                      </div>
+                      {reassignId === p.id && (
+                        <div className="rounded-xl border border-white/10 bg-black/25 p-2.5 space-y-2">
+                          <label className="block">
+                            <span className="text-[11px] text-slate-400">Search new subscriber</span>
+                            <div className="relative mt-1">
+                              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                              <input
+                                className="input pl-8 text-sm bg-black/30 border-white/10 text-white"
+                                value={reassignQ}
+                                onChange={(e) => setReassignQ(e.target.value)}
+                                placeholder="Username, customer, account…"
+                                autoFocus
+                              />
+                            </div>
+                          </label>
+                          {reassignHits.length > 0 && (
+                            <ul className="rounded-lg border border-white/10 divide-y divide-white/5 max-h-40 overflow-auto">
+                              {reassignHits
+                                .filter((s) => Number(s.id) !== Number(p.pppoeUserId))
+                                .map((s) => (
+                                  <li key={s.id}>
+                                    <button
+                                      type="button"
+                                      className="w-full text-left px-2.5 py-2 hover:bg-white/5 disabled:opacity-50"
+                                      disabled={reassignBusy}
+                                      onClick={() => void confirmReassign(p, s)}
+                                    >
+                                      <div className="font-medium text-sm">{s.username}</div>
+                                      <div className="text-[11px] text-slate-400">
+                                        {s.customer} · {s.account} · due{' '}
+                                        {String(s.subscriptionDue || '—').slice(0, 10)}
+                                      </div>
+                                    </button>
+                                  </li>
+                                ))}
+                            </ul>
+                          )}
+                          {reassignBusy && (
+                            <div className="text-xs text-slate-400 inline-flex items-center gap-1">
+                              <Loader2 className="animate-spin" size={12} /> Reassigning…
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
