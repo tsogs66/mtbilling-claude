@@ -2211,8 +2211,9 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
 app.get('/api/payment-links', (_req, res) => {
   const resolved = resolvePublicBaseUrl();
   res.json({
-    links: listPaymentLinks(200, { excludeStatus: 'paid' }),
+    links: listPaymentLinks(200, { excludeStatuses: ['paid', 'cancelled'] }),
     paid: listPaymentLinks(500, { status: 'paid' }),
+    cancelled: listPaymentLinks(200, { status: 'cancelled', payChannel: 'cash' }),
     publicBaseUrl: resolved.baseUrl || null,
     source: resolved.source,
     warning: resolved.warning || null,

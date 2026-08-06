@@ -1415,7 +1415,15 @@ export function rejectPaymentProof(id: number, note?: string) {
   return { ok: true, status: 'rejected' };
 }
 
-export function listPaymentLinks(limit = 100, opts?: { status?: string; excludeStatus?: string }) {
+export function listPaymentLinks(
+  limit = 100,
+  opts?: {
+    status?: string;
+    excludeStatus?: string;
+    excludeStatuses?: string[];
+    payChannel?: string;
+  }
+) {
   const resolved = resolvePublicBaseUrl();
   const where: string[] = [];
   const params: any[] = [];
@@ -1427,8 +1435,16 @@ export function listPaymentLinks(limit = 100, opts?: { status?: string; excludeS
     where.push('pl.status != ?');
     params.push(opts.excludeStatus);
   }
+  if (opts?.excludeStatuses?.length) {
+    where.push(`pl.status NOT IN (${opts.excludeStatuses.map(() => '?').join(',')})`);
+    params.push(...opts.excludeStatuses);
+  }
+  if (opts?.payChannel) {
+    where.push('lower(COALESCE(pl.pay_channel, \'\')) = ?');
+    params.push(String(opts.payChannel).toLowerCase());
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  // For approval (submitted) always first, then pending, rejected, expired, paid; newest id within each.
+  // For approval (submitted) always first, then pending, rejected, expired, paid, cancelled; newest id within each.
   const rows = db
     .prepare(
       `SELECT pl.id, pl.token, pl.amount, pl.months, pl.status, pl.expires_at AS expiresAt, pl.paid_at AS paidAt,
@@ -1452,9 +1468,10 @@ export function listPaymentLinks(limit = 100, opts?: { status?: string; excludeS
            WHEN 'rejected' THEN 2
            WHEN 'expired' THEN 3
            WHEN 'paid' THEN 4
-           ELSE 5
+           WHEN 'cancelled' THEN 5
+           ELSE 6
          END,
-         COALESCE(pl.paid_at, pl.submitted_at, pl.created_at) DESC,
+         COALESCE(pl.reviewed_at, pl.paid_at, pl.submitted_at, pl.created_at) DESC,
          pl.id DESC
        LIMIT ?`
     )
@@ -1810,6 +1827,22 @@ export async function cashierStartPaymongoCheckout(opts: {
 }
 
 function findCashierPaymentTransaction(link: any): { id: number; receipt: any } | null {
+  // Prefer the collectible bridge — most reliable for merchant cash posts.
+  const collectible = db
+    .prepare(
+      `SELECT transaction_id AS transactionId FROM cashier_collectibles
+       WHERE payment_link_id = ? AND transaction_id IS NOT NULL
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(Number(link.id)) as { transactionId?: number } | undefined;
+  if (collectible?.transactionId) {
+    const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(Number(collectible.transactionId)) as any;
+    if (tx) {
+      const receipt = getTransactionReceipt(Number(tx.id)) || {};
+      return { id: Number(tx.id), receipt };
+    }
+  }
+
   const cashierId = link.cashier_user_id != null ? Number(link.cashier_user_id) : null;
   const userId = Number(link.pppoe_user_id);
   const linkMonths = Math.max(1, Math.floor(Number(link.months) || 1));
@@ -1818,8 +1851,9 @@ function findCashierPaymentTransaction(link: any): { id: number; receipt: any } 
 
   const rows = db
     .prepare(
-      `SELECT id, receipt_json, amount, created_at FROM transactions
-       WHERE pppoe_user_id = ? AND type = 'payment'
+      `SELECT id, receipt_json, amount, created_at, type FROM transactions
+       WHERE pppoe_user_id = ?
+         AND type IN ('payment', 'payment_cancelled')
          AND (? IS NULL OR cashier_user_id = ?)
        ORDER BY id DESC LIMIT 25`
     )
@@ -1832,30 +1866,17 @@ function findCashierPaymentTransaction(link: any): { id: number; receipt: any } 
     } catch {
       receipt = null;
     }
-    if (receipt?.reassignedToUserId) continue; // superseded by a later reassignment
+    if (receipt?.reassignedToUserId) continue;
+    if (receipt?.cancelledAt && String(row.type) === 'payment_cancelled') continue;
     const months = Math.max(1, Math.floor(Number(receipt?.months) || 1));
     if (months !== linkMonths) continue;
-    if (linkAmount > 0 && Math.abs((Number(row.amount) || 0) - linkAmount) > 0.05) continue;
+    const rowAmount = Number(row.amount) || Number(receipt?.originalAmount) || Number(receipt?.total) || 0;
+    if (linkAmount > 0 && rowAmount > 0 && Math.abs(rowAmount - linkAmount) > 0.05) continue;
     if (paidAt) {
       const txAt = Date.parse(String(row.created_at || '')) || 0;
-      // Reassigned payments create a fresh tx — allow a wider window from original paid_at
       if (txAt && paidAt && txAt < paidAt - 60_000) continue;
     }
     return { id: Number(row.id), receipt: receipt || getTransactionReceipt(Number(row.id)) };
-  }
-
-  const collectible = db
-    .prepare(
-      `SELECT transaction_id AS transactionId FROM cashier_collectibles
-       WHERE payment_link_id = ? AND transaction_id IS NOT NULL
-       ORDER BY id DESC LIMIT 1`
-    )
-    .get(Number(link.id)) as { transactionId?: number } | undefined;
-  if (collectible?.transactionId) {
-    const receipt = getTransactionReceipt(Number(collectible.transactionId));
-    if (receipt && !(receipt as any).reassignedToUserId) {
-      return { id: Number(collectible.transactionId), receipt };
-    }
   }
   return null;
 }
@@ -2221,11 +2242,55 @@ export async function cancelCashierCashPayment(opts: {
      WHERE id = ?`
   ).run(reason || `Cancelled by merchant ${opts.cashier.username}`, link.id);
 
-  if (collectible?.id && String(collectible.status).toLowerCase() === 'open') {
-    db.prepare(
-      `UPDATE cashier_collectibles SET status = 'rejected', collected_at = datetime('now')
-       WHERE id = ? AND status = 'open'`
-    ).run(collectible.id);
+  // Reverse remittance queue item (cash only) — mark cancelled so it leaves open/submitted totals.
+  if (collectible?.id) {
+    const st = String(collectible.status || '').toLowerCase();
+    if (st === 'open' || st === 'rejected') {
+      db.prepare(
+        `UPDATE cashier_collectibles SET status = 'cancelled', collected_at = datetime('now')
+         WHERE id = ?`
+      ).run(collectible.id);
+    }
+  }
+
+  try {
+    pushPortalActivity({
+      pppoeUserId: userId,
+      type: 'payment_cancelled',
+      title: 'Payment cancelled by merchant',
+      body: `₱${amount.toLocaleString('en-PH', { maximumFractionDigits: 2 })} cash payment was cancelled by merchant ${opts.cashier.username}. Due restored to ${restoredDue}.`,
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+      payload: {
+        transactionId: found?.id || null,
+        cashier: opts.cashier.username,
+        previousDue: currentDue,
+        subscriptionDue: restoredDue,
+        status: restoredStatus,
+      },
+    });
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    notifyStaff({
+      type: 'payment_submitted',
+      title: 'Merchant cash payment cancelled',
+      body: `${subscriberLabel(userId)} — ₱${amount.toLocaleString('en-PH', { maximumFractionDigits: 2 })} cancelled by ${opts.cashier.username}; due → ${restoredDue}`,
+      entityType: 'payment_link',
+      entityId: Number(link.id),
+      pppoeUserId: userId,
+      status: 'cancelled',
+      payload: {
+        cashierUserId: opts.cashier.id,
+        cashierUsername: opts.cashier.username,
+        amount,
+        subscriptionDue: restoredDue,
+      },
+    });
+  } catch {
+    /* ignore */
   }
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(

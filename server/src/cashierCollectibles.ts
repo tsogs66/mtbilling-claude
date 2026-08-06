@@ -4,7 +4,7 @@ import path from 'path';
 import { db } from './db.js';
 
 export type CollectionType = 'cash' | 'online';
-export type CollectibleStatus = 'open' | 'submitted' | 'collected' | 'rejected';
+export type CollectibleStatus = 'open' | 'submitted' | 'collected' | 'rejected' | 'cancelled';
 
 function columnExists(table: string, col: string) {
   try {
