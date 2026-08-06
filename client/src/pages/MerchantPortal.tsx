@@ -437,8 +437,11 @@ export default function MerchantPortal() {
 
   const confirmCancelCash = (payment: any) => {
     if (!payment?.id) return;
-    if (String(payment.payChannel || '').toLowerCase() !== 'cash') {
-      show('Only cash payments can be cancelled');
+    const canCancel =
+      payment.canCancel === true ||
+      (payment.canCancel == null && String(payment.payChannel || '').toLowerCase() === 'cash');
+    if (!canCancel) {
+      show(payment.cancelBlockedReason || 'Only cash payments can be cancelled');
       return;
     }
     setActionConfirm({
@@ -447,7 +450,7 @@ export default function MerchantPortal() {
         `Cancel this cash payment for ${payment.username} (${peso(payment.amount)} · ${payment.months || 1} mo)?\n\n` +
         `• Due date will be reversed\n` +
         `• Subscriber will get an SMS if a phone is on file\n` +
-        `• Remittance queue item will be removed (if still open)`,
+        `• Remittance queue item will be removed (even if already in a pending deposit)`,
       confirmLabel: 'Cancel payment',
       danger: true,
       run: async () => {
@@ -1148,22 +1151,34 @@ export default function MerchantPortal() {
             <div className="portal-glass rounded-2xl p-4">
               <div className="font-semibold text-sm mb-1">Your recent activations</div>
               <p className="text-xs text-slate-400 mb-2">
-                Wrong subscriber? Use <b>Change subscriber</b>. Cash payments can also be <b>cancelled</b> (due date reversed + SMS).
+                Wrong subscriber? Use <b>Change subscriber</b>. Cash remittance payments can be <b>cancelled</b> (due reversed + SMS), including ones recorded as GCash/Maya cash collections.
               </p>
               {recent.length === 0 ? (
                 <div className="text-xs text-slate-400 py-3 text-center">No payments posted yet.</div>
               ) : (
                 <ul className="divide-y divide-white/5 text-sm">
                   {recent.map((p) => {
-                    const isCash = String(p.payChannel || '').toLowerCase() === 'cash';
+                    const isCash =
+                      p.canCancel === true ||
+                      String(p.collectionType || '').toLowerCase() === 'cash' ||
+                      String(p.payChannel || '').toLowerCase() === 'cash';
+                    const canCancel = p.canCancel === true || (p.canCancel == null && isCash);
                     const busy = reassignBusy || cancelBusyId === p.id;
+                    const channelLabel = [
+                      String(p.payChannel || '').toUpperCase() || null,
+                      p.collectionType && String(p.collectionType).toLowerCase() === 'cash' && String(p.payChannel || '').toLowerCase() !== 'cash'
+                        ? 'cash remittance'
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
                     return (
                     <li key={p.id} className="py-2 space-y-2">
                       <div className="flex justify-between gap-3">
                         <div className="min-w-0">
                           <div className="font-medium truncate">{p.username}</div>
                           <div className="text-xs text-slate-400 truncate">
-                            {p.customer} · {String(p.payChannel || '').toUpperCase()} · {p.externalRef || '—'}
+                            {p.customer} · {channelLabel || '—'} · {p.externalRef || '—'}
                             {p.months ? ` · ${p.months}mo` : ''}
                           </div>
                         </div>
@@ -1192,7 +1207,7 @@ export default function MerchantPortal() {
                               <ArrowRightLeft size={12} />
                               {reassignId === p.id ? 'Close' : 'Change subscriber'}
                             </button>
-                            {isCash && (
+                            {canCancel && (
                               <button
                                 type="button"
                                 className="text-[11px] text-rose-300 hover:text-rose-200 inline-flex items-center gap-1"

@@ -1826,6 +1826,57 @@ export async function cashierStartPaymongoCheckout(opts: {
   };
 }
 
+/**
+ * Cash collections remitted by merchants — may store pay_channel as cash/gcash/maya
+ * (how the subscriber handed money to the merchant). Prefer collectible.collection_type.
+ */
+export function isMerchantCashCancellable(link: any): {
+  ok: boolean;
+  reason?: string;
+  collectible?: any;
+} {
+  if (!link) return { ok: false, reason: 'Payment not found' };
+  if (String(link.status) !== 'paid') return { ok: false, reason: 'Only processed payments can be cancelled' };
+
+  const channel = String(link.pay_channel || '').toLowerCase();
+  if (channel === 'paymongo') {
+    return { ok: false, reason: 'PayMongo payments settle online and cannot be cancelled here' };
+  }
+
+  const collectible = db
+    .prepare('SELECT * FROM cashier_collectibles WHERE payment_link_id = ? ORDER BY id DESC LIMIT 1')
+    .get(Number(link.id)) as any;
+
+  if (collectible) {
+    const ctype = String(collectible.collection_type || '').toLowerCase();
+    if (ctype === 'online') {
+      return { ok: false, reason: 'Online collections cannot be cancelled from the merchant portal', collectible };
+    }
+    const st = String(collectible.status || '').toLowerCase();
+    if (st === 'collected') {
+      return {
+        ok: false,
+        reason: 'This cash payment was already remitted and accepted — contact admin',
+        collectible,
+      };
+    }
+    if (st === 'cancelled') {
+      return { ok: false, reason: 'This payment was already cancelled', collectible };
+    }
+    // open | submitted | rejected — cancellable (submitted is detached from deposit on cancel)
+    return { ok: true, collectible };
+  }
+
+  // Legacy / no collectible row: allow when clearly cash.
+  if (channel === 'cash') return { ok: true };
+  const ref = String(link.external_ref || '');
+  if (/^cash\b/i.test(ref)) return { ok: true };
+  // Older cashier cash posts sometimes left pay_channel null.
+  if (link.cashier_user_id != null && !channel) return { ok: true };
+
+  return { ok: false, reason: 'Only cash payments can be cancelled from the merchant portal' };
+}
+
 function findCashierPaymentTransaction(link: any): { id: number; receipt: any } | null {
   // Prefer the collectible bridge — most reliable for merchant cash posts.
   const collectible = db
@@ -1848,16 +1899,19 @@ function findCashierPaymentTransaction(link: any): { id: number; receipt: any } 
   const linkMonths = Math.max(1, Math.floor(Number(link.months) || 1));
   const linkAmount = Number(link.amount) || 0;
   const paidAt = Date.parse(String(link.paid_at || link.created_at || '')) || 0;
+  const linkId = Number(link.id);
 
   const rows = db
     .prepare(
       `SELECT id, receipt_json, amount, created_at, type FROM transactions
        WHERE pppoe_user_id = ?
          AND type IN ('payment', 'payment_cancelled')
-         AND (? IS NULL OR cashier_user_id = ?)
-       ORDER BY id DESC LIMIT 25`
+         AND (? IS NULL OR cashier_user_id = ? OR cashier_user_id IS NULL)
+       ORDER BY id DESC LIMIT 40`
     )
     .all(userId, cashierId, cashierId) as any[];
+
+  let fallback: { id: number; receipt: any } | null = null;
 
   for (const row of rows) {
     let receipt: any = null;
@@ -1868,17 +1922,24 @@ function findCashierPaymentTransaction(link: any): { id: number; receipt: any } 
     }
     if (receipt?.reassignedToUserId) continue;
     if (receipt?.cancelledAt && String(row.type) === 'payment_cancelled') continue;
+    if (receipt?.fromPaymentLinkId != null && Number(receipt.fromPaymentLinkId) === linkId) {
+      return { id: Number(row.id), receipt: receipt || getTransactionReceipt(Number(row.id)) };
+    }
     const months = Math.max(1, Math.floor(Number(receipt?.months) || 1));
     if (months !== linkMonths) continue;
     const rowAmount = Number(row.amount) || Number(receipt?.originalAmount) || Number(receipt?.total) || 0;
     if (linkAmount > 0 && rowAmount > 0 && Math.abs(rowAmount - linkAmount) > 0.05) continue;
     if (paidAt) {
       const txAt = Date.parse(String(row.created_at || '')) || 0;
-      if (txAt && paidAt && txAt < paidAt - 60_000) continue;
+      // Allow wider window for older records (±2h) vs strict 1-minute floor.
+      if (txAt && Math.abs(txAt - paidAt) > 2 * 60 * 60 * 1000) continue;
     }
-    return { id: Number(row.id), receipt: receipt || getTransactionReceipt(Number(row.id)) };
+    const hit = { id: Number(row.id), receipt: receipt || getTransactionReceipt(Number(row.id)) };
+    if (!fallback) fallback = hit;
+    // Prefer rows that still look like an active payment.
+    if (String(row.type) === 'payment') return hit;
   }
-  return null;
+  return fallback;
 }
 
 /**
@@ -2089,8 +2150,10 @@ export async function reassignCashierPayment(opts: {
 
 
 /**
- * Merchant: cancel a processed cash payment — reverse due date, drop remittance
- * queue item (if still open), and SMS the subscriber.
+ * Merchant: cancel a processed cash payment.
+ * Fetches linked payment_link / transaction / collectible / subscriber data and reverses:
+ * due+status on PPPoE, payment transaction → payment_cancelled, remittance collectible,
+ * payment link → cancelled, portal activity, staff notify, MikroTik sync, SMS.
  */
 export async function cancelCashierCashPayment(opts: {
   paymentLinkId: number;
@@ -2102,36 +2165,27 @@ export async function cancelCashierCashPayment(opts: {
   if (Number(link.cashier_user_id) !== Number(opts.cashier.id)) {
     throw new Error('You can only cancel payments you processed');
   }
-  if (String(link.status) !== 'paid') throw new Error('Only processed payments can be cancelled');
 
-  const channel = String(link.pay_channel || '').toLowerCase();
-  if (channel !== 'cash') {
-    throw new Error('Only cash payments can be cancelled from the merchant portal');
+  const cashCheck = isMerchantCashCancellable(link);
+  if (!cashCheck.ok) {
+    throw new Error(cashCheck.reason || 'Only cash payments can be cancelled from the merchant portal');
   }
+  const collectible = cashCheck.collectible || null;
 
   const userId = Number(link.pppoe_user_id);
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   if (!user) throw new Error('Subscriber not found');
 
-  const collectible = db
-    .prepare('SELECT * FROM cashier_collectibles WHERE payment_link_id = ? ORDER BY id DESC LIMIT 1')
-    .get(link.id) as any;
-  if (collectible) {
-    const st = String(collectible.status || '').toLowerCase();
-    if (st === 'collected') {
-      throw new Error('This cash payment was already remitted and accepted — contact admin');
-    }
-    if (st === 'submitted') {
-      throw new Error(
-        'This cash payment is in a pending remittance — ask admin to reject the deposit first'
-      );
-    }
-  }
-
   const found = findCashierPaymentTransaction(link);
   const receipt = found?.receipt || {};
   if (receipt?.cancelledAt) {
     throw new Error('This payment was already cancelled');
+  }
+  if (found?.id) {
+    const txRow = db.prepare('SELECT type FROM transactions WHERE id = ?').get(found.id) as { type?: string } | undefined;
+    if (String(txRow?.type || '') === 'payment_cancelled') {
+      throw new Error('This payment was already cancelled');
+    }
   }
 
   const months = Math.max(1, Math.floor(Number(receipt.months) || Number(link.months) || 1));
@@ -2139,7 +2193,7 @@ export async function cancelCashierCashPayment(opts: {
   const expectedNewDue = receipt.newDue ? String(receipt.newDue).slice(0, 10) : null;
   const currentDue = String(user.subscription_due || '').slice(0, 10);
   const today = new Date().toISOString().slice(0, 10);
-  const amount = Number(link.amount) || Number(receipt.total) || 0;
+  const amount = Number(link.amount) || Number(receipt.originalAmount) || Number(receipt.total) || 0;
 
   let restoredDue: string;
   if (previousDue && expectedNewDue && currentDue === expectedNewDue) {
@@ -2147,7 +2201,8 @@ export async function cancelCashierCashPayment(opts: {
   } else if (previousDue && expectedNewDue && currentDue > expectedNewDue) {
     restoredDue = addMonthsPreserveDay(currentDue, -months);
   } else if (previousDue && currentDue && currentDue === previousDue) {
-    throw new Error('Subscriber due date already looks reversed — contact admin');
+    // Due already matches pre-payment — still cancel the payment records (no further peel).
+    restoredDue = previousDue;
   } else if (currentDue) {
     restoredDue = addMonthsPreserveDay(currentDue, -months);
   } else if (previousDue) {
@@ -2242,14 +2297,49 @@ export async function cancelCashierCashPayment(opts: {
      WHERE id = ?`
   ).run(reason || `Cancelled by merchant ${opts.cashier.username}`, link.id);
 
-  // Reverse remittance queue item (cash only) — mark cancelled so it leaves open/submitted totals.
+  // Reverse remittance queue item (cash only) — detach from pending deposit if needed.
   if (collectible?.id) {
     const st = String(collectible.status || '').toLowerCase();
-    if (st === 'open' || st === 'rejected') {
+    if (st === 'open' || st === 'rejected' || st === 'submitted') {
+      const depositId = collectible.deposit_id != null ? Number(collectible.deposit_id) : null;
       db.prepare(
-        `UPDATE cashier_collectibles SET status = 'cancelled', collected_at = datetime('now')
+        `UPDATE cashier_collectibles SET
+           status = 'cancelled',
+           deposit_id = NULL,
+           collected_at = datetime('now')
          WHERE id = ?`
       ).run(collectible.id);
+      if (st === 'submitted' && depositId) {
+        try {
+          const remaining = db
+            .prepare(
+              `SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total
+               FROM cashier_collectibles
+               WHERE deposit_id = ? AND status = 'submitted'`
+            )
+            .get(depositId) as { c: number; total: number };
+          const deposit = db.prepare('SELECT * FROM cashier_deposits WHERE id = ?').get(depositId) as any;
+          if (deposit && (deposit.status === 'pending' || deposit.status === 'awaiting_payment')) {
+            if (!remaining?.c) {
+              db.prepare(
+                `UPDATE cashier_deposits SET
+                   status = 'cancelled',
+                   amount_total = 0,
+                   item_count = 0,
+                   reviewed_at = datetime('now'),
+                   review_note = COALESCE(review_note, ?)
+                 WHERE id = ?`
+              ).run(`Item cancelled by merchant ${opts.cashier.username}`, depositId);
+            } else {
+              db.prepare(
+                `UPDATE cashier_deposits SET amount_total = ?, item_count = ? WHERE id = ?`
+              ).run(Number(remaining.total) || 0, Number(remaining.c) || 0, depositId);
+            }
+          }
+        } catch {
+          /* best-effort deposit recalculation */
+        }
+      }
     }
   }
 
