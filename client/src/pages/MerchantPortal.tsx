@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   LogOut, Search, Upload, CheckCircle2, Loader2, Palette, KeyRound, Wallet, ArrowLeft, Send,
-  Download, Share, X, CloudOff, CreditCard,
+  Download, Share, X, CloudOff,
 } from 'lucide-react';
 import { api, publicApi, peso } from '../api';
 import { useAuth } from '../context/AuthContext';
@@ -164,17 +164,39 @@ export default function MerchantPortal() {
     const paid = searchParams.get('paid');
     const canceled = searchParams.get('canceled');
     const fromPm = searchParams.get('paymongo');
-    if (fromPm !== '1') return;
-    if (paid === '1') {
-      show('PayMongo payment received — subscriber will activate shortly. Check open collectibles after confirmation.');
-      void loadCollectibles();
-      api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => undefined);
-    } else if (canceled === '1') {
-      show('PayMongo checkout was canceled');
+    const fromRemit = searchParams.get('remit');
+    if (fromPm === '1') {
+      if (paid === '1') {
+        show('PayMongo payment received — subscriber will activate shortly. Online funds settle to the ISP (no remittance).');
+        void loadCollectibles();
+        api.get('/merchant/recent').then((r) => setRecent(r.data.payments || [])).catch(() => undefined);
+      } else if (canceled === '1') {
+        show('PayMongo checkout was canceled');
+      }
+    } else if (fromRemit === '1') {
+      if (paid === '1') {
+        show('Cash remittance paid via PayMongo — marked collected.');
+        void loadCollectibles();
+      } else if (canceled === '1') {
+        const depositId = Number(searchParams.get('deposit') || 0);
+        show('PayMongo remittance canceled — cash items returned to open queue.');
+        if (depositId) {
+          api
+            .post(`/merchant/deposits/${depositId}/cancel-paymongo`)
+            .then(() => loadCollectibles())
+            .catch(() => loadCollectibles());
+        } else {
+          void loadCollectibles();
+        }
+      }
+    } else {
+      return;
     }
     searchParams.delete('paid');
     searchParams.delete('canceled');
     searchParams.delete('paymongo');
+    searchParams.delete('remit');
+    searchParams.delete('deposit');
     setSearchParams(searchParams, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -301,7 +323,9 @@ export default function MerchantPortal() {
     try {
       const r = await api.post('/merchant/collect', payload);
       show(
-        `Payment posted (${r.data.collectionType}): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Add to a deposit when ready.`
+        collectionType === 'online'
+          ? `Payment posted (online): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Online funds settle to the ISP (no remittance).`
+          : `Payment posted (cash): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Queued for cash remittance.`
       );
       setSelected(null);
       setQ('');
@@ -584,9 +608,9 @@ export default function MerchantPortal() {
               <div>
                 <h2 className="font-bold text-lg">Collect payment</h2>
                 <p className="text-sm text-slate-300/80 mt-0.5">
-                  Search a subscriber, choose <b>cash</b>, <b>online</b>, or <b>PayMongo</b> (unique checkout per subscriber).
-                  Cash/online post immediately; PayMongo activates after the subscriber pays (SMS confirmation + remittance collectible).
-                  Remit collections below with deposit proof. Logged as <b>{user?.username}</b>.
+                  Search a subscriber, then choose <b>cash</b>, <b>online</b> (GCash/Maya proof), or <b>PayMongo</b> (unique QR Ph checkout).
+                  Online and PayMongo settle to the ISP immediately (no remittance). Only <b>cash</b> is queued below for remittance — remit with deposit proof or PayMongo.
+                  Logged as <b>{user?.username}</b>.
                 </p>
               </div>
 
@@ -691,16 +715,20 @@ export default function MerchantPortal() {
                       <p>
                         Opens a <b>unique PayMongo checkout</b> for <b>{selected.username}</b> (
                         {peso(amountPreview)} · {months} mo). Subscriber pays via QR Ph / GCash / Maya. Account
-                        activates on success; SMS confirmation is sent; a remittance collectible is opened for you.
+                        activates on success; SMS confirmation is sent. Funds settle online — <b>no remittance</b>.
                       </p>
                       <button
                         type="button"
-                        className="btn-primary w-full justify-center gap-2"
+                        className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3.5 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
                         disabled={paymongoBusy}
                         onClick={() => void startPaymongo()}
                       >
-                        {paymongoBusy ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
-                        {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online with PayMongo'}
+                        {paymongoBusy ? (
+                          <Loader2 className="animate-spin" size={18} />
+                        ) : (
+                          <QrphLogo className="h-9 w-auto shrink-0" />
+                        )}
+                        {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                       </button>
                     </div>
                   )}
@@ -790,9 +818,10 @@ export default function MerchantPortal() {
             <div className="portal-glass-strong rounded-2xl p-4 space-y-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <div className="font-semibold text-sm">Open collectibles</div>
+                  <div className="font-semibold text-sm">Open cash remittances</div>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Subscriber accounts are already activated. Select one or more payments, upload deposit proof, and submit for admin acceptance.
+                    Only cash collections appear here. Online / PayMongo subscriber payments settle to the ISP and are not queued.
+                    Select one or more, then remit with deposit proof or PayMongo.
                   </p>
                   {depositSummary?.open && (
                     <p className="text-xs text-amber-200/90 mt-1">
@@ -809,7 +838,7 @@ export default function MerchantPortal() {
               </div>
 
               {openCollectibles.length === 0 ? (
-                <div className="text-xs text-slate-400 py-3 text-center">No open collectibles.</div>
+                <div className="text-xs text-slate-400 py-3 text-center">No open cash remittances.</div>
               ) : (
                 <>
                   <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -949,23 +978,58 @@ export default function MerchantPortal() {
                       {depositBusy ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
                       {depositBusy
                         ? 'Submitting…'
-                        : `Submit ${selectedCollectibleIds.size || ''} payment(s) to admin`}
+                        : `Submit ${selectedCollectibleIds.size || ''} cash payment(s) to admin`}
                     </button>
+                    {paymongoEnabled && (
+                      <button
+                        type="button"
+                        className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm px-4 py-3 shadow-lg shadow-sky-600/25 transition disabled:opacity-60"
+                        disabled={depositBusy || selectedCollectibleIds.size === 0}
+                        onClick={async () => {
+                          setDepositBusy(true);
+                          try {
+                            const r = await api.post('/merchant/deposits/paymongo', {
+                              collectibleIds: [...selectedCollectibleIds],
+                              note: depositNote || undefined,
+                            });
+                            const url = r.data?.checkoutUrl;
+                            if (!url) throw new Error('No checkout URL');
+                            show('Opening PayMongo to remit cash collections…');
+                            window.location.href = url;
+                          } catch (err: any) {
+                            show(err?.response?.data?.error || err?.message || 'PayMongo remittance failed');
+                            setDepositBusy(false);
+                          }
+                        }}
+                      >
+                        {depositBusy ? (
+                          <Loader2 className="animate-spin" size={18} />
+                        ) : (
+                          <QrphLogo className="h-8 w-auto shrink-0" />
+                        )}
+                        {depositBusy
+                          ? 'Opening PayMongo…'
+                          : `Remit ${selectedCollectibleIds.size || ''} via PayMongo`}
+                      </button>
+                    )}
                   </div>
                 </>
               )}
 
-              {myDeposits.filter((d) => d.status === 'pending').length > 0 && (
+              {myDeposits.filter((d) => d.status === 'pending' || d.status === 'awaiting_payment').length > 0 && (
                 <div className="border-t border-white/10 pt-3">
-                  <div className="text-xs font-semibold text-slate-300 mb-1">Awaiting admin acceptance</div>
+                  <div className="text-xs font-semibold text-slate-300 mb-1">Pending remittances</div>
                   <ul className="text-xs space-y-1">
                     {myDeposits
-                      .filter((d) => d.status === 'pending')
+                      .filter((d) => d.status === 'pending' || d.status === 'awaiting_payment')
                       .slice(0, 8)
                       .map((d) => (
                         <li key={d.id} className="flex justify-between gap-2 text-slate-400">
                           <span>
                             #{d.id} · {d.mode} · {d.itemCount} item(s)
+                            {d.payChannel === 'paymongo' || d.status === 'awaiting_payment'
+                              ? ' · PayMongo'
+                              : ' · admin'}
                           </span>
                           <span className="text-amber-200">{peso(d.amountTotal)}</span>
                         </li>

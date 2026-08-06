@@ -1660,21 +1660,25 @@ export async function cashierCollectPayment(opts: {
 
   const subscriber = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
   const txId = Number((payment as any)?.transactionId || (payment as any)?.id) || null;
-  const collectibleId = createCashierCollectible({
-    cashierUserId: opts.cashier.id,
-    cashierUsername: opts.cashier.username,
-    paymentLinkId: link.id,
-    transactionId: txId,
-    pppoeUserId: opts.pppoeUserId,
-    amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
-    months: link.months || 1,
-    collectionType: collectionType as 'cash' | 'online',
-    payChannel: channel,
-    externalRef: reference,
-    subscriberUsername: subscriber?.username || null,
-    customerName: subscriber?.customer_name || null,
-    accountNumber: subscriber?.account_number || null,
-  });
+  // Cash only — online collections settle to the ISP and skip the remittance queue.
+  const collectibleId =
+    collectionType === 'cash'
+      ? createCashierCollectible({
+          cashierUserId: opts.cashier.id,
+          cashierUsername: opts.cashier.username,
+          paymentLinkId: link.id,
+          transactionId: txId,
+          pppoeUserId: opts.pppoeUserId,
+          amount: Number(link.amount) || Number((payment as any)?.amount) || 0,
+          months: link.months || 1,
+          collectionType: 'cash',
+          payChannel: channel,
+          externalRef: reference,
+          subscriberUsername: subscriber?.username || null,
+          customerName: subscriber?.customer_name || null,
+          accountNumber: subscriber?.account_number || null,
+        })
+      : null;
 
   // Subscriber SMS confirmation (same template as PayMongo / admin payments).
   try {
@@ -1707,7 +1711,7 @@ export async function cashierCollectPayment(opts: {
 
 /**
  * Merchant portal: start a PayMongo hosted checkout unique to the selected subscriber.
- * Activation + SMS + remittance collectible happen on the PayMongo webhook.
+ * Activation + SMS happen on the PayMongo webhook. No remittance queue (funds settle online).
  */
 export async function cashierStartPaymongoCheckout(opts: {
   pppoeUserId: number;
