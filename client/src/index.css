@@ -2120,6 +2120,38 @@ body {
   opacity: 0.7;
 }
 
+/* Tablets / touch / reduced-motion: SVG drop-shadow on every cable is a GPU killer */
+.map-stage.is-low-power .leaflet-interactive.flow-line-client,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client.is-hot,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client-online,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client-offline,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client-expired,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client-non-payment,
+.map-stage.is-low-power .leaflet-interactive.flow-line-client-disabled,
+.map-stage.is-low-power .leaflet-interactive.flow-line-pulse-online,
+.leaflet-interactive.flow-line-client.flow-line-noglow,
+.leaflet-interactive.flow-line-client.flow-line-noglow.is-hot {
+  filter: none !important;
+}
+@media (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .leaflet-interactive.flow-line-client,
+  .leaflet-interactive.flow-line-client.is-hot,
+  .leaflet-interactive.flow-line-client-online,
+  .leaflet-interactive.flow-line-client-offline,
+  .leaflet-interactive.flow-line-client-expired,
+  .leaflet-interactive.flow-line-client-non-payment,
+  .leaflet-interactive.flow-line-client-disabled,
+  .leaflet-interactive.flow-line-pulse-online {
+    filter: none !important;
+  }
+  .map-onu-round.online {
+    animation: none !important;
+  }
+}
+.map-stage.is-low-power .map-onu-round.online {
+  animation: none !important;
+}
+
 @keyframes line-pulse {
   0%, 100% { stroke-opacity: 0.55; }
   50% { stroke-opacity: 1; }

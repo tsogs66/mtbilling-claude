@@ -85,15 +85,102 @@ const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
 };
 
 /** CSS class for animated client cables (dashes run NAP → ONU via JS dashOffset). */
-function clientCableClass(state: ClientState, highlighted: boolean): string {
-  const base = `flow-line-client flow-line-client-${state}`;
+function clientCableClass(state: ClientState, highlighted: boolean, glow = true): string {
+  const base = glow
+    ? `flow-line-client flow-line-client-${state}`
+    : `flow-line-client flow-line-client-${state} flow-line-noglow`;
   return highlighted ? `${base} is-hot` : base;
 }
 
 /**
- * Imperative animated cable — continuous dash flow OLT → NAP → ONU.
+ * Touch tablets / Android Chrome choke on dozens of per-cable rAF loops + SVG filters.
+ * Coarse pointer, reduced motion, or Android → static cables + lighter paint.
+ */
+function detectLowPowerMap(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return true;
+    if (window.matchMedia('(pointer: coarse)').matches) return true;
+  } catch {
+    /* ignore */
+  }
+  return /Android/i.test(navigator.userAgent || '');
+}
+
+function useLowPowerMap(): boolean {
+  const [low, setLow] = useState(detectLowPowerMap);
+  useEffect(() => {
+    const update = () => setLow(detectLowPowerMap());
+    const mqCoarse = window.matchMedia('(pointer: coarse)');
+    const mqReduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    mqCoarse.addEventListener?.('change', update);
+    mqReduce.addEventListener?.('change', update);
+    return () => {
+      mqCoarse.removeEventListener?.('change', update);
+      mqReduce.removeEventListener?.('change', update);
+    };
+  }, []);
+  return low;
+}
+
+type FlowDashEntry = {
+  getEl: () => SVGPathElement | null;
+  offsetRef: { current: number };
+  optsRef: { current: { dashArray: string; speed: number; className: string } };
+};
+
+/** One shared rAF for all animated cables (was: one loop per cable → tablet jank). */
+const flowDashEntries = new Set<FlowDashEntry>();
+let flowDashRaf = 0;
+let flowDashLast = 0;
+
+function applyFlowDash(el: SVGPathElement, value: number, dash: string, cls: string) {
+  el.setAttribute('stroke-dasharray', dash);
+  el.setAttribute('stroke-dashoffset', String(value));
+  el.style.setProperty('stroke-dasharray', dash, 'important');
+  el.style.setProperty('stroke-dashoffset', String(value), 'important');
+  el.style.setProperty('stroke-opacity', '1', 'important');
+  for (const c of cls.split(/\s+/)) {
+    if (c) el.classList.add(c);
+  }
+}
+
+function ensureFlowDashLoop() {
+  if (flowDashRaf) return;
+  flowDashLast = performance.now();
+  const tick = (now: number) => {
+    if (flowDashEntries.size === 0) {
+      flowDashRaf = 0;
+      return;
+    }
+    const dtMs = Math.min(32, Math.max(0, now - flowDashLast));
+    flowDashLast = now;
+    if (document.visibilityState === 'visible' && dtMs > 0) {
+      for (const entry of flowDashEntries) {
+        const { dashArray: dash, speed: pxPerSec, className: cls } = entry.optsRef.current;
+        entry.offsetRef.current -= (pxPerSec * dtMs) / 1000;
+        const el = entry.getEl();
+        if (el) applyFlowDash(el, entry.offsetRef.current, dash, cls);
+      }
+    }
+    flowDashRaf = requestAnimationFrame(tick);
+  };
+  flowDashRaf = requestAnimationFrame(tick);
+}
+
+function registerFlowDash(entry: FlowDashEntry) {
+  flowDashEntries.add(entry);
+  ensureFlowDashLoop();
+  return () => {
+    flowDashEntries.delete(entry);
+  };
+}
+
+/**
+ * Imperative cable — continuous dash flow OLT → NAP → ONU when animate=true.
  * Offset decreases forever (no wrap reset) so motion never hitch/pauses.
  * Style updates do not remount the layer (avoids animation restarts on poll).
+ * On low-power devices animate=false: one static path, no underlay, no rAF.
  */
 function FlowPolyline({
   positions,
@@ -104,6 +191,7 @@ function FlowPolyline({
   dashArray = '12 16',
   /** Dash travel speed in CSS px per second (along the path toward the child). */
   speed = 48,
+  animate = true,
 }: {
   positions: [number, number][];
   color: string;
@@ -112,6 +200,7 @@ function FlowPolyline({
   className?: string;
   dashArray?: string;
   speed?: number;
+  animate?: boolean;
 }) {
   const map = useMap();
   const posKey = JSON.stringify(positions);
@@ -121,91 +210,84 @@ function FlowPolyline({
   const optsRef = useRef({ color, weight, opacity, className, dashArray, speed });
   optsRef.current = { color, weight, opacity, className, dashArray, speed };
 
-  // Create geometry once per path; keep a never-resetting rAF loop.
   useEffect(() => {
     if (!map || !positions?.length) return;
 
-    const anyMap = map as L.Map & { __flowSvg?: L.SVG };
-    if (!anyMap.__flowSvg) {
-      anyMap.__flowSvg = L.svg({ padding: 0.5 });
-      anyMap.__flowSvg.addTo(map);
-    }
-    const renderer = anyMap.__flowSvg;
     const { color: c0, weight: w0, opacity: o0, className: cls0, dashArray: dash0 } = optsRef.current;
+    let unregister: (() => void) | undefined;
+    let underlay: L.Polyline | null = null;
 
-    const underlay = L.polyline(positions, {
-      color: c0,
-      weight: Math.max(1.5, w0 - 0.5),
-      opacity: Math.min(0.35, o0 * 0.4),
-      interactive: false,
-      className: 'flow-line-underlay',
-      lineCap: 'round',
-      lineJoin: 'round',
-      renderer,
-    }).addTo(map);
-
-    const layer = L.polyline(positions, {
-      color: c0,
-      weight: w0,
-      opacity: o0,
-      dashArray: dash0,
-      className: cls0,
-      lineCap: 'round',
-      lineJoin: 'round',
-      renderer,
-    }).addTo(map);
-
-    underlayRef.current = underlay;
-    layerRef.current = layer;
-
-    const pathEl = (): SVGPathElement | null => {
-      const el =
-        (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
-        (layer as any)._path ||
-        null;
-      return el as SVGPathElement | null;
-    };
-
-    const apply = (value: number, dash: string, cls: string) => {
-      const el = pathEl();
-      if (!el) return;
-      el.setAttribute('stroke-dasharray', dash);
-      el.setAttribute('stroke-dashoffset', String(value));
-      el.style.setProperty('stroke-dasharray', dash, 'important');
-      el.style.setProperty('stroke-dashoffset', String(value), 'important');
-      // Keep opacity steady — no pulse (pulse looked like the dash "paused").
-      el.style.setProperty('stroke-opacity', '1', 'important');
-      for (const c of cls.split(/\s+/)) {
-        if (c) el.classList.add(c);
+    if (animate) {
+      const anyMap = map as L.Map & { __flowSvg?: L.SVG };
+      if (!anyMap.__flowSvg) {
+        anyMap.__flowSvg = L.svg({ padding: 0.5 });
+        anyMap.__flowSvg.addTo(map);
       }
-    };
+      const renderer = anyMap.__flowSvg;
 
-    apply(offsetRef.current, dash0, cls0);
+      underlay = L.polyline(positions, {
+        color: c0,
+        weight: Math.max(1.5, w0 - 0.5),
+        opacity: Math.min(0.35, o0 * 0.4),
+        interactive: false,
+        className: 'flow-line-underlay',
+        lineCap: 'round',
+        lineJoin: 'round',
+        renderer,
+      }).addTo(map);
 
-    let raf = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const dtMs = Math.min(32, Math.max(0, now - last));
-      last = now;
-      if (document.visibilityState === 'visible' && dtMs > 0) {
-        const { dashArray: dash, speed: pxPerSec, className: cls } = optsRef.current;
-        // Continuous decrease — never wrap/reset (that caused a visible hitch).
-        offsetRef.current -= (pxPerSec * dtMs) / 1000;
-        apply(offsetRef.current, dash, cls);
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
+      const layer = L.polyline(positions, {
+        color: c0,
+        weight: w0,
+        opacity: o0,
+        dashArray: dash0,
+        className: cls0,
+        lineCap: 'round',
+        lineJoin: 'round',
+        renderer,
+      }).addTo(map);
+
+      underlayRef.current = underlay;
+      layerRef.current = layer;
+
+      const getEl = (): SVGPathElement | null => {
+        const el =
+          (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
+          (layer as any)._path ||
+          null;
+        return el as SVGPathElement | null;
+      };
+
+      const el0 = getEl();
+      if (el0) applyFlowDash(el0, offsetRef.current, dash0, cls0);
+
+      unregister = registerFlowDash({ getEl, offsetRef, optsRef });
+    } else {
+      // Static path on default renderer (canvas when MapContainer preferCanvas).
+      const layer = L.polyline(positions, {
+        color: c0,
+        weight: w0,
+        opacity: o0,
+        dashArray: dash0,
+        className: cls0,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false,
+      }).addTo(map);
+      layerRef.current = layer;
+      underlayRef.current = null;
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
-      map.removeLayer(layer);
-      map.removeLayer(underlay);
+      unregister?.();
+      const layer = layerRef.current;
+      if (layer) map.removeLayer(layer);
+      if (underlay) map.removeLayer(underlay);
       layerRef.current = null;
       underlayRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, posKey]);
+  }, [map, posKey, animate]);
 
   // Update paint without remounting (keeps dash motion continuous across polls).
   useEffect(() => {
@@ -226,19 +308,14 @@ function FlowPolyline({
       weight: Math.max(1.5, weight - 0.5),
       opacity: Math.min(0.35, opacity * 0.4),
     });
+    if (!animate) return;
     // setStyle can wipe dashoffset — restore immediately so motion doesn't hitch.
     const el =
       (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
       (layer as any)._path ||
       null;
-    if (el) {
-      el.setAttribute('stroke-dasharray', dashArray);
-      el.setAttribute('stroke-dashoffset', String(offsetRef.current));
-      el.style.setProperty('stroke-dasharray', dashArray, 'important');
-      el.style.setProperty('stroke-dashoffset', String(offsetRef.current), 'important');
-      el.style.setProperty('stroke-opacity', '1', 'important');
-    }
-  }, [color, weight, opacity, dashArray, className]);
+    if (el) applyFlowDash(el as SVGPathElement, offsetRef.current, dashArray, className);
+  }, [color, weight, opacity, dashArray, className, animate]);
 
   return null;
 }
@@ -342,18 +419,18 @@ function weatherFxHtml(category: WeatherCategory): string {
 }
 
 /** Floating current-weather chip overlaid above a server/OLT marker, with a small animated effect. */
-function weatherBadgeIcon(w: WeatherNow) {
+function weatherBadgeIcon(w: WeatherNow, lite = false) {
   const category = weatherCategory(w.code);
   return L.divIcon({
     className: 'map-weather-marker',
     html: `<div class="map-weather-stack">
-      ${weatherFxHtml(category)}
+      ${lite ? '' : weatherFxHtml(category)}
       <div class="map-weather-chip" title="${escapeHtml(w.label)} · ${Math.round(w.humidityPct)}% humidity · wind ${Math.round(w.windKph)} km/h">
         <span class="map-weather-emoji">${w.emoji}</span><span class="map-weather-temp">${Math.round(w.tempC)}°C</span>
       </div>
     </div>`,
-    iconSize: [64, 64],
-    iconAnchor: [32, 62],
+    iconSize: [64, lite ? 36 : 64],
+    iconAnchor: [32, lite ? 40 : 62],
   });
 }
 
@@ -656,6 +733,8 @@ const emptyNap = (
 };
 
 export default function ClientsMap() {
+  const lowPowerMap = useLowPowerMap();
+  const animateCables = !lowPowerMap;
   const { current } = useRouterDevice();
   const [servers, setServers] = useState<ServerNode[]>([]);
   const [naps, setNaps] = useState<Nap[]>([]);
@@ -756,7 +835,7 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
-  const [weatherOn, setWeatherOn] = useState(true);
+  const [weatherOn, setWeatherOn] = useState(() => !detectLowPowerMap());
   const [weather, setWeather] = useState<Record<string, WeatherNow | null>>({});
   const weatherTargets = useMemo(
     () => [
@@ -791,6 +870,9 @@ export default function ClientsMap() {
    * blank as the map is zoomed in/out over an OLT.
    */
   const [weatherFxOn, setWeatherFxOn] = useState(false);
+  useEffect(() => {
+    if (lowPowerMap) setWeatherFxOn(false);
+  }, [lowPowerMap]);
   const dominantWeatherCategory = useMemo<WeatherCategory | null>(() => {
     const counts: Partial<Record<WeatherCategory, number>> = {};
     for (const w of Object.values(weather)) {
@@ -1137,8 +1219,9 @@ export default function ClientsMap() {
             </button>
             <button
               type="button"
-              title="Simulate the current weather (rain/snow/sun/clouds/fog) across the whole map"
-              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${weatherFxOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              title={lowPowerMap ? 'Weather FX is disabled on this device for smoother map performance' : 'Simulate the current weather (rain/snow/sun/clouds/fog) across the whole map'}
+              disabled={lowPowerMap}
+              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${weatherFxOn && !lowPowerMap ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'} disabled:opacity-50 disabled:pointer-events-none`}
               onClick={() => setWeatherFxOn((v) => !v)}
             >
               <Sparkles size={15} /> Weather FX
@@ -1153,7 +1236,8 @@ export default function ClientsMap() {
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
-              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (animated OLT → NAP → ONU)
+              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray
+              {animateCables ? ' (animated OLT → NAP → ONU)' : ' (static on this device for performance)'}
             </span>
           </div>
         </div>
@@ -1492,7 +1576,7 @@ export default function ClientsMap() {
           </div>
         )}
 
-        <div id="map-wrap" className="map-stage overflow-hidden">
+        <div id="map-wrap" className={`map-stage overflow-hidden${lowPowerMap ? ' is-low-power' : ''}`}>
           {drawMode && (
             <div className="map-draw-banner bg-brand-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg flex flex-wrap items-center gap-3">
               <span>
@@ -1537,7 +1621,7 @@ export default function ClientsMap() {
             <Maximize2 size={13} /> Fullscreen
           </button>
 
-          {weatherFxOn && dominantWeatherCategory && (
+          {weatherFxOn && !lowPowerMap && dominantWeatherCategory && (
             <div className="absolute top-3 left-3 z-[500] bg-slate-900/85 border border-white/20 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center gap-1.5 shadow-sm">
               <Sparkles size={13} className="text-sky-400" />
               Simulated {dominantWeatherCategory}
@@ -1552,7 +1636,7 @@ export default function ClientsMap() {
             style={{ height: '100%', width: '100%' }}
             scrollWheelZoom
             zoomControl
-            preferCanvas={false}
+            preferCanvas={lowPowerMap}
           >
             <TileLayer
               attribution="&copy; OpenStreetMap contributors"
@@ -1577,6 +1661,7 @@ export default function ClientsMap() {
                   className="flow-line-backbone"
                   dashArray="12 16"
                   speed={52}
+                  animate={animateCables}
                 />
               );
             })}
@@ -1605,6 +1690,7 @@ export default function ClientsMap() {
                   className="flow-line-backbone"
                   dashArray="12 16"
                   speed={56}
+                  animate={animateCables}
                 />
               );
             })}
@@ -1624,9 +1710,10 @@ export default function ClientsMap() {
                   color={lineColor}
                   weight={hi ? 3.5 : state === 'online' ? 3 : 2.5}
                   opacity={(state === 'online' ? 0.98 : 0.85) * lineDim(hi)}
-                  className={clientCableClass(state, hi)}
+                  className={clientCableClass(state, hi, animateCables)}
                   dashArray={state === 'disabled' ? '6 16' : '12 16'}
                   speed={state === 'online' ? 64 : state === 'disabled' ? 28 : 48}
+                  animate={animateCables}
                 />
               );
             })}
@@ -1659,7 +1746,7 @@ export default function ClientsMap() {
             {weatherOn && servers.map((s) => {
               const w = weather[`srv-${s.id}`];
               if (!w) return null;
-              return <Marker key={`srv-wx-${s.id}`} position={[s.lat, s.lng]} icon={weatherBadgeIcon(w)} interactive={false} />;
+              return <Marker key={`srv-wx-${s.id}`} position={[s.lat, s.lng]} icon={weatherBadgeIcon(w, lowPowerMap)} interactive={false} />;
             })}
 
             {naps.map((n) => {
@@ -1722,7 +1809,7 @@ export default function ClientsMap() {
             {weatherOn && olts.map((o) => {
               const w = weather[`olt-${o.id}`];
               if (!w) return null;
-              return <Marker key={`olt-wx-${o.id}`} position={[o.lat, o.lng]} icon={weatherBadgeIcon(w)} interactive={false} />;
+              return <Marker key={`olt-wx-${o.id}`} position={[o.lat, o.lng]} icon={weatherBadgeIcon(w, lowPowerMap)} interactive={false} />;
             })}
 
             {filteredClients.map((c) => {
@@ -1752,7 +1839,7 @@ export default function ClientsMap() {
             })}
           </MapContainer>
 
-          {weatherFxOn && dominantWeatherCategory && <MapWeatherOverlay category={dominantWeatherCategory} />}
+          {weatherFxOn && !lowPowerMap && dominantWeatherCategory && <MapWeatherOverlay category={dominantWeatherCategory} />}
         </div>
       </div>
 
