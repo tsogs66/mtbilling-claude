@@ -2134,6 +2134,11 @@ export type NonPaymentWebProxyOpts = {
   lockdownFirewall?: boolean;
   /** Firewall address-list name used for non-pay clients (NAT/filter). */
   nonPayAddressList?: string;
+  /**
+   * Billing panel LAN IPv4(s) — proxy must ALLOW these so captive checkout can
+   * reach the API through transparent webproxy (X-Forwarded-For = PPPoE IP).
+   */
+  billingLanIps?: string[];
 };
 
 /**
@@ -2165,12 +2170,20 @@ export async function configureNonPaymentWebProxy(
   firewallAdded: string[];
   firewallSkipped: string[];
   firewallDisabledBypass: number;
+  addedLanIps: string[];
+  skippedLanIps: string[];
+  proxyAnonymousOff: boolean;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
   const lockdownFirewall = opts.lockdownFirewall !== false;
+  const billingLanIps = [...new Set(
+    (opts.billingLanIps || [])
+      .map((ip) => String(ip || '').trim())
+      .filter((ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip))
+  )];
   const billingHost = String(opts.billingHost || '')
     .trim()
     .replace(/^https?:\/\//i, '')
@@ -2189,7 +2202,22 @@ export async function configureNonPaymentWebProxy(
   return withRouter(
     conn,
     async (api) => {
+      // anonymous=no → proxy adds X-Forwarded-For with the PPPoE client address
+      let proxyAnonymousOff = false;
+      try {
+        await api.write('/ip/proxy/set', ['=anonymous=no']);
+        proxyAnonymousOff = true;
+      } catch {
+        proxyAnonymousOff = false;
+      }
+
       const existing = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
+
+      // Place new allows before the first redirect rule so LAN API is not captive-looped.
+      const redirectId =
+        (existing || []).find((r) => String(r.action || '').toLowerCase() === 'redirect')?.['.id'] ||
+        '';
+      const placeBeforeRedirect = redirectId ? [`=place-before=${redirectId}`] : [];
 
       // Additive only: never remove existing rules (keeps redirect / 8080 allow intact).
       const alreadyAllowsHost = (host: string) =>
@@ -2198,6 +2226,14 @@ export async function configureNonPaymentWebProxy(
             String(r.action || '').toLowerCase() === 'allow' &&
             String(r['src-address'] || '') === nonPayCidr &&
             String(r['dst-host'] || '').toLowerCase() === host
+        );
+
+      const alreadyAllowsLanIp = (ip: string) =>
+        (existing || []).some(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'allow' &&
+            String(r['src-address'] || '') === nonPayCidr &&
+            (String(r['dst-address'] || '') === ip || String(r['dst-address'] || '') === `${ip}/32`)
         );
 
       const addedHosts: string[] = [];
@@ -2212,8 +2248,28 @@ export async function configureNonPaymentWebProxy(
           `=dst-host=${host}`,
           '=action=allow',
           `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ...placeBeforeRedirect,
         ]);
         addedHosts.push(host);
+        existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-host': host });
+      }
+
+      const addedLanIps: string[] = [];
+      const skippedLanIps: string[] = [];
+      for (const ip of billingLanIps) {
+        if (alreadyAllowsLanIp(ip)) {
+          skippedLanIps.push(ip);
+          continue;
+        }
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-address=${ip}`,
+          '=action=allow',
+          `=comment=${WEBPROXY_RULE_COMMENT} lan-api`,
+          ...placeBeforeRedirect,
+        ]);
+        addedLanIps.push(ip);
+        existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
       }
 
       let fetchedErrorHtml = false;
@@ -2391,6 +2447,9 @@ export async function configureNonPaymentWebProxy(
         firewallAdded,
         firewallSkipped,
         firewallDisabledBypass,
+        addedLanIps,
+        skippedLanIps,
+        proxyAnonymousOff,
       };
     },
     { timeoutSec: 60 }

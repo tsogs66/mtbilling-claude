@@ -961,6 +961,14 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   }
   const errorPageUrl =
     String(b.errorPageUrl || '').trim() || `${publicBase}/error.html`;
+  const lanIp = detectLanIpv4();
+  const billingLanIps = [
+    ...(Array.isArray(b.billingLanIps) ? b.billingLanIps : []),
+    lanIp,
+    '192.168.0.120',
+  ]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
   try {
     const result = await configureNonPaymentWebProxy(
       {
@@ -978,6 +986,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         proxyPort: b.proxyPort,
         lockdownFirewall: b.lockdownFirewall !== false,
         nonPayAddressList: b.nonPayAddressList,
+        billingLanIps,
       }
     );
     res.json(result);

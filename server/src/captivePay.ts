@@ -1,8 +1,12 @@
 /**
  * Captive (non-payment webproxy) PayMongo checkout helpers.
  *
- * The billing host never sees the subscriber's PPP IP (NAT via the router),
- * so the captive page must send the PPP address (or username/account).
+ * Subscribers are often behind a CPE, so the browser only sees a LAN IP —
+ * not the PPPoE address on MikroTik. Identity comes from:
+ *  1) clientIp in the body when the page can detect the non-pay pool address
+ *  2) otherwise the HTTP peer / X-Forwarded-For when the request is made
+ *     through MikroTik transparent webproxy (anonymous=no) to the billing LAN
+ *
  * We resolve that address via MikroTik /ppp/active, then create/reuse a
  * payment link and start PayMongo hosted checkout.
  */
@@ -48,10 +52,36 @@ export function ipv4InCidr(ip: string, cidr: string): boolean {
   return (ipN & mask) === (netN & mask);
 }
 
-function normalizeIp(raw: string): string {
+export function normalizeIp(raw: string): string {
   return String(raw || '')
     .trim()
     .replace(/^::ffff:/i, '');
+}
+
+/**
+ * Pick the subscriber PPP IP from the HTTP request.
+ * Prefer X-Forwarded-For entries that fall in the non-pay pool (MikroTik
+ * webproxy sets this when anonymous=no), then req.ip / socket.
+ */
+export function captivePeerIp(
+  req: { ip?: string; headers?: Record<string, unknown>; socket?: { remoteAddress?: string } },
+  nonPayCidr: string = DEFAULT_NONPAY_CIDR
+): string | null {
+  const cidr = String(nonPayCidr || DEFAULT_NONPAY_CIDR).trim() || DEFAULT_NONPAY_CIDR;
+  const candidates: string[] = [];
+  const xff = String(req.headers?.['x-forwarded-for'] || '');
+  for (const part of xff.split(',')) {
+    const ip = normalizeIp(part);
+    if (ipv4ToInt(ip)) candidates.push(ip);
+  }
+  const xri = normalizeIp(String(req.headers?.['x-real-ip'] || ''));
+  if (ipv4ToInt(xri)) candidates.push(xri);
+  const rip = normalizeIp(String(req.ip || req.socket?.remoteAddress || ''));
+  if (ipv4ToInt(rip)) candidates.push(rip);
+  for (const ip of candidates) {
+    if (ipv4InCidr(ip, cidr)) return ip;
+  }
+  return null;
 }
 
 export async function findPppUsernameByAddress(

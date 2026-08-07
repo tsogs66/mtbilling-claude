@@ -32,6 +32,7 @@ import {
 import {
   startCaptivePaymongoCheckout,
   resolveCaptiveSubscriber,
+  captivePeerIp,
 } from './captivePay.js';
 import { startAutoBackupScheduler, runAutoBackupOnce } from './autoBackup.js';
 import { verifyTotpToken } from './totp.js';
@@ -582,18 +583,20 @@ app.post('/api/public/pay/:token/paymongo', async (req, res) => {
 });
 
 /**
- * Captive non-payment portal: resolve subscriber by PPP IP, ensure a pending
- * pay link for that user, start PayMongo checkout. Token / username are not
- * required from the captive page — Do not trust req.ip (NAT); the page sends clientIp.
+ * Captive non-payment portal: resolve subscriber by PPP IP (body or
+ * X-Forwarded-For via MikroTik webproxy), create/reuse pay link, PayMongo checkout.
+ * Prefer LAN HTTP API through the transparent proxy so CPE-NAT clients still identify.
  */
 app.post('/api/public/captive/checkout', async (req, res) => {
   try {
     const b = req.body || {};
+    const nonPayCidr = b.nonPayCidr || undefined;
+    const peer = captivePeerIp(req, nonPayCidr);
     const result = await startCaptivePaymongoCheckout({
-      clientIp: b.clientIp || b.ip || b.address || null,
+      clientIp: b.clientIp || b.ip || b.address || peer || null,
       username: b.username || b.user || null,
       account: b.account || b.accountNumber || null,
-      nonPayCidr: b.nonPayCidr || undefined,
+      nonPayCidr,
       publicBaseUrl:
         b.publicBaseUrl ||
         String(
@@ -616,11 +619,13 @@ app.post('/api/public/captive/checkout', async (req, res) => {
 app.post('/api/public/captive/resolve', async (req, res) => {
   try {
     const b = req.body || {};
+    const nonPayCidr = b.nonPayCidr || undefined;
+    const peer = captivePeerIp(req, nonPayCidr);
     const resolved = await resolveCaptiveSubscriber({
-      clientIp: b.clientIp || b.ip || b.address || null,
+      clientIp: b.clientIp || b.ip || b.address || peer || null,
       username: b.username || b.user || null,
       account: b.account || b.accountNumber || null,
-      nonPayCidr: b.nonPayCidr || undefined,
+      nonPayCidr,
     });
     const u = resolved.user;
     res.json({

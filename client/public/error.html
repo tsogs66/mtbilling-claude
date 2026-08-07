@@ -540,7 +540,7 @@
           <div class="howto">
             <h3>How to restore service</h3>
             <ol>
-              <li>Tap <b>Pay now with PayMongo</b> — we identify your non-payment session and create your payment link automatically.</li>
+              <li>Tap <b>Pay now with PayMongo</b> — we identify your PPPoE session on the router and create your payment link automatically (works even if your device is behind a home router).</li>
               <li>Complete payment using GCash, Maya, card, or bank via PayMongo.</li>
               <li>Keep your receipt. Service reactivates after payment is confirmed.</li>
             </ol>
@@ -600,6 +600,13 @@
        * Example: https://panorth.tsogs.cloud
        */
       payBaseUrl: 'https://panorth.tsogs.cloud',
+      /**
+       * LAN HTTP API (preferred). Traffic is intercepted by MikroTik transparent
+       * webproxy which adds X-Forwarded-For = PPPoE address — required when the
+       * subscriber device is behind a CPE (browser only sees 192.168.x.x).
+       */
+      lanApiBases: ['http://192.168.0.120/api'],
+      /** Public HTTPS API fallback (Cloudflare). Needs detectable non-pay pool IP. */
       apiBase: 'https://panorth.tsogs.cloud/api',
       /** Non-payment PPP pool — used to pick the right local IP for captive checkout. */
       nonPayCidr: '172.15.10.0/24',
@@ -796,51 +803,80 @@
       return pick || '';
     }
 
-    /** Resolve subscriber + create/reuse pay link + PayMongo checkout — IP only. */
-    async function startCaptiveCheckout() {
-      const clientIp = await resolveClientIp();
-      if (!clientIp || !ipv4InCidr(clientIp, CONFIG.nonPayCidr)) {
-        throw new Error(
-          'Could not detect your non-payment session IP. Reconnect PPPoE, then open this page again over HTTP.'
-        );
-      }
-      const r = await fetch(CONFIG.apiBase + '/public/captive/checkout', {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientIp,
-          nonPayCidr: CONFIG.nonPayCidr,
-          publicBaseUrl: resolvePayBase(),
-        }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+    function apiBases() {
+      const lan = Array.isArray(CONFIG.lanApiBases) ? CONFIG.lanApiBases.filter(Boolean) : [];
+      const pub = CONFIG.apiBase ? [CONFIG.apiBase] : [];
+      return lan.concat(pub);
+    }
+
+    /** Apply resolve/checkout JSON onto the account strip. */
+    function applySubscriber(j) {
+      if (!j) return;
       if (j.username) state.username = j.username;
       if (j.account) state.account = j.account;
       if (j.customer) state.name = j.customer;
+      if (j.plan) state.plan = j.plan;
       if (j.amount != null) state.amount = j.amount;
       renderAccountStrip();
-      if (!j.checkoutUrl) throw new Error('PayMongo did not return a checkout URL');
-      location.href = j.checkoutUrl;
+    }
+
+    /**
+     * Create/reuse pay link + PayMongo checkout.
+     * Prefer LAN HTTP (through MikroTik webproxy → X-Forwarded-For = PPPoE IP).
+     * Optional WebRTC clientIp only when it is already in the non-pay pool.
+     */
+    async function startCaptiveCheckout() {
+      const detected = await resolveClientIp();
+      const clientIp =
+        detected && ipv4InCidr(detected, CONFIG.nonPayCidr) ? detected : '';
+      const body = {
+        nonPayCidr: CONFIG.nonPayCidr,
+        publicBaseUrl: resolvePayBase(),
+      };
+      if (clientIp) body.clientIp = clientIp;
+
+      let lastErr = null;
+      for (const base of apiBases()) {
+        try {
+          const r = await fetch(String(base).replace(/\/$/, '') + '/public/captive/checkout', {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+          applySubscriber(j);
+          if (!j.checkoutUrl) throw new Error('PayMongo did not return a checkout URL');
+          location.href = j.checkoutUrl;
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error('Could not start PayMongo checkout');
     }
 
     async function preloadCaptiveIdentity() {
       try {
-        const clientIp = await resolveClientIp();
-        if (!clientIp) return;
-        const r = await fetch(CONFIG.apiBase + '/public/captive/resolve', {
-          method: 'POST',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientIp, nonPayCidr: CONFIG.nonPayCidr }),
-        });
-        if (!r.ok) return;
-        const j = await r.json();
-        if (j.username) state.username = j.username;
-        if (j.account) state.account = j.account;
-        if (j.customer) state.name = j.customer;
-        if (j.plan) state.plan = j.plan;
-        if (j.amount != null) state.amount = j.amount;
-        renderAccountStrip();
+        const detected = await resolveClientIp();
+        const clientIp =
+          detected && ipv4InCidr(detected, CONFIG.nonPayCidr) ? detected : '';
+        const body = { nonPayCidr: CONFIG.nonPayCidr };
+        if (clientIp) body.clientIp = clientIp;
+        for (const base of apiBases()) {
+          try {
+            const r = await fetch(String(base).replace(/\/$/, '') + '/public/captive/resolve', {
+              method: 'POST',
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            if (!r.ok) continue;
+            applySubscriber(await r.json());
+            return;
+          } catch (_) {
+            /* try next base */
+          }
+        }
       } catch (_) {
         /* pay button still creates the link on click */
       }
