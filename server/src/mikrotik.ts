@@ -2975,7 +2975,7 @@ export async function inspectNonPaymentCaptive(
   );
 }
 
-/** RouterOS script body: enable webproxy + HTTP NAT + portal redirect (idempotent). */
+/** RouterOS script body: captive NAT helpers + optional portal proxy redirect. */
 export function buildCaptiveEnsureScriptSource(opts: {
   nonPayCidr?: string;
   proxyPort?: number;
@@ -2984,6 +2984,12 @@ export function buildCaptiveEnsureScriptSource(opts: {
   username?: string;
   /** Remove this one-shot scheduler name at the end (if any). */
   removeSchedulerName?: string;
+  /**
+   * When true (default), skip all `/ip proxy` commands. That subsystem wedges
+   * this board (API + scheduler jobs hang forever on proxy set/access).
+   * Captive HTTP then uses dstnat → :9080 → billing instead.
+   */
+  skipProxyCommands?: boolean;
 }): string {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
@@ -2994,30 +3000,34 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const username = String(opts.username || '').trim();
   const u = rosScriptEscape(username);
   const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
+  const skipProxy = opts.skipProxyCommands !== false;
 
-  // Order matters: /ip proxy set can wedge RouterOS for a long time on some
-  // boards. Apply NAT + portal redirect + kick first, drop the one-shot
-  // scheduler next, and only then touch /ip proxy set.
+  // Prefer firewall-only. /ip proxy set|access can wedge RouterOS script jobs
+  // indefinitely on the live board — never block NAT/PPP on those commands.
   return (
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
+    `:do {/ip firewall nat remove [find comment=mtb-http-to-9080]} on-error={};` +
+    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=9080 comment=mtb-http-to-9080 place-before=0} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
-    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir} on-error={};` +
-    `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
-    `:do {/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to="${httpPortal}" comment=mtb-portal-redir} on-error={};` +
+    (skipProxy
+      ? ''
+      : `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
+        `:do {/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to="${httpPortal}" comment=mtb-portal-redir} on-error={};` +
+        `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};`) +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
       : '') +
     (sched
       ? `:do {/system scheduler remove [find name="${sched}"]} on-error={};`
-      : '') +
-    `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};`
+      : '')
   );
 }
 
 /**
  * Fast NAT-only captive path (no /ip/proxy API — that subsystem hangs on the
- * live board). Ensures address-list + dstnat TCP/80 → webproxy port.
+ * live board). Ensures address-list + HTTP :80 → local :9080 (billing captive)
+ * so browsers hit the panel portal even when webproxy is wedged.
  */
 export async function repairNonPaymentNatRedirect(
   conn: RouterConn,
@@ -3025,11 +3035,24 @@ export async function repairNonPaymentNatRedirect(
     nonPayCidr?: string;
     proxyPort?: number;
     nonPayAddressList?: string;
+    /** Billing LAN IPv4 for landing:9080 → panel HTTP (optional). */
+    billingLanIp?: string;
+    landingAddress?: string;
+    captiveApiPort?: number;
   } = {}
-): Promise<{ ok: true; addressList: boolean; natHttpRedirect: boolean }> {
+): Promise<{
+  ok: true;
+  addressList: boolean;
+  natHttpRedirect: boolean;
+  natTo9080: boolean;
+  captiveApiDstnat: boolean;
+}> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
+  const billingLanIp = String(opts.billingLanIp || '').trim();
 
   return withRouter(
     conn,
@@ -3065,76 +3088,142 @@ export async function repairNonPaymentNatRedirect(
         addressList = false;
       }
 
+      let natTo9080 = false;
       let natHttpRedirect = false;
+      let captiveApiDstnat = false;
       try {
         const nats = (await raceApi(
           api.write('/ip/firewall/nat/print', [
-            '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-port,to-ports,comment,disabled',
+            '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-address,dst-port,to-addresses,to-ports,comment,disabled',
           ]),
           10_000,
           'nat-print'
         )) as Record<string, string>[];
-        const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
-        const hasCidrNat = (nats || []).some(
-          (n) =>
-            isWorkingNonPayHttpRedirect(n, redirectOpts) &&
-            String(n['src-address'] || '') === nonPayCidr
-        );
-        // Drop stale tagged rule then re-add so it sits near the top.
-        for (const n of nats || []) {
-          if (String(n.comment || '') !== 'mtb-cidr-redir' && String(n.comment || '') !== NONPAY_NAT.httpRedirectCidr)
-            continue;
-          try {
-            await raceApi(
-              api.write('/ip/firewall/nat/remove', [`=.id=${n['.id']}`]),
-              5_000,
-              'nat-rm'
-            );
-          } catch {
-            /* ignore */
+
+        const removeByComment = async (comment: string) => {
+          for (const n of nats || []) {
+            if (String(n.comment || '') !== comment || !n['.id']) continue;
+            try {
+              await raceApi(
+                api.write('/ip/firewall/nat/remove', [`=.id=${n['.id']}`]),
+                5_000,
+                'nat-rm'
+              );
+            } catch {
+              /* ignore */
+            }
           }
-        }
-        if (!hasCidrNat) {
-          await raceApi(
-            api.write('/ip/firewall/nat/add', [
-              '=chain=dstnat',
-              '=action=redirect',
-              `=to-ports=${proxyPort}`,
-              '=protocol=tcp',
-              `=src-address=${nonPayCidr}`,
-              '=dst-port=80',
-              '=comment=mtb-cidr-redir',
-              '=place-before=0',
+        };
+
+        // Primary captive path: HTTP :80 → local :9080 (bypasses wedged webproxy).
+        await removeByComment('mtb-http-to-9080');
+        await raceApi(
+          api.write('/ip/firewall/nat/add', [
+            '=chain=dstnat',
+            '=action=redirect',
+            `=to-ports=${captiveApiPort}`,
+            '=protocol=tcp',
+            `=src-address=${nonPayCidr}`,
+            '=dst-port=80',
+            '=comment=mtb-http-to-9080',
+            '=place-before=0',
+          ]),
+          8_000,
+          'nat-9080'
+        );
+        natTo9080 = true;
+
+        // Keep tagged webproxy redirect as secondary (below 9080).
+        await removeByComment('mtb-cidr-redir');
+        await removeByComment(NONPAY_NAT.httpRedirectCidr);
+        await raceApi(
+          api.write('/ip/firewall/nat/add', [
+            '=chain=dstnat',
+            '=action=redirect',
+            `=to-ports=${proxyPort}`,
+            '=protocol=tcp',
+            `=src-address=${nonPayCidr}`,
+            '=dst-port=80',
+            '=comment=mtb-cidr-redir',
+          ]),
+          8_000,
+          'nat-8080'
+        );
+        natHttpRedirect = true;
+
+        // Allow non-pay clients to hit local :9080 (input) after HTTP redirect.
+        try {
+          const filters = (await raceApi(
+            api.write('/ip/firewall/filter/print', [
+              '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-port,comment,disabled',
             ]),
             8_000,
-            'nat-add'
+            'filter-print'
+          )) as Record<string, string>[];
+          const has9080 = (filters || []).some(
+            (r) =>
+              String(r.chain || '') === 'input' &&
+              String(r.comment || '') === 'mtb-allow-9080' &&
+              !rosBool(r.disabled)
           );
-        } else {
-          // Ensure tagged copy exists for idempotent ops.
-          const hasTagged = (nats || []).some((n) => String(n.comment || '') === 'mtb-cidr-redir');
-          if (!hasTagged) {
+          if (!has9080) {
             await raceApi(
-              api.write('/ip/firewall/nat/add', [
-                '=chain=dstnat',
-                '=action=redirect',
-                `=to-ports=${proxyPort}`,
+              api.write('/ip/firewall/filter/add', [
+                '=chain=input',
+                '=action=accept',
                 '=protocol=tcp',
                 `=src-address=${nonPayCidr}`,
-                '=dst-port=80',
-                '=comment=mtb-cidr-redir',
+                `=dst-port=${captiveApiPort}`,
+                '=comment=mtb-allow-9080',
                 '=place-before=0',
               ]),
               8_000,
-              'nat-add-tag'
+              'filter-9080'
             );
           }
+        } catch {
+          /* best-effort */
         }
-        natHttpRedirect = true;
+
+        // landing:9080 → billing LAN:80 (preserves PPPoE source IP for captive).
+        if (billingLanIp && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(billingLanIp)) {
+          const apiComment = `${WEBPROXY_RULE_COMMENT} captive-api`;
+          const hasApi = (nats || []).some(
+            (n) =>
+              String(n.comment || '') === apiComment &&
+              !rosBool(n.disabled) &&
+              String(n['dst-port'] || '') === String(captiveApiPort)
+          );
+          if (!hasApi) {
+            await removeByComment(apiComment);
+            await raceApi(
+              api.write('/ip/firewall/nat/add', [
+                '=chain=dstnat',
+                '=action=dst-nat',
+                `=to-addresses=${billingLanIp}`,
+                '=to-ports=80',
+                '=protocol=tcp',
+                `=dst-address=${landingAddress}`,
+                `=dst-port=${captiveApiPort}`,
+                `=comment=${apiComment}`,
+              ]),
+              8_000,
+              'nat-api'
+            );
+          }
+          captiveApiDstnat = true;
+        }
       } catch {
-        natHttpRedirect = false;
+        /* leave flags as set */
       }
 
-      return { ok: true as const, addressList, natHttpRedirect };
+      return {
+        ok: true as const,
+        addressList,
+        natHttpRedirect,
+        natTo9080,
+        captiveApiDstnat,
+      };
     },
     { timeoutSec: 25 }
   );
@@ -3253,13 +3342,24 @@ export async function repairNonPaymentHttpRedirectViaScript(
     proxyPort?: number;
     portalRedirectUrl?: string;
     username?: string;
+    billingLanIp?: string;
+    landingAddress?: string;
+    captiveApiPort?: number;
   } = {}
 ): Promise<{
   ok: true;
   ran: string;
   scheduledAt?: string;
   watch?: string;
-  nat?: { ok: true; addressList: boolean; natHttpRedirect: boolean } | { error: string };
+  nat?:
+    | {
+        ok: true;
+        addressList: boolean;
+        natHttpRedirect: boolean;
+        natTo9080: boolean;
+        captiveApiDstnat: boolean;
+      }
+    | { error: string };
   kicked?: string | null;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
@@ -3270,9 +3370,23 @@ export async function repairNonPaymentHttpRedirectViaScript(
   const username = String(opts.username || '').trim();
 
   // 0) NAT via API first (does not touch /ip/proxy — survives wedged proxy).
-  let nat: { ok: true; addressList: boolean; natHttpRedirect: boolean } | { error: string };
+  let nat:
+    | {
+        ok: true;
+        addressList: boolean;
+        natHttpRedirect: boolean;
+        natTo9080: boolean;
+        captiveApiDstnat: boolean;
+      }
+    | { error: string };
   try {
-    nat = await repairNonPaymentNatRedirect(conn, { nonPayCidr, proxyPort });
+    nat = await repairNonPaymentNatRedirect(conn, {
+      nonPayCidr,
+      proxyPort,
+      billingLanIp: opts.billingLanIp,
+      landingAddress: opts.landingAddress,
+      captiveApiPort: opts.captiveApiPort,
+    });
   } catch (e: any) {
     nat = { error: e?.message || String(e) };
   }
@@ -3318,11 +3432,13 @@ export async function repairNonPaymentHttpRedirectViaScript(
     portalRedirectUrl: portal,
     username: username || undefined,
     removeSchedulerName: CAPTIVE_FIX_ONCE,
+    skipProxyCommands: true,
   });
   const watchSource = buildCaptiveEnsureScriptSource({
     nonPayCidr,
     proxyPort,
     portalRedirectUrl: portal,
+    skipProxyCommands: true,
   });
 
   // Separate API sessions so a hung remove/set cannot poison PPP kick.
@@ -4574,6 +4690,7 @@ export async function configureNonPaymentWebProxy(
           portalRedirectUrl:
             String(opts.portalRedirectUrl || '').trim() ||
             (billingHost ? `https://${billingHost}/portal` : 'https://panorth.tsogs.cloud/portal'),
+          skipProxyCommands: true,
         });
         await upsertSystemScript(
           api,

@@ -301,6 +301,42 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
+/**
+ * Captive portal for non-payment PPPoE clients (pool 172.15.10.0/24).
+ * MikroTik dstnats their HTTP :80 → landing:9080 → this panel. Any Host
+ * header (example.com, etc.) must still land on /portal or error.html —
+ * otherwise there is no visible "redirect".
+ */
+app.use((req, res, next) => {
+  const xff = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  const raw = (xff || req.ip || req.socket.remoteAddress || '').replace(/^::ffff:/i, '');
+  if (!/^172\.15\.10\.\d{1,3}$/.test(raw)) return next();
+  const p = String(req.path || '');
+  if (
+    p.startsWith('/api') ||
+    p.startsWith('/portal') ||
+    p === '/error.html' ||
+    p.startsWith('/assets/') ||
+    p.startsWith('/cdn-cgi/')
+  ) {
+    return next();
+  }
+  const base =
+    String(process.env.PUBLIC_BASE_URL || '')
+      .trim()
+      .replace(/\/$/, '') || 'https://panorth.tsogs.cloud';
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    // Prefer the interstitial page (CTA → portal); absolute URL so Host: example.com still works.
+    if (p === '/' || p === '') {
+      return res.redirect(302, `${base}/error.html`);
+    }
+    return res.redirect(302, `${base}/portal`);
+  }
+  return res.redirect(302, `${base}/portal`);
+});
+
 // Never let Cloudflare / intermediate proxies cache authenticated API JSON —
 // LAN vs tunnel looking "different" is almost always a stale edge cache.
 app.use('/api', (_req, res, next) => {

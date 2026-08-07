@@ -987,6 +987,9 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         proxyPort: b.proxyPort,
         portalRedirectUrl: `${publicBase}/portal`,
         username: kickUser || undefined,
+        billingLanIp: lanIp || '192.168.0.120',
+        landingAddress: b.landingAddress,
+        captiveApiPort: b.captiveApiPort,
       });
       repair = {
         ok: true as const,
