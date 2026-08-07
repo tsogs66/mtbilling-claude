@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect, repairNonPaymentHttpRedirectViaScript } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, ensureCaptiveWatchSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect, repairNonPaymentHttpRedirectViaScript } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -996,8 +996,20 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         portalRedirectTo: `${publicBase}/portal`,
         kicked: viaScript.kicked ?? null,
         viaScript: viaScript.ran,
+        scheduledAt: viaScript.scheduledAt || null,
+        watch: viaScript.watch || null,
       } as any;
     } catch (scriptErr: any) {
+      // Last resort: direct API (may hang on /ip/proxy) + still install watch.
+      try {
+        await ensureCaptiveWatchSystemScript(conn, {
+          nonPayCidr: b.nonPayCidr,
+          proxyPort: b.proxyPort,
+          portalRedirectUrl: `${publicBase}/portal`,
+        });
+      } catch {
+        /* ignore */
+      }
       repair = await repairNonPaymentHttpRedirect(conn, {
         nonPayCidr: b.nonPayCidr,
         proxyPort: b.proxyPort,

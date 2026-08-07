@@ -2755,18 +2755,57 @@ export async function inspectNonPaymentCaptive(
   return withRouter(
     conn,
     async (api) => {
-      const proxy = ((await api.write('/ip/proxy/print')) as Record<string, string>[])?.[0] || {};
-      const access = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
-      const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
-      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
-      const pools = (await api.write('/ip/pool/print')) as Record<string, string>[];
-      const profiles = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+      // PPP first (reliable). /ip/proxy/* often hangs on this board — race it.
       const secrets = username
-        ? ((await api.write('/ppp/secret/print', [`?name=${username}`])) as Record<string, string>[])
+        ? ((await raceApi(
+            api.write('/ppp/secret/print', [`?name=${username}`]),
+            8_000,
+            'secret-print'
+          ).catch(() => [])) as Record<string, string>[])
         : [];
       const active = username
-        ? ((await api.write('/ppp/active/print', [`?name=${username}`])) as Record<string, string>[])
+        ? ((await raceApi(
+            api.write('/ppp/active/print', [`?name=${username}`]),
+            8_000,
+            'active-print'
+          ).catch(() => [])) as Record<string, string>[])
         : [];
+      const profiles = (await raceApi(
+        api.write('/ppp/profile/print'),
+        8_000,
+        'profile-print'
+      ).catch(() => [])) as Record<string, string>[];
+      const pools = (await raceApi(api.write('/ip/pool/print'), 8_000, 'pool-print').catch(
+        () => []
+      )) as Record<string, string>[];
+      const nats = (await raceApi(
+        api.write('/ip/firewall/nat/print'),
+        10_000,
+        'nat-print'
+      ).catch(() => [])) as Record<string, string>[];
+      const addrList = (await raceApi(
+        api.write('/ip/firewall/address-list/print'),
+        8_000,
+        'addr-print'
+      ).catch(() => [])) as Record<string, string>[];
+
+      let proxy: Record<string, string> = {};
+      let access: Record<string, string>[] = [];
+      let proxyError: string | null = null;
+      try {
+        proxy =
+          ((await raceApi(api.write('/ip/proxy/print'), 6_000, 'proxy-print')) as Record<
+            string,
+            string
+          >[])?.[0] || {};
+        access = (await raceApi(
+          api.write('/ip/proxy/access/print'),
+          6_000,
+          'proxy-access-print'
+        )) as Record<string, string>[];
+      } catch (e: any) {
+        proxyError = e?.message || String(e);
+      }
 
       const httpRedirects = (nats || []).filter((n) =>
         isWorkingNonPayHttpRedirect(n, { nonPayCidr, nonPayAddressList, proxyPort })
@@ -2776,6 +2815,7 @@ export async function inspectNonPaymentCaptive(
         return (
           c === NONPAY_NAT.httpRedirect ||
           c === NONPAY_NAT.httpRedirectCidr ||
+          c === 'mtb-cidr-redir' ||
           c === 'non-payment'
         );
       });
@@ -2783,6 +2823,7 @@ export async function inspectNonPaymentCaptive(
       const pool =
         (pools || []).find((p) => String(p.name || '') === NONPAY_POOL_NAME) ||
         (pools || []).find((p) => String(p.name || '') === String(profile?.['remote-address'] || '')) ||
+        (pools || []).find((p) => String(p.name || '') === profileName) ||
         null;
 
       const secret = secrets?.[0] || null;
@@ -2809,23 +2850,43 @@ export async function inspectNonPaymentCaptive(
           }
         })();
 
-      const files = (await api.write('/file/print', ['=.proplist=name,size'])) as Record<
-        string,
-        string
-      >[];
-      const errorHtml = (files || []).find((f) => {
-        const n = String(f.name || '');
-        return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
-      });
+      let errorHtml: { name: string; size: number } | null = null;
+      try {
+        const files = (await raceApi(
+          api.write('/file/print', ['=.proplist=name,size']),
+          6_000,
+          'file-print'
+        )) as Record<string, string>[];
+        const hit = (files || []).find((f) => {
+          const n = String(f.name || '');
+          return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+        });
+        if (hit) errorHtml = { name: hit.name, size: Number(hit.size || 0) };
+      } catch {
+        /* ignore */
+      }
+
+      const portalRedirect = (access || []).find(
+        (r) =>
+          !rosBool(r.disabled) &&
+          (String(r.comment || '') === 'mtb-portal-redir' ||
+            String(r.comment || '') === NONPAY_PROXY.redirectPortal) &&
+          String(r['redirect-to'] || '').length > 0
+      );
 
       return {
         proxy: {
           enabled: proxy.enabled,
           port: proxy.port,
           anonymous: proxy.anonymous,
+          error: proxyError,
         },
         proxyAccess: (access || [])
-          .filter((r) => String(r['src-address'] || '') === nonPayCidr || /nonpay|non-pay/i.test(String(r.comment || '')))
+          .filter(
+            (r) =>
+              String(r['src-address'] || '') === nonPayCidr ||
+              /nonpay|non-pay|mtb-portal/i.test(String(r.comment || ''))
+          )
           .map((r) => ({
             id: r['.id'],
             action: r.action,
@@ -2836,6 +2897,7 @@ export async function inspectNonPaymentCaptive(
             comment: r.comment,
             disabled: rosBool(r.disabled),
           })),
+        portalRedirectTo: portalRedirect ? String(portalRedirect['redirect-to'] || '') : null,
         addressList: (addrList || [])
           .filter((r) => String(r.list || '') === nonPayAddressList)
           .map((r) => ({
@@ -2873,9 +2935,7 @@ export async function inspectNonPaymentCaptive(
         pool: pool
           ? { name: pool.name, ranges: pool.ranges, comment: pool.comment }
           : null,
-        errorHtml: errorHtml
-          ? { name: errorHtml.name, size: Number(errorHtml.size || 0) }
-          : null,
+        errorHtml,
         secret: secret
           ? {
               name: secret.name,
@@ -2906,27 +2966,25 @@ export async function inspectNonPaymentCaptive(
                   ? 'Secret looks ready but offline — connect CPE then browse http://example.com'
                   : httpRedirects.length === 0
                     ? 'No working HTTP→webproxy NAT redirect'
-                    : 'Looks configured — try plain HTTP (not HTTPS) or wait for HTTPS fail-fast'
-            ,
+                    : !portalRedirect
+                      ? 'NAT OK but no proxy deny+redirect-to portal rule — run captive repair'
+                      : 'Looks configured — try plain HTTP (not HTTPS) or wait for HTTPS fail-fast',
       };
     },
-    { timeoutSec: 25 }
+    { timeoutSec: 35 }
   );
 }
 
-/**
- * Apply captive redirect via /system/script/run — avoids hung /ip/proxy API
- * print/set sessions observed on the live board.
- */
-export async function repairNonPaymentHttpRedirectViaScript(
-  conn: RouterConn,
-  opts: {
-    nonPayCidr?: string;
-    proxyPort?: number;
-    portalRedirectUrl?: string;
-    username?: string;
-  } = {}
-): Promise<{ ok: true; ran: string; kicked?: string | null }> {
+/** RouterOS script body: enable webproxy + HTTP NAT + portal redirect (idempotent). */
+export function buildCaptiveEnsureScriptSource(opts: {
+  nonPayCidr?: string;
+  proxyPort?: number;
+  portalRedirectUrl?: string;
+  /** When set, also force this PPP secret onto non-payments and kick it. */
+  username?: string;
+  /** Remove this one-shot scheduler name at the end (if any). */
+  removeSchedulerName?: string;
+}): string {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
@@ -2934,10 +2992,10 @@ export async function repairNonPaymentHttpRedirectViaScript(
     .replace(/\/$/, '');
   const httpPortal = portal.replace(/^https:\/\//i, 'http://');
   const username = String(opts.username || '').trim();
-  const scriptName = 'mtb-fix-captive';
   const u = rosScriptEscape(username);
+  const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
 
-  const source =
+  return (
     `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};` +
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
@@ -2947,55 +3005,287 @@ export async function repairNonPaymentHttpRedirectViaScript(
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
-      : '');
+      : '') +
+    (sched
+      ? `:do {/system scheduler remove [find name="${sched}"]} on-error={};`
+      : '')
+  );
+}
 
-  return withRouter(
-    conn,
-    async (api) => {
-      await removeSystemScriptByName(api, scriptName);
-      await removeSchedulerByName(api, 'mtb-fix-once');
-      await api.write('/system/script/add', [
-        `=name=${scriptName}`,
+const CAPTIVE_WATCH_SCRIPT = 'mtb-captive-watch';
+const CAPTIVE_WATCH_SCHEDULER = 'mtb-captive-watch';
+const CAPTIVE_FIX_SCRIPT = 'mtb-fix-captive';
+const CAPTIVE_FIX_ONCE = 'mtb-fix-once';
+
+async function upsertSystemScript(
+  api: RouterOSAPI,
+  name: string,
+  source: string,
+  comment: string
+): Promise<void> {
+  // Prefer set — avoids hung remove + "already exists" races on busy boards.
+  try {
+    await raceApi(
+      api.write('/system/script/set', [
+        `=numbers=${name}`,
         `=source=${source}`,
         '=dont-require-permissions=yes',
-        '=comment=MT-Billing one-shot captive redirect repair',
-      ]);
-      // Do not /system/script/run — proxy set can block the API session.
-      // Schedule a one-shot that RouterOS executes independently.
-      await api.write('/system/scheduler/add', [
-        '=name=mtb-fix-once',
-        `=on-event=${scriptName}`,
-        '=start-time=00:00:01',
-        '=interval=0',
-        '=comment=MT-Billing captive repair once',
-      ]);
-      if (username) {
-        try {
-          const actives = (await api.write('/ppp/active/print', [
-            `?name=${username}`,
-            '=.proplist=.id,name',
-          ])) as Record<string, string>[];
-          for (const a of actives || []) {
-            if (!a['.id']) continue;
-            try {
-              await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
-            } catch {
-              /* ignore */
-            }
-          }
-          await api.write('/ppp/secret/set', [
-            `=numbers=${username}`,
-            '=profile=non-payments',
-            '=disabled=no',
-          ]);
-        } catch {
-          /* best-effort */
-        }
-      }
-      return { ok: true as const, ran: scriptName, kicked: username || null };
-    },
-    { timeoutSec: 20 }
+        `=comment=${comment}`,
+      ]),
+      10_000,
+      'script-set'
+    );
+    return;
+  } catch {
+    /* missing — add below */
+  }
+  await raceApi(
+    api.write('/system/script/add', [
+      `=name=${name}`,
+      `=source=${source}`,
+      '=dont-require-permissions=yes',
+      `=comment=${comment}`,
+    ]),
+    10_000,
+    'script-add'
   );
+}
+
+/**
+ * Recurring captive ensure (every 5m). Self-heals webproxy NAT + portal
+ * redirect without depending on a one-shot that may be stuck at midnight.
+ */
+export async function ensureCaptiveWatchSystemScript(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    portalRedirectUrl?: string;
+    interval?: string;
+  } = {}
+): Promise<{ script: string; scheduler: string; interval: string }> {
+  const interval = opts.interval || '00:05:00';
+  const source = buildCaptiveEnsureScriptSource({
+    nonPayCidr: opts.nonPayCidr,
+    proxyPort: opts.proxyPort,
+    portalRedirectUrl: opts.portalRedirectUrl,
+  });
+  await withRouter(
+    conn,
+    async (api) => {
+      await upsertSystemScript(
+        api,
+        CAPTIVE_WATCH_SCRIPT,
+        source,
+        'MT-Billing captive webproxy ensure (NAT + portal redirect)'
+      );
+      await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+      try {
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+            '=comment=MT-Billing captive watch',
+          ]),
+          8_000,
+          'captive-watch-sched-add'
+        );
+      } catch {
+        await raceApi(
+          api.write('/system/scheduler/set', [
+            `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+            '=comment=MT-Billing captive watch',
+            '=disabled=no',
+          ]),
+          8_000,
+          'captive-watch-sched-set'
+        );
+      }
+    },
+    { timeoutSec: 25 }
+  );
+  return { script: CAPTIVE_WATCH_SCRIPT, scheduler: CAPTIVE_WATCH_SCHEDULER, interval };
+}
+
+/**
+ * Apply captive redirect via a near-future one-shot scheduler — avoids hung
+ * /ip/proxy API sessions. IMPORTANT: must use router clock + start-date/time
+ * a few seconds ahead. `start-time=00:00:01` alone sits until next midnight
+ * and never repairs the live board.
+ */
+export async function repairNonPaymentHttpRedirectViaScript(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    portalRedirectUrl?: string;
+    username?: string;
+  } = {}
+): Promise<{
+  ok: true;
+  ran: string;
+  scheduledAt?: string;
+  watch?: string;
+  kicked?: string | null;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
+    .trim()
+    .replace(/\/$/, '');
+  const username = String(opts.username || '').trim();
+
+  const fixSource = buildCaptiveEnsureScriptSource({
+    nonPayCidr,
+    proxyPort,
+    portalRedirectUrl: portal,
+    username: username || undefined,
+    removeSchedulerName: CAPTIVE_FIX_ONCE,
+  });
+  const watchSource = buildCaptiveEnsureScriptSource({
+    nonPayCidr,
+    proxyPort,
+    portalRedirectUrl: portal,
+  });
+
+  // Separate API sessions so a hung remove/set cannot poison PPP kick.
+  let scheduledAt = '';
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        await upsertSystemScript(
+          api,
+          CAPTIVE_FIX_SCRIPT,
+          fixSource,
+          'MT-Billing one-shot captive redirect repair'
+        );
+        await upsertSystemScript(
+          api,
+          CAPTIVE_WATCH_SCRIPT,
+          watchSource,
+          'MT-Billing captive webproxy ensure (NAT + portal redirect)'
+        );
+      },
+      { timeoutSec: 22 }
+    );
+  } catch {
+    /* continue — watch/schedule may still work */
+  }
+
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
+        const offsetMs = await getRouterClockOffsetMs(api);
+        // Fire ~8s from now on the router's own clock (not midnight).
+        const when = new Date(Date.now() + 8_000);
+        const fields = rosScheduleFields(when, offsetMs);
+        scheduledAt = `${fields.date} ${fields.time}`;
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${CAPTIVE_FIX_ONCE}`,
+            `=start-date=${fields.date}`,
+            `=start-time=${fields.time}`,
+            '=interval=0',
+            `=on-event=${CAPTIVE_FIX_SCRIPT}`,
+            '=comment=MT-Billing captive repair once',
+          ]),
+          8_000,
+          'fix-once-add'
+        );
+        // Recurring self-heal (idempotent).
+        await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+        try {
+          await raceApi(
+            api.write('/system/scheduler/add', [
+              `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=comment=MT-Billing captive watch',
+            ]),
+            8_000,
+            'watch-sched-add'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/scheduler/set', [
+              `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=disabled=no',
+            ]),
+            8_000,
+            'watch-sched-set'
+          );
+        }
+      },
+      { timeoutSec: 22 }
+    );
+  } catch {
+    /* PPP kick below may still help once watch exists from a prior run */
+  }
+
+  let kicked: string | null = null;
+  if (username) {
+    try {
+      await withRouter(
+        conn,
+        async (api) => {
+          try {
+            await raceApi(
+              api.write('/ppp/secret/set', [
+                `=numbers=${username}`,
+                '=profile=non-payments',
+                '=disabled=no',
+              ]),
+              8_000,
+              'secret-set'
+            );
+          } catch {
+            /* ignore */
+          }
+          try {
+            const actives = (await raceApi(
+              api.write('/ppp/active/print', [`?name=${username}`, '=.proplist=.id,name']),
+              8_000,
+              'active-print'
+            )) as Record<string, string>[];
+            for (const a of actives || []) {
+              if (!a['.id']) continue;
+              try {
+                await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          kicked = username;
+        },
+        { timeoutSec: 15 }
+      );
+    } catch {
+      kicked = null;
+    }
+  }
+
+  return {
+    ok: true as const,
+    ran: CAPTIVE_FIX_SCRIPT,
+    scheduledAt: scheduledAt || undefined,
+    watch: CAPTIVE_WATCH_SCRIPT,
+    kicked,
+  };
 }
 
 /**
@@ -3274,6 +3564,7 @@ export async function configureNonPaymentWebProxy(
   errorHtmlSource?: string | null;
   errorHtmlBytes?: number;
   billingExpireScript?: { script: string; scheduler: string; interval: string } | null;
+  captiveWatchScript?: { script: string; scheduler: string; interval: string } | null;
   firewallLockdown: boolean;
   firewallAdded: string[];
   firewallSkipped: string[];
@@ -4097,6 +4388,59 @@ export async function configureNonPaymentWebProxy(
         billingExpireScript = null;
       }
 
+      // Recurring captive watch — keeps NAT + portal redirect healthy even if
+      // a one-shot repair was scheduled for the wrong clock time.
+      let captiveWatchScript: { script: string; scheduler: string; interval: string } | null =
+        null;
+      try {
+        const watchSource = buildCaptiveEnsureScriptSource({
+          nonPayCidr,
+          proxyPort,
+          portalRedirectUrl:
+            String(opts.portalRedirectUrl || '').trim() ||
+            (billingHost ? `https://${billingHost}/portal` : 'https://panorth.tsogs.cloud/portal'),
+        });
+        await upsertSystemScript(
+          api,
+          CAPTIVE_WATCH_SCRIPT,
+          watchSource,
+          'MT-Billing captive webproxy ensure (NAT + portal redirect)'
+        );
+        await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+        try {
+          await raceApi(
+            api.write('/system/scheduler/add', [
+              `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=comment=MT-Billing captive watch',
+            ]),
+            6_000,
+            'add-captive-watch'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/scheduler/set', [
+              `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=disabled=no',
+            ]),
+            6_000,
+            'set-captive-watch'
+          );
+        }
+        captiveWatchScript = {
+          script: CAPTIVE_WATCH_SCRIPT,
+          scheduler: CAPTIVE_WATCH_SCHEDULER,
+          interval: '00:05:00',
+        };
+      } catch {
+        captiveWatchScript = null;
+      }
+
       return {
         ok: true as const,
         nonPayCidr,
@@ -4108,6 +4452,7 @@ export async function configureNonPaymentWebProxy(
         errorHtmlSource,
         errorHtmlBytes,
         billingExpireScript,
+        captiveWatchScript,
         firewallLockdown: lockdownFirewall,
         firewallAdded,
         firewallSkipped,
