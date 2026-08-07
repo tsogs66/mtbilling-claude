@@ -1944,6 +1944,20 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
   });
 
+  // Manual restore to Active must clear non-payment markers (payment path already does).
+  {
+    const nextStatus = String((b.status ?? existing.status) || '')
+      .toLowerCase()
+      .replace(/\s+/g, '-');
+    if (nextStatus === 'active') {
+      db.prepare('UPDATE pppoe_users SET nonpayment_since = NULL WHERE id = ?').run(id);
+    } else if (nextStatus === 'non-payment' || nextStatus === 'nonpayment') {
+      db.prepare(
+        `UPDATE pppoe_users SET nonpayment_since = COALESCE(nonpayment_since, ?) WHERE id = ?`
+      ).run(new Date().toISOString(), id);
+    }
+  }
+
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   // Keep / create portal credentials when account # + phone are available.
   try {
@@ -5098,7 +5112,13 @@ app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const preview = previewBillingEnforcement({ service });
   // Skip mass MikroTik schedule refresh on HTTP recheck — that path routinely
   // exceeds Cloudflare's ~100s limit (524) before expire/restore finishes.
-  const runOpts = { service, forceDisable: true as const, ensureSchedules: false as const };
+  const runOpts = {
+    service,
+    forceDisable: true as const,
+    ensureSchedules: false as const,
+    sendNotices: false as const,
+    routerConcurrency: 2 as const,
+  };
   if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
     const result = await executeBillingEnforcement(runOpts);
     return res.json({
