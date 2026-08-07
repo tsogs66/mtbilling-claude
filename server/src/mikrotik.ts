@@ -2413,6 +2413,7 @@ const NONPAY_FW = {
 const NONPAY_PROXY = {
   allowLanding: 'MT-Billing nonpay allow landing',
   denyCaptive: 'MT-Billing nonpay captive deny',
+  redirectPortal: 'MT-Billing nonpay redirect portal',
 } as const;
 
 /** Management networks allowed to open WebFig / Winbox / SSH. */
@@ -2611,15 +2612,28 @@ export async function ensureNonPaymentCaptiveProfile(
   updatedProfile: boolean;
 }> {
   const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
-  const poolName = String(opts.poolName || NONPAY_POOL_NAME).trim() || NONPAY_POOL_NAME;
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const rateLimit = String(opts.rateLimit || '2M/2M').trim();
   const poolRanges = cidrToPoolRanges(nonPayCidr) || '172.15.10.2-172.15.10.254';
+  const cidrPrefix = nonPayCidr.split('/')[0].split('.').slice(0, 3).join('.');
 
   let createdPool = false;
   const pools = (await api.write('/ip/pool/print')) as Record<string, string>[];
-  const poolRow = (pools || []).find((p) => String(p.name || '') === poolName);
+  // Prefer an existing pool already covering the captive CIDR (often named "non-payments").
+  const preferredNames = [
+    String(opts.poolName || '').trim(),
+    profileName,
+    NONPAY_POOL_NAME,
+    'non-payments',
+    'non-payment',
+  ].filter(Boolean);
+  let poolRow =
+    (pools || []).find((p) => preferredNames.includes(String(p.name || ''))) ||
+    (pools || []).find((p) => String(p.ranges || '').includes(cidrPrefix)) ||
+    null;
+  let poolName = poolRow ? String(poolRow.name || '') : String(opts.poolName || NONPAY_POOL_NAME).trim() || NONPAY_POOL_NAME;
+
   if (!poolRow) {
     await api.write('/ip/pool/add', [
       `=name=${poolName}`,
@@ -2629,12 +2643,15 @@ export async function ensureNonPaymentCaptiveProfile(
     createdPool = true;
   } else {
     const ranges = String(poolRow.ranges || '');
-    // If pool exists but is empty / unrelated, realign to non-pay CIDR.
-    if (!ranges || !ranges.includes(nonPayCidr.split('/')[0].split('.').slice(0, 3).join('.'))) {
+    if (!ranges.includes(cidrPrefix)) {
       try {
-        await api.write('/ip/pool/set', [`=.id=${poolRow['.id']}`, `=ranges=${poolRanges}`]);
+        await raceApi(
+          api.write('/ip/pool/set', [`=.id=${poolRow['.id']}`, `=ranges=${poolRanges}`]),
+          5_000,
+          'pool-set'
+        );
       } catch {
-        /* keep existing ranges if in use */
+        /* keep existing ranges if in use by active PPP */
       }
     }
   }
@@ -2656,14 +2673,19 @@ export async function ensureNonPaymentCaptiveProfile(
     const remote = String(prof['remote-address'] || '');
     const local = String(prof['local-address'] || '');
     const args = [`=.id=${prof['.id']}`];
-    // Force pool so non-pay secrets land in the captive CIDR.
-    if (remote !== poolName && remote !== nonPayCidr) {
-      args.push(`=remote-address=${poolName}`);
-    }
+    // Only rewrite remote-address when it does not already point at the captive pool/CIDR.
+    const remoteOk =
+      remote === poolName ||
+      remote === nonPayCidr ||
+      preferredNames.includes(remote) ||
+      (pools || []).some(
+        (p) => String(p.name || '') === remote && String(p.ranges || '').includes(cidrPrefix)
+      );
+    if (!remoteOk) args.push(`=remote-address=${poolName}`);
     if (!local) args.push(`=local-address=${landingAddress}`);
     if (!String(prof['rate-limit'] || '') && rateLimit) args.push(`=rate-limit=${rateLimit}`);
     if (args.length > 1) {
-      await api.write('/ppp/profile/set', args);
+      await raceApi(api.write('/ppp/profile/set', args), 8_000, 'profile-set');
       updatedProfile = true;
     }
   }
@@ -2787,6 +2809,7 @@ export async function inspectNonPaymentCaptive(
             src: r['src-address'],
             dstHost: r['dst-host'],
             dstAddress: r['dst-address'],
+            redirectTo: r['redirect-to'] || '',
             comment: r.comment,
             disabled: rosBool(r.disabled),
           })),
@@ -2879,6 +2902,11 @@ export type NonPaymentWebProxyOpts = {
   allowHosts?: string[];
   /** Absolute URL of error.html — fetched onto the router as error.html when set. */
   errorPageUrl?: string;
+  /**
+   * Absolute portal URL used for webproxy action=redirect (HTTP captive).
+   * Prefer this over deny→error.html when browsers ignore the interstitial file.
+   */
+  portalRedirectUrl?: string;
   proxyPort?: number;
   /**
    * When true (default), ensure forward firewall lockdown so non-pay clients
@@ -3121,18 +3149,81 @@ export async function configureNonPaymentWebProxy(
         existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
       }
 
-      // Final deny → MikroTik serves webproxy/error.html (portal CTA).
-      let proxyDeny = (existing || []).some(
+      // Final catch-all: REDIRECT browser to subscriber portal (clear "redirection"
+      // behavior). Keep deny as fallback if redirect-to is unsupported on older ROS.
+      const portalRedirectUrl = String(
+        opts.portalRedirectUrl ||
+          (opts.billingHost ? `https://${opts.billingHost}/portal` : '') ||
+          'https://panorth.tsogs.cloud/portal'
+      )
+        .trim()
+        .replace(/\/$/, '');
+      const portalRedirectTarget = portalRedirectUrl.endsWith('/portal')
+        ? portalRedirectUrl
+        : `${portalRedirectUrl}/portal`;
+
+      // Remove stale deny-only catch-all so redirect can take effect (idempotent).
+      for (const row of [...(existing || [])]) {
+        const action = String(row.action || '').toLowerCase();
+        const src = String(row['src-address'] || '');
+        const cmt = String(row.comment || '');
+        if (src !== nonPayCidr) continue;
+        if (action !== 'deny' && action !== 'redirect') continue;
+        if (
+          cmt !== NONPAY_PROXY.denyCaptive &&
+          cmt !== NONPAY_PROXY.redirectPortal &&
+          action !== 'deny'
+        ) {
+          continue;
+        }
+        // Replace untagged/deny catch-alls and our own redirect/deny markers.
+        if (
+          cmt === NONPAY_PROXY.denyCaptive ||
+          cmt === NONPAY_PROXY.redirectPortal ||
+          (action === 'deny' && !String(row['dst-host'] || '') && !String(row['dst-address'] || ''))
+        ) {
+          const id = row['.id'];
+          if (!id) continue;
+          try {
+            await api.write('/ip/proxy/access/remove', [`=.id=${id}`]);
+            const idx = existing.indexOf(row);
+            if (idx >= 0) existing.splice(idx, 1);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      let proxyDeny = false;
+      const hasPortalRedirect = (existing || []).some(
         (r) =>
-          String(r.action || '').toLowerCase() === 'deny' &&
-          String(r['src-address'] || '') === nonPayCidr
+          String(r.action || '').toLowerCase() === 'redirect' &&
+          String(r['src-address'] || '') === nonPayCidr &&
+          !rosBool(r.disabled)
       );
-      if (!proxyDeny) {
-        await api.write('/ip/proxy/access/add', [
-          `=src-address=${nonPayCidr}`,
-          '=action=deny',
-          `=comment=${NONPAY_PROXY.denyCaptive}`,
-        ]);
+      if (!hasPortalRedirect) {
+        try {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            '=action=redirect',
+            `=redirect-to=${portalRedirectTarget}`,
+            `=comment=${NONPAY_PROXY.redirectPortal}`,
+          ]);
+          proxyDeny = true; // catch-all present (redirect)
+          existing.push({
+            action: 'redirect',
+            'src-address': nonPayCidr,
+            comment: NONPAY_PROXY.redirectPortal,
+          });
+        } catch {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            '=action=deny',
+            `=comment=${NONPAY_PROXY.denyCaptive}`,
+          ]);
+          proxyDeny = true;
+        }
+      } else {
         proxyDeny = true;
       }
 
@@ -3141,13 +3232,34 @@ export async function configureNonPaymentWebProxy(
       let fetchedErrorHtml = false;
       let errorHtmlSource: string | null = null;
       let errorHtmlBytes = 0;
+      try {
+        const existingFiles = (await raceApi(
+          api.write('/file/print', ['=.proplist=name,size']),
+          6_000,
+          'file-print-pre'
+        )) as Record<string, string>[];
+        const existingHtml = (existingFiles || []).find((f) => {
+          const n = String(f.name || '');
+          return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+        });
+        const existingSize = Number(existingHtml?.size || 0);
+        if (existingSize >= 1500) {
+          fetchedErrorHtml = true;
+          errorHtmlSource = 'already-on-router';
+          errorHtmlBytes = existingSize;
+        }
+      } catch {
+        /* fetch below */
+      }
       const errorPageUrl = String(opts.errorPageUrl || '').trim();
       const fetchCandidates: string[] = [];
-      for (const ip of billingLanIps.slice(0, 2)) {
-        fetchCandidates.push(`http://${ip}/error.html`);
-      }
-      if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
-        fetchCandidates.push(errorPageUrl);
+      if (!fetchedErrorHtml) {
+        for (const ip of billingLanIps.slice(0, 2)) {
+          fetchCandidates.push(`http://${ip}/error.html`);
+        }
+        if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
+          fetchCandidates.push(errorPageUrl);
+        }
       }
       for (const url of [...new Set(fetchCandidates)]) {
         try {

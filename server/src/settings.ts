@@ -982,6 +982,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
       billingHost,
       allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
       errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
+      portalRedirectUrl: `${publicBase}/portal`,
       proxyPort: b.proxyPort,
       lockdownFirewall: b.lockdownFirewall !== false,
       nonPayAddressList: b.nonPayAddressList,
