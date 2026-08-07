@@ -946,6 +946,13 @@ export async function executeBillingEnforcement(opts?: {
    * Default true (background scheduler / full runs).
    */
   ensureSchedules?: boolean;
+  /**
+   * When false, skip expiry-reminder / non-payment / disable SMS+email.
+   * Manual HTTP recheck should set this false — Semaphore/SMTP fan-out
+   * routinely exceeds Cloudflare's ~100s proxy limit (524).
+   * Default true (background automations).
+   */
+  sendNotices?: boolean;
   /** Cap concurrent MikroTik syncs (expire/restore/disable). */
   routerConcurrency?: number;
 }): Promise<{
@@ -964,6 +971,7 @@ export async function executeBillingEnforcement(opts?: {
   const now = Date.now();
   const forceDisable = !!opts?.forceDisable;
   const ensureSchedules = opts?.ensureSchedules !== false;
+  const sendNotices = opts?.sendNotices !== false;
   const routerConcurrency = Math.max(1, Math.min(8, Number(opts?.routerConcurrency) || 3));
   const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
   const summary = {
@@ -1060,6 +1068,7 @@ export async function executeBillingEnforcement(opts?: {
       ? Math.max(1, Number(portalPrefs.due_reminder_days) || s.days_before)
       : s.days_before;
     const reminderAllowed =
+      sendNotices &&
       s.reminder_enabled &&
       (!portalPrefs || Number(portalPrefs.due_reminder_enabled) === 1) &&
       st === 'active' &&
@@ -1163,19 +1172,21 @@ export async function executeBillingEnforcement(opts?: {
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
-      const channels: ('email' | 'sms')[] = [];
-      if (s.email_enabled) channels.push('email');
-      if (s.sms_enabled) channels.push('sms');
-      if (channels.length) {
-        let payUrl = '';
-        try {
-          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-        } catch {
-          /* optional */
+      if (sendNotices) {
+        const channels: ('email' | 'sms')[] = [];
+        if (s.email_enabled) channels.push('email');
+        if (s.sms_enabled) channels.push('sms');
+        if (channels.length) {
+          let payUrl = '';
+          try {
+            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+          } catch {
+            /* optional */
+          }
+          const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
+          await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
         }
-        const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
-        await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
       }
       return;
     }
@@ -1204,18 +1215,20 @@ export async function executeBillingEnforcement(opts?: {
         hoursInNonPayment: classified.hoursOverdue,
       });
 
-      const channels: ('email' | 'sms')[] = [];
-      if (s.email_enabled) channels.push('email');
-      if (s.sms_enabled) channels.push('sms');
-      let payUrl = '';
-      try {
-        const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-        payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-      } catch {
-        /* optional */
+      if (sendNotices) {
+        const channels: ('email' | 'sms')[] = [];
+        if (s.email_enabled) channels.push('email');
+        if (s.sms_enabled) channels.push('sms');
+        let payUrl = '';
+        try {
+          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+        } catch {
+          /* optional */
+        }
+        const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
+        if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
       }
-      const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
-      if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'warning',
         'billing',

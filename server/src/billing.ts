@@ -990,7 +990,9 @@ export async function recordPppoePayment(
 
   // Drop any pending grace/disable one-shots from the previous due date before
   // restoring the plan profile — then provision a fresh schedule for the new due.
-  cancelRouterExpirySchedule(user).catch(() => undefined);
+  // Await cancel so a stale router scheduler cannot race the restore and flip
+  // the secret back to non-payments after payment.
+  await cancelRouterExpirySchedule(user).catch(() => undefined);
 
   // The payment itself (DB update above) is already committed at this point.
   // A slow/unreachable router must never hold up the HTTP response for it —
