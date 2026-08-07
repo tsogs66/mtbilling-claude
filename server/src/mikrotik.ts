@@ -2110,6 +2110,8 @@ const NONPAY_NAT = {
   httpRedirect: 'MT-Billing nonpay HTTP redirect',
   httpsAllow: 'MT-Billing nonpay HTTPS allow',
   httpsRedirect: 'MT-Billing nonpay HTTPS redirect',
+  dnsBypassUdp: 'MT-Billing nonpay DNS bypass AdGuard',
+  dnsBypassTcp: 'MT-Billing nonpay DNS bypass AdGuard TCP',
 } as const;
 const NONPAY_FW = {
   https: 'MT-Billing nonpay allow HTTPS billing',
@@ -2117,6 +2119,8 @@ const NONPAY_FW = {
   dnsTcp: 'MT-Billing nonpay allow DNS TCP',
   http: 'MT-Billing nonpay allow HTTP captive',
   proxyInput: 'MT-Billing nonpay allow proxy input',
+  rejectTcp: 'MT-Billing nonpay reject TCP fast',
+  rejectQuic: 'MT-Billing nonpay reject QUIC fast',
   drop: 'MT-Billing nonpay drop other',
 } as const;
 const NONPAY_PROXY = {
@@ -2563,6 +2567,24 @@ export async function configureNonPaymentWebProxy(
         natHttpsAllow = true;
       }
 
+      // Bypass global DNS hijack (e.g. AdGuard) for non-pay — use profile DNS fast.
+      const ensureDnsBypass = async (comment: string, proto: 'udp' | 'tcp') => {
+        if (hasNatComment(comment)) return;
+        const adguardId =
+          (nats || []).find((n) => /adguard/i.test(String(n.comment || '')))?.['.id'] || '';
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=accept',
+          `=protocol=${proto}`,
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+          `=comment=${comment}`,
+          ...(adguardId ? [`=place-before=${adguardId}`] : ['=place-before=0']),
+        ]);
+      };
+      await ensureDnsBypass(NONPAY_NAT.dnsBypassUdp, 'udp');
+      await ensureDnsBypass(NONPAY_NAT.dnsBypassTcp, 'tcp');
+
       const firewallAdded: string[] = [];
       const firewallSkipped: string[] = [];
       let firewallDisabledBypass = 0;
@@ -2658,7 +2680,7 @@ export async function configureNonPaymentWebProxy(
           `=dst-port=80,${proxyPort}`,
         ]);
 
-        // Redirected HTTP/HTTPS lands on the router's proxy — allow input.
+        // Redirected HTTP lands on the router's proxy — allow input.
         if (!hasComment(NONPAY_FW.proxyInput)) {
           await api.write('/ip/firewall/filter/add', [
             '=chain=input',
@@ -2694,6 +2716,46 @@ export async function configureNonPaymentWebProxy(
             ...dropPlace,
           ]);
           firewallAdded.push(NONPAY_FW.drop);
+          filters.push({ comment: NONPAY_FW.drop });
+        }
+
+        // Chrome/Android: silent DROP makes HTTPS/DoH hang for tens of seconds.
+        // Reject with RST/ICMP so the tablet fails fast and captive HTTP wins.
+        const dropId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          (
+            (await api.write('/ip/firewall/filter/print')) as Record<string, string>[]
+          ).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          '';
+        const beforeDrop = dropId ? [`=place-before=${dropId}`] : [];
+        if (!hasComment(NONPAY_FW.rejectTcp)) {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=reject',
+            '=reject-with=tcp-reset',
+            '=protocol=tcp',
+            `=src-address-list=${nonPayAddressList}`,
+            `=comment=${NONPAY_FW.rejectTcp}`,
+            ...beforeDrop,
+          ]);
+          firewallAdded.push(NONPAY_FW.rejectTcp);
+        } else {
+          firewallSkipped.push(NONPAY_FW.rejectTcp);
+        }
+        if (!hasComment(NONPAY_FW.rejectQuic)) {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=reject',
+            '=reject-with=icmp-port-unreachable',
+            '=protocol=udp',
+            `=src-address-list=${nonPayAddressList}`,
+            '=dst-port=443',
+            `=comment=${NONPAY_FW.rejectQuic}`,
+            ...beforeDrop,
+          ]);
+          firewallAdded.push(NONPAY_FW.rejectQuic);
+        } else {
+          firewallSkipped.push(NONPAY_FW.rejectQuic);
         }
 
         // Legacy inverted bypass: accept tcp !80,8080 (lets HTTPS through) and udp/443 (QUIC).
