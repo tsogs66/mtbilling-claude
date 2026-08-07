@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -976,43 +976,49 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
     api_pass: r.api_pass || '',
   };
   try {
-    const result = await configureNonPaymentWebProxy(conn, {
+    // Always run the fast redirect repair first (NAT + proxy redirect + optional kick).
+    const kickUser = String(b.kickUsername || b.username || '').trim();
+    const repair = await repairNonPaymentHttpRedirect(conn, {
       nonPayCidr: b.nonPayCidr,
-      landingAddress: b.landingAddress,
-      billingHost,
-      allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
-      errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
-      portalRedirectUrl: `${publicBase}/portal`,
       proxyPort: b.proxyPort,
-      lockdownFirewall: b.lockdownFirewall !== false,
       nonPayAddressList: b.nonPayAddressList,
-      billingLanIps,
-      lockRouterUi: b.lockRouterUi !== false,
-      routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
+      portalRedirectUrl: `${publicBase}/portal`,
+      username: kickUser || undefined,
     });
 
-    // After repair, optionally re-sync a username onto non-payments + kick session
-    // so the CPE redials into the captive pool.
-    let kick: { username: string; ok: boolean; error?: string } | null = null;
-    const kickUser = String(b.kickUsername || b.username || '').trim();
     if (kickUser) {
       try {
-        const { syncUserToRouter } = await import('./billing.js');
-        const u = db
-          .prepare('SELECT * FROM pppoe_users WHERE router_id = ? AND lower(username) = lower(?)')
-          .get(id, kickUser) as any;
-        if (u) {
-          db.prepare(
-            "UPDATE pppoe_users SET status = 'non-payment', nonpayment_since = COALESCE(nonpayment_since, ?) WHERE id = ?"
-          ).run(new Date().toISOString(), u.id);
-          const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-          const sync = await syncUserToRouter(full, 'expire');
-          kick = { username: kickUser, ok: !!sync.ok, error: sync.error };
-        } else {
-          kick = { username: kickUser, ok: false, error: 'user-not-in-db' };
-        }
+        db.prepare(
+          `UPDATE pppoe_users
+           SET status = 'non-payment',
+               nonpayment_since = COALESCE(nonpayment_since, ?)
+           WHERE router_id = ? AND lower(username) = lower(?)`
+        ).run(new Date().toISOString(), id, kickUser);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    let full: Awaited<ReturnType<typeof configureNonPaymentWebProxy>> | null = null;
+    let fullError: string | null = null;
+    if (b.full !== false && b.quick !== true) {
+      try {
+        full = await configureNonPaymentWebProxy(conn, {
+          nonPayCidr: b.nonPayCidr,
+          landingAddress: b.landingAddress,
+          billingHost,
+          allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
+          errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
+          portalRedirectUrl: `${publicBase}/portal`,
+          proxyPort: b.proxyPort,
+          lockdownFirewall: b.lockdownFirewall !== false,
+          nonPayAddressList: b.nonPayAddressList,
+          billingLanIps,
+          lockRouterUi: b.lockRouterUi !== false,
+          routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
+        });
       } catch (e: any) {
-        kick = { username: kickUser, ok: false, error: e?.message || String(e) };
+        fullError = e?.message || String(e);
       }
     }
 
@@ -1023,7 +1029,16 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
       username: kickUser || 'Admin',
     }).catch((e: any) => ({ error: e?.message || String(e) }));
 
-    res.json({ ...result, kick, inspect });
+    res.json({
+      ok: true,
+      repair,
+      full,
+      fullError,
+      kick: kickUser
+        ? { username: kickUser, ok: !!repair.kicked, kicked: repair.kicked }
+        : null,
+      inspect,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || String(e) });
   }

@@ -21,13 +21,14 @@ export async function withRouter<T>(
   if (!conn.host || !conn.api_user) {
     throw new Error('router-not-configured');
   }
+  const timeoutSec = opts?.timeoutSec ?? 15;
   const api = new RouterOSAPI({
     host: conn.host,
     port: conn.port || 8728,
     user: conn.api_user,
     password: conn.api_pass || '',
     // 4s was too aggressive for WAN/API-over-VPN boards and multi-step writes.
-    timeout: opts?.timeoutSec ?? 15,
+    timeout: timeoutSec,
   });
   // node-routeros re-emits late/stray socket errors as 'error' on this instance
   // after its connect-phase listeners already fired once and were removed (e.g.
@@ -40,7 +41,29 @@ export async function withRouter<T>(
   api.on('error', () => {});
   await api.connect();
   try {
-    return await fn(api);
+    // Hard budget for the whole callback — node-routeros per-command timeout does
+    // not reliably abort stuck /system or /tool/fetch writes.
+    const budgetMs = Math.max(3_000, timeoutSec * 1000);
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try {
+          api.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error(`router-call-timeout after ${timeoutSec}s`));
+      }, budgetMs);
+      fn(api).then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(timer);
+          reject(e);
+        }
+      );
+    });
   } finally {
     try {
       api.close();
@@ -2891,6 +2914,184 @@ export async function inspectNonPaymentCaptive(
   );
 }
 
+/**
+ * Fast path: enable webproxy, ensure HTTP→8080 NAT, and set catch-all
+ * proxy access redirect to the subscriber portal. Avoids full firewall
+ * rebuild so it can run while the board is busy / recovering.
+ */
+export async function repairNonPaymentHttpRedirect(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+    portalRedirectUrl?: string;
+    username?: string;
+  } = {}
+): Promise<{
+  ok: true;
+  proxyEnabled: boolean;
+  natHttpRedirect: boolean;
+  proxyRedirect: boolean;
+  portalRedirectTo: string;
+  kicked?: string | null;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const portalRedirectTo = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
+    .trim()
+    .replace(/\/$/, '');
+  const username = String(opts.username || '').trim();
+
+  return withRouter(
+    conn,
+    async (api) => {
+      let proxyEnabled = false;
+      try {
+        await api.write('/ip/proxy/set', ['=enabled=yes', `=port=${proxyPort}`, '=anonymous=no']);
+        proxyEnabled = true;
+      } catch {
+        try {
+          await api.write('/ip/proxy/set', ['=enabled=yes']);
+          proxyEnabled = true;
+        } catch {
+          proxyEnabled = false;
+        }
+      }
+
+      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+      const hasCidr = (addrList || []).some(
+        (r) =>
+          String(r.list || '') === nonPayAddressList &&
+          String(r.address || '') === nonPayCidr &&
+          !rosBool(r.disabled)
+      );
+      if (!hasCidr) {
+        await api.write('/ip/firewall/address-list/add', [
+          `=list=${nonPayAddressList}`,
+          `=address=${nonPayCidr}`,
+          `=comment=${WEBPROXY_RULE_COMMENT}`,
+        ]);
+      }
+
+      const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+      const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
+      const hasList = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address-list'] || '') === nonPayAddressList
+      );
+      const hasCidrNat = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address'] || '') === nonPayCidr
+      );
+      if (!hasList) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirect}`,
+          '=place-before=0',
+        ]);
+      }
+      if (!hasCidrNat) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address=${nonPayCidr}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirectCidr}`,
+          '=place-before=0',
+        ]);
+      }
+
+      const access = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
+      for (const row of access || []) {
+        if (String(row['src-address'] || '') !== nonPayCidr) continue;
+        const action = String(row.action || '').toLowerCase();
+        const catchAll =
+          !String(row['dst-host'] || '') &&
+          !String(row['dst-address'] || '') &&
+          (action === 'deny' || action === 'redirect');
+        if (!catchAll) continue;
+        try {
+          await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let proxyRedirect = false;
+      try {
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          '=action=redirect',
+          `=redirect-to=${portalRedirectTo}`,
+          `=comment=${NONPAY_PROXY.redirectPortal}`,
+        ]);
+        proxyRedirect = true;
+      } catch {
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          '=action=deny',
+          `=comment=${NONPAY_PROXY.denyCaptive}`,
+        ]);
+        proxyRedirect = false;
+      }
+
+      let kicked: string | null = null;
+      if (username) {
+        try {
+          const secrets = (await api.write('/ppp/secret/print', [
+            `?name=${username}`,
+            '=.proplist=.id,name,profile',
+          ])) as Record<string, string>[];
+          const sec = secrets?.[0];
+          if (sec?.['.id']) {
+            await api.write('/ppp/secret/set', [
+              `=.id=${sec['.id']}`,
+              '=profile=non-payments',
+              '=disabled=no',
+            ]);
+          }
+          const actives = (await api.write('/ppp/active/print', [
+            `?name=${username}`,
+            '=.proplist=.id,name',
+          ])) as Record<string, string>[];
+          for (const a of actives || []) {
+            if (!a['.id']) continue;
+            try {
+              await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
+            } catch {
+              /* ignore */
+            }
+          }
+          kicked = username;
+        } catch {
+          kicked = null;
+        }
+      }
+
+      return {
+        ok: true as const,
+        proxyEnabled,
+        natHttpRedirect: true,
+        proxyRedirect,
+        portalRedirectTo,
+        kicked,
+      };
+    },
+    { timeoutSec: 25 }
+  );
+}
+
 export type NonPaymentWebProxyOpts = {
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
   nonPayCidr?: string;
@@ -3790,7 +3991,7 @@ export async function configureNonPaymentWebProxy(
         routerUiLock,
       };
     },
-    { timeoutSec: 90 }
+    { timeoutSec: 55 }
   );
 }
 
