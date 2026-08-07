@@ -19,7 +19,7 @@
 #   mode=default sudo bash scripts/proxmox-install.sh
 #
 # One-liner (public repo):
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 
 set -euo pipefail
 

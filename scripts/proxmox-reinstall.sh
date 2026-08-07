@@ -69,7 +69,7 @@ if [[ -f "$LOCAL_REINSTALL" ]]; then
   pct exec "$CTID" -- chmod +x "$REINSTALL"
 elif ! pct exec "$CTID" -- test -f "$REINSTALL" 2>/dev/null; then
   echo "Fetching reinstall script from GitHub into CT ${CTID}…"
-  RAW="https://raw.githubusercontent.com/tsogs66/mtbilling-claude/${BRANCH}/install/mt-billing-reinstall.sh"
+  RAW="https://raw.githubusercontent.com/tsogs66/MT-Billing/${BRANCH}/install/mt-billing-reinstall.sh"
   pct exec "$CTID" -- bash -c "mkdir -p /opt/mt-billing/install && curl -fsSL '$RAW' -o '$REINSTALL' && chmod +x '$REINSTALL'"
 fi
 
@@ -88,7 +88,7 @@ fi
 echo "Running guest reinstall in CT ${CTID}…"
 pct exec "$CTID" -- env \
   var_repo_branch="$BRANCH" \
-  var_repo_url="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}" \
+  var_repo_url="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}" \
   bash "$REINSTALL" "${FORWARD[@]+"${FORWARD[@]}"}"
 
 IP="$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')"

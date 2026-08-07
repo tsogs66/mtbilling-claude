@@ -11,12 +11,12 @@ export const UPDATE_REPO = {
   owner: 'tsogs66',
   name: 'MT-Billing',
   branch: process.env.MT_UPDATE_BRANCH || process.env.REPO_BRANCH || 'main',
-  url: 'https://github.com/tsogs66/mtbilling-claude',
-  gitUrl: process.env.REPO_URL || 'https://github.com/tsogs66/mtbilling-claude.git',
+  url: 'https://github.com/tsogs66/MT-Billing',
+  gitUrl: process.env.REPO_URL || 'https://github.com/tsogs66/MT-Billing.git',
   apiCommits: () =>
-    `https://api.github.com/repos/tsogs66/mtbilling-claude/commits/${UPDATE_REPO.branch}`,
+    `https://api.github.com/repos/tsogs66/MT-Billing/commits/${UPDATE_REPO.branch}`,
   apiCompare: (base: string, head: string) =>
-    `https://api.github.com/repos/tsogs66/mtbilling-claude/compare/${base}...${head}`,
+    `https://api.github.com/repos/tsogs66/MT-Billing/compare/${base}...${head}`,
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -169,7 +169,7 @@ async function fetchGithubJson(url: string): Promise<any | null> {
 
 /** Root one-liner when UI apply cannot escalate (paste on LXC). */
 export const UPDATE_FIX_NOW_CMD =
-  'curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash';
+  'curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash';
 
 export interface UpdaterStatus {
   current: string;
@@ -234,7 +234,7 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
   } else if (currentSha) {
     source = 'local-git';
     error = 'Could not reach GitHub API. Showing local checkout only.';
-    changelog = ['Unable to fetch https://github.com/tsogs66/mtbilling-claude — check outbound HTTPS.'];
+    changelog = ['Unable to fetch https://github.com/tsogs66/MT-Billing — check outbound HTTPS.'];
   } else {
     error = 'Could not determine local or remote version.';
     changelog = ['Updater could not read local git or GitHub.'];
