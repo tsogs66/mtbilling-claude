@@ -2105,6 +2105,14 @@ export async function scheduleExpiryOnRouter(
 }
 
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
+const NONPAY_HTTPS_LIST = 'nonpay-https-allow';
+const NONPAY_FW = {
+  https: 'MT-Billing nonpay allow HTTPS billing',
+  dnsUdp: 'MT-Billing nonpay allow DNS',
+  dnsTcp: 'MT-Billing nonpay allow DNS TCP',
+  http: 'MT-Billing nonpay allow HTTP captive',
+  drop: 'MT-Billing nonpay drop other',
+} as const;
 
 export type NonPaymentWebProxyOpts = {
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
@@ -2118,6 +2126,14 @@ export type NonPaymentWebProxyOpts = {
   /** Absolute URL of error.html — fetched onto the router as error.html when set. */
   errorPageUrl?: string;
   proxyPort?: number;
+  /**
+   * When true (default), ensure forward firewall lockdown so non-pay clients
+   * cannot browse HTTPS/QUIC past the HTTP captive portal. Only allows DNS,
+   * HTTP(S) captive ports, and HTTPS to billing/PayMongo hosts.
+   */
+  lockdownFirewall?: boolean;
+  /** Firewall address-list name used for non-pay clients (NAT/filter). */
+  nonPayAddressList?: string;
 };
 
 /**
@@ -2126,12 +2142,13 @@ export type NonPaymentWebProxyOpts = {
  *
  * Never touches:
  *  - /ip address, pools, PPP profile local/remote addressing
- *  - /ip firewall (filter/nat)
+ *  - /ip firewall nat
  *  - existing untagged /ip proxy access rules (your redirect stays)
  *
  * Only:
  *  - adds missing dst-host allow rules (billing + PayMongo) tagged for idempotent refresh
  *  - optionally fetches error.html into webproxy/error.html
+ *  - optionally ensures tagged forward filter lockdown (HTTPS bypass fix)
  */
 export async function configureNonPaymentWebProxy(
   conn: RouterConn,
@@ -2144,10 +2161,16 @@ export async function configureNonPaymentWebProxy(
   addedHosts: string[];
   skippedHosts: string[];
   fetchedErrorHtml: boolean;
+  firewallLockdown: boolean;
+  firewallAdded: string[];
+  firewallSkipped: string[];
+  firewallDisabledBypass: number;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const lockdownFirewall = opts.lockdownFirewall !== false;
   const billingHost = String(opts.billingHost || '')
     .trim()
     .replace(/^https?:\/\//i, '')
@@ -2209,6 +2232,153 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
+      const firewallAdded: string[] = [];
+      const firewallSkipped: string[] = [];
+      let firewallDisabledBypass = 0;
+
+      if (lockdownFirewall) {
+        // Ensure pool CIDR is on the address-list used by NAT/filter (idempotent).
+        const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+        const hasCidr = (addrList || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr
+        );
+        if (!hasCidr) {
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${nonPayAddressList}`,
+            `=address=${nonPayCidr}`,
+            `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ]);
+        }
+
+        // FQDN entries resolve dynamically on RouterOS 7 — needed for PayMongo/billing HTTPS.
+        for (const host of uniqueHosts) {
+          const hasHost = (addrList || []).some(
+            (r) =>
+              String(r.list || '') === NONPAY_HTTPS_LIST &&
+              String(r.address || '').toLowerCase() === host
+          );
+          if (hasHost) continue;
+          try {
+            await api.write('/ip/firewall/address-list/add', [
+              `=list=${NONPAY_HTTPS_LIST}`,
+              `=address=${host}`,
+              `=comment=${WEBPROXY_RULE_COMMENT}`,
+            ]);
+            addrList.push({ list: NONPAY_HTTPS_LIST, address: host });
+          } catch {
+            /* duplicate */
+          }
+        }
+
+        const filters = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+        const hasComment = (comment: string) =>
+          (filters || []).some((r) => String(r.comment || '') === comment);
+
+        // Insert new allows immediately before our drop (or before a legacy
+        // non-pay accept bypass). Drop itself is appended after the allows.
+        const anchorId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          (filters || []).find(
+            (r) =>
+              String(r.chain || '') === 'forward' &&
+              String(r['src-address-list'] || '') === nonPayAddressList &&
+              String(r.action || '') === 'accept' &&
+              !String(r.comment || '').startsWith('MT-Billing nonpay')
+          )?.['.id'] ||
+          '';
+        const placeArgs = anchorId ? [`=place-before=${anchorId}`] : [];
+
+        const ensureAllow = async (comment: string, args: string[]) => {
+          if (hasComment(comment)) {
+            firewallSkipped.push(comment);
+            return;
+          }
+          await api.write('/ip/firewall/filter/add', [...args, `=comment=${comment}`, ...placeArgs]);
+          firewallAdded.push(comment);
+          filters.push({ comment });
+        };
+
+        await ensureAllow(NONPAY_FW.https, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          `=dst-address-list=${NONPAY_HTTPS_LIST}`,
+          '=dst-port=443',
+        ]);
+        await ensureAllow(NONPAY_FW.dnsUdp, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=udp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+        ]);
+        await ensureAllow(NONPAY_FW.dnsTcp, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+        ]);
+        await ensureAllow(NONPAY_FW.http, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          `=dst-port=80,${proxyPort}`,
+        ]);
+
+        if (hasComment(NONPAY_FW.drop)) {
+          firewallSkipped.push(NONPAY_FW.drop);
+        } else {
+          // Prefer sitting just above legacy bypass accepts so they become dead code.
+          const bypassId =
+            (filters || []).find(
+              (r) =>
+                String(r.chain || '') === 'forward' &&
+                String(r['src-address-list'] || '') === nonPayAddressList &&
+                String(r.action || '') === 'accept' &&
+                !String(r.comment || '').startsWith('MT-Billing nonpay')
+            )?.['.id'] || '';
+          const dropPlace = bypassId ? [`=place-before=${bypassId}`] : [];
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=drop',
+            `=src-address-list=${nonPayAddressList}`,
+            `=comment=${NONPAY_FW.drop}`,
+            ...dropPlace,
+          ]);
+          firewallAdded.push(NONPAY_FW.drop);
+        }
+
+        // Legacy inverted bypass: accept tcp !80,8080 (lets HTTPS through) and udp/443 (QUIC).
+        const fresh = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+        for (const r of fresh || []) {
+          if (String(r.chain || '') !== 'forward') continue;
+          if (String(r['src-address-list'] || '') !== nonPayAddressList) continue;
+          if (String(r.action || '') !== 'accept') continue;
+          const cmt = String(r.comment || '');
+          if (cmt.startsWith('MT-Billing nonpay')) continue;
+          const dport = String(r['dst-port'] || '');
+          const proto = String(r.protocol || '').toLowerCase();
+          const isHttpsBypass =
+            (proto === 'tcp' && (dport.includes('!80') || dport === '!80,8080')) ||
+            (proto === 'udp' && dport === '443');
+          if (!isHttpsBypass) continue;
+          if (String(r.disabled || '').toLowerCase() === 'true' || r.disabled === 'yes') continue;
+          const id = r['.id'];
+          if (!id) continue;
+          try {
+            await api.write('/ip/firewall/filter/disable', [`=.id=${id}`]);
+            firewallDisabledBypass += 1;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
       return {
         ok: true as const,
         nonPayCidr,
@@ -2217,9 +2387,13 @@ export async function configureNonPaymentWebProxy(
         addedHosts,
         skippedHosts,
         fetchedErrorHtml,
+        firewallLockdown: lockdownFirewall,
+        firewallAdded,
+        firewallSkipped,
+        firewallDisabledBypass,
       };
     },
-    { timeoutSec: 45 }
+    { timeoutSec: 60 }
   );
 }
 

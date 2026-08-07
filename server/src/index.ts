@@ -1976,6 +1976,18 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
         comment: commentFromPppoeUser(row),
         disabled: secretDisabledFromStatus(row.status),
       });
+      // Bounce active PPP when entering/leaving non-payment so the client
+      // immediately gets the non-payments pool (webproxy → error.html).
+      const prevSt = String(existing.status || '').toLowerCase();
+      const nowNonpay = st === 'non-payment' || st === 'nonpayment';
+      const wasNonpay = prevSt === 'non-payment' || prevSt === 'nonpayment';
+      if (nowNonpay !== wasNonpay || (nowNonpay && b.status != null)) {
+        try {
+          await removePppActiveByName(router, existing.username);
+        } catch {
+          /* session may already be gone */
+        }
+      }
     } catch (e: any) {
       return res.status(502).json({
         error: e?.message || 'Failed to update PPP secret on MikroTik',
