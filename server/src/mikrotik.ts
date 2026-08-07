@@ -2953,13 +2953,45 @@ export async function repairNonPaymentHttpRedirectViaScript(
     conn,
     async (api) => {
       await removeSystemScriptByName(api, scriptName);
+      await removeSchedulerByName(api, 'mtb-fix-once');
       await api.write('/system/script/add', [
         `=name=${scriptName}`,
         `=source=${source}`,
         '=dont-require-permissions=yes',
         '=comment=MT-Billing one-shot captive redirect repair',
       ]);
-      await api.write('/system/script/run', [`=number=${scriptName}`]);
+      // Do not /system/script/run — proxy set can block the API session.
+      // Schedule a one-shot that RouterOS executes independently.
+      await api.write('/system/scheduler/add', [
+        '=name=mtb-fix-once',
+        `=on-event=${scriptName}`,
+        '=start-time=00:00:01',
+        '=interval=00:00:05',
+        '=comment=MT-Billing captive repair once',
+      ]);
+      if (username) {
+        try {
+          const actives = (await api.write('/ppp/active/print', [
+            `?name=${username}`,
+            '=.proplist=.id,name',
+          ])) as Record<string, string>[];
+          for (const a of actives || []) {
+            if (!a['.id']) continue;
+            try {
+              await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
+            } catch {
+              /* ignore */
+            }
+          }
+          await api.write('/ppp/secret/set', [
+            `=numbers=${username}`,
+            '=profile=non-payments',
+            '=disabled=no',
+          ]);
+        } catch {
+          /* best-effort */
+        }
+      }
       return { ok: true as const, ran: scriptName, kicked: username || null };
     },
     { timeoutSec: 20 }
