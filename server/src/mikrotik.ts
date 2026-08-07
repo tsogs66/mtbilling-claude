@@ -2391,8 +2391,10 @@ export async function fetchSystemSchedulers(conn: RouterConn): Promise<
 
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
 const NONPAY_HTTPS_LIST = 'nonpay-https-allow';
+const NONPAY_POOL_NAME = 'non-payment';
 const NONPAY_NAT = {
   httpRedirect: 'MT-Billing nonpay HTTP redirect',
+  httpRedirectCidr: 'MT-Billing nonpay HTTP redirect CIDR',
   httpsAllow: 'MT-Billing nonpay HTTPS allow',
   httpsRedirect: 'MT-Billing nonpay HTTPS redirect',
   dnsBypassUdp: 'MT-Billing nonpay DNS bypass AdGuard',
@@ -2535,6 +2537,337 @@ export async function restrictSubscriberRouterLogin(
   );
 }
 
+/**
+ * Expand a /24 (or similar) CIDR into an IP pool range usable by RouterOS.
+ * Example: 172.15.10.0/24 → 172.15.10.2-172.15.10.254
+ */
+export function cidrToPoolRanges(cidr: string): string | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(String(cidr || '').trim());
+  if (!m) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  const prefix = Number(m[5]);
+  if (parts.some((n) => n > 255) || prefix < 8 || prefix > 30) return null;
+  if (prefix === 24) {
+    const base = `${parts[0]}.${parts[1]}.${parts[2]}`;
+    return `${base}.2-${base}.254`;
+  }
+  // Conservative fallback for other prefixes: keep host+1 .. last usable as dotted range via /24 style when possible
+  const hostBits = 32 - prefix;
+  const size = 2 ** hostBits;
+  if (size < 4 || size > 65536) return null;
+  const ipNum = ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+  const network = ipNum >>> hostBits << hostBits;
+  const first = network + 2;
+  const last = network + size - 2;
+  const toIp = (n: number) =>
+    [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+  return `${toIp(first)}-${toIp(last)}`;
+}
+
+function natRuleDisabled(n: Record<string, string>): boolean {
+  return rosBool(n.disabled);
+}
+
+/** True when a dstnat rule actually redirects non-pay HTTP to the webproxy port. */
+function isWorkingNonPayHttpRedirect(
+  n: Record<string, string>,
+  opts: { nonPayCidr: string; nonPayAddressList: string; proxyPort: number }
+): boolean {
+  if (String(n.chain || '') !== 'dstnat') return false;
+  if (String(n.action || '').toLowerCase() !== 'redirect') return false;
+  if (natRuleDisabled(n)) return false;
+  const proto = String(n.protocol || '').toLowerCase();
+  if (proto && proto !== 'tcp') return false;
+  if (String(n['dst-port'] || '') !== '80') return false;
+  if (String(n['to-ports'] || '') !== String(opts.proxyPort)) return false;
+  const srcList = String(n['src-address-list'] || '');
+  const srcAddr = String(n['src-address'] || '');
+  return srcList === opts.nonPayAddressList || srcAddr === opts.nonPayCidr;
+}
+
+/**
+ * Ensure the captive non-payment IP pool + PPP profile so overdue secrets
+ * redial into 172.15.10.0/24 (webproxy NAT match). Without this, Admin can be
+ * on profile "non-payments" but still get a normal pool → no redirect.
+ */
+export async function ensureNonPaymentCaptiveProfile(
+  api: RouterOSAPI,
+  opts: {
+    profileName?: string;
+    poolName?: string;
+    nonPayCidr?: string;
+    landingAddress?: string;
+    rateLimit?: string;
+  } = {}
+): Promise<{
+  profileName: string;
+  poolName: string;
+  nonPayCidr: string;
+  poolRanges: string;
+  remoteAddress: string;
+  localAddress: string;
+  createdPool: boolean;
+  createdProfile: boolean;
+  updatedProfile: boolean;
+}> {
+  const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
+  const poolName = String(opts.poolName || NONPAY_POOL_NAME).trim() || NONPAY_POOL_NAME;
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const rateLimit = String(opts.rateLimit || '2M/2M').trim();
+  const poolRanges = cidrToPoolRanges(nonPayCidr) || '172.15.10.2-172.15.10.254';
+
+  let createdPool = false;
+  const pools = (await api.write('/ip/pool/print')) as Record<string, string>[];
+  const poolRow = (pools || []).find((p) => String(p.name || '') === poolName);
+  if (!poolRow) {
+    await api.write('/ip/pool/add', [
+      `=name=${poolName}`,
+      `=ranges=${poolRanges}`,
+      `=comment=${WEBPROXY_RULE_COMMENT}`,
+    ]);
+    createdPool = true;
+  } else {
+    const ranges = String(poolRow.ranges || '');
+    // If pool exists but is empty / unrelated, realign to non-pay CIDR.
+    if (!ranges || !ranges.includes(nonPayCidr.split('/')[0].split('.').slice(0, 3).join('.'))) {
+      try {
+        await api.write('/ip/pool/set', [`=.id=${poolRow['.id']}`, `=ranges=${poolRanges}`]);
+      } catch {
+        /* keep existing ranges if in use */
+      }
+    }
+  }
+
+  let createdProfile = false;
+  let updatedProfile = false;
+  const profiles = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+  const prof = (profiles || []).find((p) => String(p.name || '') === profileName);
+  if (!prof) {
+    await api.write('/ppp/profile/add', [
+      `=name=${profileName}`,
+      `=local-address=${landingAddress}`,
+      `=remote-address=${poolName}`,
+      `=rate-limit=${rateLimit}`,
+      `=comment=${WEBPROXY_RULE_COMMENT}`,
+    ]);
+    createdProfile = true;
+  } else {
+    const remote = String(prof['remote-address'] || '');
+    const local = String(prof['local-address'] || '');
+    const args = [`=.id=${prof['.id']}`];
+    // Force pool so non-pay secrets land in the captive CIDR.
+    if (remote !== poolName && remote !== nonPayCidr) {
+      args.push(`=remote-address=${poolName}`);
+    }
+    if (!local) args.push(`=local-address=${landingAddress}`);
+    if (!String(prof['rate-limit'] || '') && rateLimit) args.push(`=rate-limit=${rateLimit}`);
+    if (args.length > 1) {
+      await api.write('/ppp/profile/set', args);
+      updatedProfile = true;
+    }
+  }
+
+  const refreshed = (await api.write('/ppp/profile/print', [`?name=${profileName}`])) as Record<
+    string,
+    string
+  >[];
+  const live = refreshed?.[0] || {};
+  return {
+    profileName,
+    poolName,
+    nonPayCidr,
+    poolRanges,
+    remoteAddress: live['remote-address'] || poolName,
+    localAddress: live['local-address'] || landingAddress,
+    createdPool,
+    createdProfile,
+    updatedProfile,
+  };
+}
+
+/**
+ * Snapshot of captive ingredients on the router (for debugging "no redirect").
+ */
+export async function inspectNonPaymentCaptive(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    landingAddress?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+    profileName?: string;
+    username?: string;
+  } = {}
+): Promise<Record<string, unknown>> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
+  const username = String(opts.username || '').trim();
+
+  return withRouter(
+    conn,
+    async (api) => {
+      const proxy = ((await api.write('/ip/proxy/print')) as Record<string, string>[])?.[0] || {};
+      const access = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
+      const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+      const pools = (await api.write('/ip/pool/print')) as Record<string, string>[];
+      const profiles = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+      const secrets = username
+        ? ((await api.write('/ppp/secret/print', [`?name=${username}`])) as Record<string, string>[])
+        : [];
+      const active = username
+        ? ((await api.write('/ppp/active/print', [`?name=${username}`])) as Record<string, string>[])
+        : [];
+
+      const httpRedirects = (nats || []).filter((n) =>
+        isWorkingNonPayHttpRedirect(n, { nonPayCidr, nonPayAddressList, proxyPort })
+      );
+      const taggedRedirects = (nats || []).filter((n) => {
+        const c = String(n.comment || '');
+        return (
+          c === NONPAY_NAT.httpRedirect ||
+          c === NONPAY_NAT.httpRedirectCidr ||
+          c === 'non-payment'
+        );
+      });
+      const profile = (profiles || []).find((p) => String(p.name || '') === profileName) || null;
+      const pool =
+        (pools || []).find((p) => String(p.name || '') === NONPAY_POOL_NAME) ||
+        (pools || []).find((p) => String(p.name || '') === String(profile?.['remote-address'] || '')) ||
+        null;
+
+      const secret = secrets?.[0] || null;
+      const session = active?.[0] || null;
+      const sessionIp = String(session?.address || '');
+      const inNonPayCidr =
+        !!sessionIp &&
+        sessionIp !== '-' &&
+        (() => {
+          try {
+            const [net, bits] = nonPayCidr.split('/');
+            const prefix = Number(bits || 24);
+            const ipParts = sessionIp.split('.').map(Number);
+            const netParts = net.split('.').map(Number);
+            if (ipParts.length !== 4 || netParts.length !== 4) return false;
+            const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+            const ipN =
+              ((ipParts[0] << 24) >>> 0) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+            const netN =
+              ((netParts[0] << 24) >>> 0) + (netParts[1] << 16) + (netParts[2] << 8) + netParts[3];
+            return (ipN & mask) === (netN & mask);
+          } catch {
+            return false;
+          }
+        })();
+
+      const files = (await api.write('/file/print', ['=.proplist=name,size'])) as Record<
+        string,
+        string
+      >[];
+      const errorHtml = (files || []).find((f) => {
+        const n = String(f.name || '');
+        return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+      });
+
+      return {
+        proxy: {
+          enabled: proxy.enabled,
+          port: proxy.port,
+          anonymous: proxy.anonymous,
+        },
+        proxyAccess: (access || [])
+          .filter((r) => String(r['src-address'] || '') === nonPayCidr || /nonpay|non-pay/i.test(String(r.comment || '')))
+          .map((r) => ({
+            id: r['.id'],
+            action: r.action,
+            src: r['src-address'],
+            dstHost: r['dst-host'],
+            dstAddress: r['dst-address'],
+            comment: r.comment,
+            disabled: rosBool(r.disabled),
+          })),
+        addressList: (addrList || [])
+          .filter((r) => String(r.list || '') === nonPayAddressList)
+          .map((r) => ({
+            list: r.list,
+            address: r.address,
+            comment: r.comment,
+            disabled: rosBool(r.disabled),
+          })),
+        httpRedirectWorking: httpRedirects.length > 0,
+        httpRedirects: httpRedirects.map((n) => ({
+          id: n['.id'],
+          comment: n.comment,
+          srcAddress: n['src-address'],
+          srcAddressList: n['src-address-list'],
+          toPorts: n['to-ports'],
+          disabled: rosBool(n.disabled),
+        })),
+        taggedHttpRedirects: taggedRedirects.map((n) => ({
+          id: n['.id'],
+          comment: n.comment,
+          action: n.action,
+          srcAddress: n['src-address'],
+          srcAddressList: n['src-address-list'],
+          toPorts: n['to-ports'],
+          disabled: rosBool(n.disabled),
+        })),
+        profile: profile
+          ? {
+              name: profile.name,
+              localAddress: profile['local-address'],
+              remoteAddress: profile['remote-address'],
+              rateLimit: profile['rate-limit'],
+            }
+          : null,
+        pool: pool
+          ? { name: pool.name, ranges: pool.ranges, comment: pool.comment }
+          : null,
+        errorHtml: errorHtml
+          ? { name: errorHtml.name, size: Number(errorHtml.size || 0) }
+          : null,
+        secret: secret
+          ? {
+              name: secret.name,
+              profile: secret.profile,
+              disabled: rosBool(secret.disabled),
+            }
+          : null,
+        session: session
+          ? {
+              name: session.name,
+              address: session.address,
+              profile: session.profile,
+              uptime: session.uptime,
+              inNonPayCidr,
+            }
+          : null,
+        diagnosis: !secret
+          ? username
+            ? 'PPP secret not found on router'
+            : 'No username requested'
+          : rosBool(secret.disabled)
+            ? 'Secret is disabled — cannot browse or hit captive'
+            : String(secret.profile || '') !== profileName
+              ? `Secret profile is "${secret.profile}" (want "${profileName}") — not in captive pool`
+              : session && !inNonPayCidr
+                ? `Online at ${sessionIp} outside ${nonPayCidr} — pool/profile mismatch; kick session after repair`
+                : !session
+                  ? 'Secret looks ready but offline — connect CPE then browse http://example.com'
+                  : httpRedirects.length === 0
+                    ? 'No working HTTP→webproxy NAT redirect'
+                    : 'Looks configured — try plain HTTP (not HTTPS) or wait for HTTPS fail-fast'
+            ,
+      };
+    },
+    { timeoutSec: 25 }
+  );
+}
+
 export type NonPaymentWebProxyOpts = {
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
   nonPayCidr?: string;
@@ -2615,6 +2948,7 @@ export async function configureNonPaymentWebProxy(
   natHttpsAllow: boolean;
   natHttpsRedirect: boolean;
   proxyDeny: boolean;
+  captiveProfile?: Awaited<ReturnType<typeof ensureNonPaymentCaptiveProfile>>;
   routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
@@ -2647,6 +2981,15 @@ export async function configureNonPaymentWebProxy(
   return withRouter(
     conn,
     async (api) => {
+      // 0) Pool + PPP profile must put non-pay secrets into nonPayCidr or NAT never hits.
+      const captiveProfile = await ensureNonPaymentCaptiveProfile(api, {
+        profileName: 'non-payments',
+        poolName: NONPAY_POOL_NAME,
+        nonPayCidr,
+        landingAddress,
+        rateLimit: '2M/2M',
+      });
+
       // Enable proxy + anonymous=no (XFF when anything still hits LAN HTTP).
       let proxyAnonymousOff = false;
       try {
@@ -2856,24 +3199,77 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
+      // --- Address-list MUST exist before NAT (NAT matches this list / CIDR) ---
+      {
+        const addrListEarly = (await api.write('/ip/firewall/address-list/print')) as Record<
+          string,
+          string
+        >[];
+        const hasCidr = (addrListEarly || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr &&
+            !rosBool(r.disabled)
+        );
+        if (!hasCidr) {
+          // Drop disabled duplicates then add.
+          for (const r of addrListEarly || []) {
+            if (String(r.list || '') !== nonPayAddressList) continue;
+            if (String(r.address || '') !== nonPayCidr) continue;
+            if (!r['.id']) continue;
+            try {
+              await api.write('/ip/firewall/address-list/remove', [`=.id=${r['.id']}`]);
+            } catch {
+              /* ignore */
+            }
+          }
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${nonPayAddressList}`,
+            `=address=${nonPayCidr}`,
+            `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ]);
+        }
+      }
+
       // --- NAT: HTTP redirect only (HTTPS redirect to proxy breaks PC browsers) ---
       const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
       const hasNatComment = (comment: string) =>
-        (nats || []).some((n) => String(n.comment || '') === comment);
-      const hasHttpRedirect = (nats || []).some((n) => {
-        const cmt = String(n.comment || '');
-        if (cmt === NONPAY_NAT.httpRedirect || cmt === 'non-payment') return true;
-        return (
-          String(n.chain || '') === 'dstnat' &&
-          String(n.action || '') === 'redirect' &&
-          String(n['src-address-list'] || '') === nonPayAddressList &&
-          String(n['dst-port'] || '') === '80' &&
-          String(n['to-ports'] || '') === String(proxyPort)
-        );
-      });
+        (nats || []).some((n) => String(n.comment || '') === comment && !natRuleDisabled(n));
 
-      let natHttpRedirect = hasHttpRedirect;
-      if (!natHttpRedirect) {
+      const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
+      // Remove tagged-but-broken redirects so we can recreate working ones.
+      for (const n of nats || []) {
+        const cmt = String(n.comment || '');
+        const tagged =
+          cmt === NONPAY_NAT.httpRedirect ||
+          cmt === NONPAY_NAT.httpRedirectCidr ||
+          cmt === 'non-payment';
+        if (!tagged) continue;
+        if (isWorkingNonPayHttpRedirect(n, redirectOpts)) continue;
+        const id = n['.id'];
+        if (!id) continue;
+        try {
+          await api.write('/ip/firewall/nat/remove', [`=.id=${id}`]);
+          const idx = nats.indexOf(n);
+          if (idx >= 0) nats.splice(idx, 1);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const hasListRedirect = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address-list'] || '') === nonPayAddressList
+      );
+      const hasCidrRedirect = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address'] || '') === nonPayCidr
+      );
+
+      let natHttpRedirect = hasListRedirect || hasCidrRedirect;
+      if (!hasListRedirect) {
         await api.write('/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=redirect',
@@ -2882,6 +3278,20 @@ export async function configureNonPaymentWebProxy(
           `=src-address-list=${nonPayAddressList}`,
           '=dst-port=80',
           `=comment=${NONPAY_NAT.httpRedirect}`,
+          '=place-before=0',
+        ]);
+        natHttpRedirect = true;
+      }
+      // Direct CIDR match — works even if address-list entry was deleted.
+      if (!hasCidrRedirect) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address=${nonPayCidr}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirectCidr}`,
           '=place-before=0',
         ]);
         natHttpRedirect = true;
@@ -3260,6 +3670,7 @@ export async function configureNonPaymentWebProxy(
         skippedLanIps,
         proxyAnonymousOff,
         captiveApiDstnat,
+        captiveProfile,
         natHttpRedirect,
         natHttpsAllow,
         natHttpsRedirect,

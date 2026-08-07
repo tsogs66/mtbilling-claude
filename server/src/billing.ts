@@ -9,6 +9,8 @@ import {
   removePppActiveByName,
   buildPppSecretComment,
   ensurePppProfile,
+  ensureNonPaymentCaptiveProfile,
+  withRouter,
   scheduleExpiryOnRouter,
   cancelExpiryScheduleOnRouter,
 } from './mikrotik.js';
@@ -793,9 +795,23 @@ export async function syncUserToRouter(
           ? user.expiration_profile
           : 'non-payments';
       try {
-        await ensurePppProfile(router, expire);
+        await withRouter(
+          router,
+          (api) =>
+            ensureNonPaymentCaptiveProfile(api, {
+              profileName: expire,
+              nonPayCidr: '172.15.10.0/24',
+              landingAddress: '1.1.10.1',
+              rateLimit: '2M/2M',
+            }),
+          { timeoutSec: 15 }
+        );
       } catch {
-        /* profile may already exist */
+        try {
+          await ensurePppProfile(router, expire);
+        } catch {
+          /* profile may already exist */
+        }
       }
       await updatePppSecret(router, user.username, {
         profile: expire,

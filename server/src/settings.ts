@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -969,8 +969,72 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   ]
     .map((x) => String(x || '').trim())
     .filter(Boolean);
+  const conn = {
+    host: r.host,
+    port: Number(r.port) || 8728,
+    api_user: r.api_user,
+    api_pass: r.api_pass || '',
+  };
   try {
-    const result = await configureNonPaymentWebProxy(
+    const result = await configureNonPaymentWebProxy(conn, {
+      nonPayCidr: b.nonPayCidr,
+      landingAddress: b.landingAddress,
+      billingHost,
+      allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
+      errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
+      proxyPort: b.proxyPort,
+      lockdownFirewall: b.lockdownFirewall !== false,
+      nonPayAddressList: b.nonPayAddressList,
+      billingLanIps,
+      lockRouterUi: b.lockRouterUi !== false,
+      routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
+    });
+
+    // After repair, optionally re-sync a username onto non-payments + kick session
+    // so the CPE redials into the captive pool.
+    let kick: { username: string; ok: boolean; error?: string } | null = null;
+    const kickUser = String(b.kickUsername || b.username || '').trim();
+    if (kickUser) {
+      try {
+        const { syncUserToRouter } = await import('./billing.js');
+        const u = db
+          .prepare('SELECT * FROM pppoe_users WHERE router_id = ? AND lower(username) = lower(?)')
+          .get(id, kickUser) as any;
+        if (u) {
+          db.prepare(
+            "UPDATE pppoe_users SET status = 'non-payment', nonpayment_since = COALESCE(nonpayment_since, ?) WHERE id = ?"
+          ).run(new Date().toISOString(), u.id);
+          const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+          const sync = await syncUserToRouter(full, 'expire');
+          kick = { username: kickUser, ok: !!sync.ok, error: sync.error };
+        } else {
+          kick = { username: kickUser, ok: false, error: 'user-not-in-db' };
+        }
+      } catch (e: any) {
+        kick = { username: kickUser, ok: false, error: e?.message || String(e) };
+      }
+    }
+
+    const inspect = await inspectNonPaymentCaptive(conn, {
+      nonPayCidr: b.nonPayCidr,
+      landingAddress: b.landingAddress,
+      proxyPort: b.proxyPort,
+      username: kickUser || 'Admin',
+    }).catch((e: any) => ({ error: e?.message || String(e) }));
+
+    res.json({ ...result, kick, inspect });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Diagnose why non-payment webproxy redirect may not fire for a secret. */
+settingsRouter.get('/routers/:id/nonpayment-captive', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  try {
+    const inspect = await inspectNonPaymentCaptive(
       {
         host: r.host,
         port: Number(r.port) || 8728,
@@ -978,20 +1042,13 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         api_pass: r.api_pass || '',
       },
       {
-        nonPayCidr: b.nonPayCidr,
-        landingAddress: b.landingAddress,
-        billingHost,
-        allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
-        errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
-        proxyPort: b.proxyPort,
-        lockdownFirewall: b.lockdownFirewall !== false,
-        nonPayAddressList: b.nonPayAddressList,
-        billingLanIps,
-        lockRouterUi: b.lockRouterUi !== false,
-        routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
+        nonPayCidr: req.query.nonPayCidr ? String(req.query.nonPayCidr) : undefined,
+        landingAddress: req.query.landingAddress ? String(req.query.landingAddress) : undefined,
+        proxyPort: req.query.proxyPort ? Number(req.query.proxyPort) : undefined,
+        username: String(req.query.username || 'Admin'),
       }
     );
-    res.json(result);
+    res.json(inspect);
   } catch (e: any) {
     res.status(500).json({ error: e?.message || String(e) });
   }
