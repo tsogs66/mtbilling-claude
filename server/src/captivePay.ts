@@ -180,7 +180,9 @@ export async function resolveCaptiveSubscriber(opts: {
   }
 
   throw Object.assign(
-    new Error('Provide client IP (non-payment pool) or account / PPPoE username'),
+    new Error(
+      'Could not identify your session. Reconnect PPPoE, open this page over HTTP on the non-payment connection, then try again.'
+    ),
     { status: 400, code: 'MISSING_IDENTITY' }
   );
 }

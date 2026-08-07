@@ -582,9 +582,9 @@ app.post('/api/public/pay/:token/paymongo', async (req, res) => {
 });
 
 /**
- * Captive non-payment portal: resolve subscriber by PPP IP (preferred) or
- * account/username, ensure a pending pay link, start PayMongo checkout.
- * Do not trust req.ip — NAT hides the pool address; the page must send clientIp.
+ * Captive non-payment portal: resolve subscriber by PPP IP, ensure a pending
+ * pay link for that user, start PayMongo checkout. Token / username are not
+ * required from the captive page — Do not trust req.ip (NAT); the page sends clientIp.
  */
 app.post('/api/public/captive/checkout', async (req, res) => {
   try {
