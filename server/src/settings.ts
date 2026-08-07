@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect, repairNonPaymentHttpRedirectViaScript } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -976,15 +976,37 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
     api_pass: r.api_pass || '',
   };
   try {
-    // Always run the fast redirect repair first (NAT + proxy redirect + optional kick).
     const kickUser = String(b.kickUsername || b.username || '').trim();
-    const repair = await repairNonPaymentHttpRedirect(conn, {
-      nonPayCidr: b.nonPayCidr,
-      proxyPort: b.proxyPort,
-      nonPayAddressList: b.nonPayAddressList,
-      portalRedirectUrl: `${publicBase}/portal`,
-      username: kickUser || undefined,
-    });
+    // Prefer script-based repair — direct /ip/proxy API can hang on this board.
+    let repair: Awaited<ReturnType<typeof repairNonPaymentHttpRedirect>> | Awaited<
+      ReturnType<typeof repairNonPaymentHttpRedirectViaScript>
+    >;
+    try {
+      const viaScript = await repairNonPaymentHttpRedirectViaScript(conn, {
+        nonPayCidr: b.nonPayCidr,
+        proxyPort: b.proxyPort,
+        portalRedirectUrl: `${publicBase}/portal`,
+        username: kickUser || undefined,
+      });
+      repair = {
+        ok: true as const,
+        proxyEnabled: true,
+        natHttpRedirect: true,
+        proxyRedirect: true,
+        portalRedirectTo: `${publicBase}/portal`,
+        kicked: viaScript.kicked ?? null,
+        viaScript: viaScript.ran,
+      } as any;
+    } catch (scriptErr: any) {
+      repair = await repairNonPaymentHttpRedirect(conn, {
+        nonPayCidr: b.nonPayCidr,
+        proxyPort: b.proxyPort,
+        nonPayAddressList: b.nonPayAddressList,
+        portalRedirectUrl: `${publicBase}/portal`,
+        username: kickUser || undefined,
+      });
+      (repair as any).scriptError = scriptErr?.message || String(scriptErr);
+    }
 
     if (kickUser) {
       try {

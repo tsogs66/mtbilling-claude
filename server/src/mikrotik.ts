@@ -2915,6 +2915,60 @@ export async function inspectNonPaymentCaptive(
 }
 
 /**
+ * Apply captive redirect via /system/script/run — avoids hung /ip/proxy API
+ * print/set sessions observed on the live board.
+ */
+export async function repairNonPaymentHttpRedirectViaScript(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    portalRedirectUrl?: string;
+    username?: string;
+  } = {}
+): Promise<{ ok: true; ran: string; kicked?: string | null }> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
+    .trim()
+    .replace(/\/$/, '');
+  const httpPortal = portal.replace(/^https:\/\//i, 'http://');
+  const username = String(opts.username || '').trim();
+  const scriptName = 'mtb-fix-captive';
+  const u = rosScriptEscape(username);
+
+  const source =
+    `/ip proxy set enabled=yes port=${proxyPort} anonymous=no;` +
+    `:do {/ip firewall address-list remove [find list="non-payment" address="${nonPayCidr}"]} on-error={};` +
+    `/ip firewall address-list add list=non-payment address=${nonPayCidr} comment="${WEBPROXY_RULE_COMMENT}";` +
+    `:do {/ip firewall nat remove [find comment="${NONPAY_NAT.httpRedirectCidr}"]} on-error={};` +
+    `/ip firewall nat add chain=dstnat action=redirect to-ports=${proxyPort} protocol=tcp src-address=${nonPayCidr} dst-port=80 comment="${NONPAY_NAT.httpRedirectCidr}" place-before=0;` +
+    `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.redirectPortal}"]} on-error={};` +
+    `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.denyCaptive}"]} on-error={};` +
+    `/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to="${httpPortal}" comment="${NONPAY_PROXY.redirectPortal}";` +
+    (username
+      ? `/ppp secret set [find name="${u}"] profile=non-payments disabled=no;` +
+        `:do {/ppp active remove [find name="${u}"]} on-error={};`
+      : '');
+
+  return withRouter(
+    conn,
+    async (api) => {
+      await removeSystemScriptByName(api, scriptName);
+      await api.write('/system/script/add', [
+        `=name=${scriptName}`,
+        `=source=${source}`,
+        '=dont-require-permissions=yes',
+        '=comment=MT-Billing one-shot captive redirect repair',
+      ]);
+      await api.write('/system/script/run', [`=number=${scriptName}`]);
+      return { ok: true as const, ran: scriptName, kicked: username || null };
+    },
+    { timeoutSec: 20 }
+  );
+}
+
+/**
  * Fast path: enable webproxy, ensure HTTP→8080 NAT, and set catch-all
  * proxy access redirect to the subscriber portal. Avoids full firewall
  * rebuild so it can run while the board is busy / recovering.
