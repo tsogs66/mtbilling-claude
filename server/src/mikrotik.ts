@@ -2055,28 +2055,39 @@ export async function scheduleExpiryOnRouter(
 
     const offsetMs = await getRouterClockOffsetMs(api);
     const u = rosScriptEscape(username);
+    // Skip past start times — RouterOS one-shots with a past clock often never
+    // fire. The panel applies overdue actions immediately; only future events
+    // belong on the router so grace/disable still work while the server is offline.
+    const skewMs = 15_000;
+    const nowWall = Date.now() + offsetMs;
+    const scheduleGrace = graceAt.getTime() + offsetMs > nowWall + skewMs;
+    const scheduleDisable = disableAt.getTime() + offsetMs > nowWall + skewMs;
 
-    const grace = rosScheduleFields(graceAt, offsetMs);
-    const graceScript = `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no`;
-    await api.write('/system/scheduler/add', [
-      `=name=${schedName('grace', username)}`,
-      `=start-date=${grace.date}`,
-      `=start-time=${grace.time}`,
-      '=interval=0',
-      `=on-event=${graceScript}`,
-      '=comment=MT-Billing auto grace-switch',
-    ]);
+    if (scheduleGrace) {
+      const grace = rosScheduleFields(graceAt, offsetMs);
+      const graceScript = `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no`;
+      await api.write('/system/scheduler/add', [
+        `=name=${schedName('grace', username)}`,
+        `=start-date=${grace.date}`,
+        `=start-time=${grace.time}`,
+        '=interval=0',
+        `=on-event=${graceScript}`,
+        '=comment=MT-Billing auto grace-switch',
+      ]);
+    }
 
-    const disable = rosScheduleFields(disableAt, offsetMs);
-    const disableScript = `/ppp secret disable [find name="${u}"]; /ppp active remove [find name="${u}"]`;
-    await api.write('/system/scheduler/add', [
-      `=name=${schedName('disable', username)}`,
-      `=start-date=${disable.date}`,
-      `=start-time=${disable.time}`,
-      '=interval=0',
-      `=on-event=${disableScript}`,
-      '=comment=MT-Billing auto disable',
-    ]);
+    if (scheduleDisable) {
+      const disable = rosScheduleFields(disableAt, offsetMs);
+      const disableScript = `/ppp secret disable [find name="${u}"]; /ppp active remove [find name="${u}"]`;
+      await api.write('/system/scheduler/add', [
+        `=name=${schedName('disable', username)}`,
+        `=start-date=${disable.date}`,
+        `=start-time=${disable.time}`,
+        '=interval=0',
+        `=on-event=${disableScript}`,
+        '=comment=MT-Billing auto disable',
+      ]);
+    }
   }, { timeoutSec: 8 });
 }
 

@@ -817,7 +817,9 @@ export async function runAutomations(opts?: { service?: string }) {
     remindersSent: result.remindersSent,
     marked: result.markedNonPayment,
     profileSwitched: result.profileSwitched,
+    restored: result.restored,
     disabled: result.disabled,
+    schedulesEnsured: result.schedulesEnsured,
     routerErrors: result.routerErrors,
   };
 }
@@ -833,8 +835,28 @@ export type BillingCandidate = {
   hoursOverdue: number;
   hoursInNonPayment: number | null;
   profile: string;
-  action: 'expire' | 'disable';
+  action: 'expire' | 'disable' | 'restore';
 };
+
+function candidateBase(u: any, hoursOverdue: number | null): Omit<BillingCandidate, 'action'> {
+  const d = daysUntil(u.subscription_due);
+  const hoursInNp = u.nonpayment_since
+    ? (Date.now() - Date.parse(u.nonpayment_since)) / 3600000
+    : null;
+  const overdue = hoursOverdue ?? 0;
+  return {
+    id: u.id,
+    username: u.username,
+    customer: u.customer_name || u.username,
+    service: u.service || 'pppoe',
+    status: u.status,
+    due: u.subscription_due || null,
+    daysOverdue: d != null && d < 0 ? Math.abs(d) : Math.floor(overdue / 24),
+    hoursOverdue: Math.round(overdue * 10) / 10,
+    hoursInNonPayment: hoursInNp != null && Number.isFinite(hoursInNp) ? Math.round(hoursInNp * 10) / 10 : null,
+    profile: u.profile || '',
+  };
+}
 
 function classifyOverdueUser(
   u: any,
@@ -845,39 +867,36 @@ function classifyOverdueUser(
   const st = statusKey(u.status);
   if (st === 'disabled') return null;
 
-  const d = daysUntil(u.subscription_due);
-  const hoursInNp = u.nonpayment_since
-    ? (Date.now() - Date.parse(u.nonpayment_since)) / 3600000
-    : null;
-
-  const base: BillingCandidate = {
-    id: u.id,
-    username: u.username,
-    customer: u.customer_name || u.username,
-    service: u.service || 'pppoe',
-    status: u.status,
-    due: u.subscription_due || null,
-    daysOverdue: d != null && d < 0 ? Math.abs(d) : Math.floor(hoursOverdue / 24),
-    hoursOverdue: Math.round(hoursOverdue * 10) / 10,
-    hoursInNonPayment: hoursInNp != null && Number.isFinite(hoursInNp) ? Math.round(hoursInNp * 10) / 10 : null,
-    profile: u.profile || '',
-    action: 'expire',
-  };
+  const base = candidateBase(u, hoursOverdue);
 
   // Grace is measured from the account due date (not from when we first marked non-payment).
   if (hoursOverdue >= graceHours) {
     return { ...base, action: 'disable' };
   }
 
-  // Within grace: move/keep on non-payment expire profile (skip if already there)
-  if (st === 'non-payment' || st === 'nonpayment') return null;
+  // Within grace: switch/keep non-payment expire profile (recheck re-syncs MikroTik even if DB already marked).
   return { ...base, action: 'expire' };
 }
 
-/** Preview overdue / past-grace accounts without mutating. */
+/**
+ * Due date was extended / still valid, but account is stuck on non-payment (or
+ * disabled after non-payment). Recheck should restore the registered plan profile.
+ */
+function classifyRestoreUser(u: any): BillingCandidate | null {
+  if (hoursPastDue(u.subscription_due) != null) return null;
+  if (!u.subscription_due) return null;
+  const st = statusKey(u.status);
+  const isNp = st === 'non-payment' || st === 'nonpayment' || st === 'expired';
+  const wasDisabledForNp = st === 'disabled' && !!u.nonpayment_since;
+  if (!isNp && !wasDisabledForNp) return null;
+  return { ...candidateBase(u, null), action: 'restore' };
+}
+
+/** Preview overdue / past-grace / restore-eligible accounts without mutating. */
 export function previewBillingEnforcement(opts?: { service?: string }): {
   toExpire: BillingCandidate[];
   toDisable: BillingCandidate[];
+  toRestore: BillingCandidate[];
   graceHours: number;
   autodisableEnabled: boolean;
 } {
@@ -892,8 +911,14 @@ export function previewBillingEnforcement(opts?: { service?: string }): {
 
   const toExpire: BillingCandidate[] = [];
   const toDisable: BillingCandidate[] = [];
+  const toRestore: BillingCandidate[] = [];
 
   for (const u of all) {
+    const restore = classifyRestoreUser(u);
+    if (restore) {
+      toRestore.push(restore);
+      continue;
+    }
     const c = classifyOverdueUser(u, graceHours);
     if (!c) continue;
     if (c.action === 'disable') toDisable.push(c);
@@ -903,6 +928,7 @@ export function previewBillingEnforcement(opts?: { service?: string }): {
   return {
     toExpire,
     toDisable,
+    toRestore,
     graceHours,
     autodisableEnabled: !!s.autodisable_enabled,
   };
@@ -917,9 +943,12 @@ export async function executeBillingEnforcement(opts?: {
   remindersSent: number;
   markedNonPayment: number;
   profileSwitched: number;
+  restored: number;
   disabled: number;
+  schedulesEnsured: number;
   routerErrors: number;
   expired: BillingCandidate[];
+  restoredUsers: BillingCandidate[];
   disabledUsers: BillingCandidate[];
 }> {
   const s = getSettings();
@@ -930,15 +959,24 @@ export async function executeBillingEnforcement(opts?: {
     remindersSent: 0,
     markedNonPayment: 0,
     profileSwitched: 0,
+    restored: 0,
     disabled: 0,
+    schedulesEnsured: 0,
     routerErrors: 0,
     expired: [] as BillingCandidate[],
+    restoredUsers: [] as BillingCandidate[],
     disabledUsers: [] as BillingCandidate[],
   };
 
-  const { resolvePublicBaseUrl, ensureFreshPayLink, syncUserToRouter, enqueueRouterSync, resolveRouterSync } = await import(
-    './billing.js'
-  );
+  const {
+    resolvePublicBaseUrl,
+    ensureFreshPayLink,
+    syncUserToRouter,
+    enqueueRouterSync,
+    resolveRouterSync,
+    scheduleRouterExpiry,
+    cancelRouterExpirySchedule,
+  } = await import('./billing.js');
   const { baseUrl } = resolvePublicBaseUrl();
   const service = opts?.service ? String(opts.service).toLowerCase() : null;
 
@@ -1015,8 +1053,42 @@ export async function executeBillingEnforcement(opts?: {
       }
     }
 
+    // Due extended / still valid but stuck on non-payment → restore registered plan
+    const restore = classifyRestoreUser(u);
+    if (restore) {
+      db.prepare(
+        "UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?"
+      ).run(u.id);
+      const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+      const sync = await syncUserToRouter(full, 'restore');
+      if (sync.ok) {
+        summary.profileSwitched++;
+        resolveRouterSync(full.router_id, full.id);
+      } else {
+        summary.routerErrors++;
+        enqueueRouterSync(full.router_id, full.id, sync.error || 'Restore after extended due failed');
+      }
+      await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+      summary.schedulesEnsured++;
+      summary.restored++;
+      summary.restoredUsers.push({ ...restore, status: 'Active', action: 'restore' });
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'billing',
+        `Restored ${u.username} to plan profile — due ${u.subscription_due} is not overdue${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
+      );
+      continue;
+    }
+
     const classified = classifyOverdueUser(u, graceHours);
-    if (!classified) continue;
+    if (!classified) {
+      // Active (or paid) with a future due date — keep MikroTik grace/disable schedules fresh
+      if (st === 'active' && u.subscription_due) {
+        await scheduleRouterExpiry(u, u.expiration_profile).catch(() => undefined);
+        summary.schedulesEnsured++;
+      }
+      continue;
+    }
 
     // Within grace → non-payment expire profile on MikroTik (comment preserved)
     if (classified.action === 'expire') {
@@ -1038,6 +1110,10 @@ export async function executeBillingEnforcement(opts?: {
         summary.routerErrors++;
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Non-payment expire failed');
       }
+
+      // Grace already started — ensure the remaining disable one-shot is on the router
+      await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+      summary.schedulesEnsured++;
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
@@ -1072,6 +1148,8 @@ export async function executeBillingEnforcement(opts?: {
         summary.routerErrors++;
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Disable failed');
       }
+      // Past disable — clear stale grace/disable one-shots
+      await cancelRouterExpirySchedule(full).catch(() => undefined);
 
       summary.disabled++;
       summary.disabledUsers.push({

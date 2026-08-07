@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Renewal Required ÔÇö Service Paused</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --bg-card: #0f172a;
+      --bg-elevated: #111827;
+      --border: rgba(56, 189, 248, 0.22);
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --cyan: #67e8f9;
+      --cyan-soft: #a5f3fc;
+      --orange: #fb7185;
+      --orange-soft: #fdba74;
+      --blue: #0284c7;
+      --blue-bright: #0ea5e9;
+      --paymongo: #00d4aa;
+      --paymongo-dark: #009b7d;
+      --danger: #ef4444;
+      --radius: 18px;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      color: var(--text);
+      background:
+        radial-gradient(ellipse 90% 55% at 50% -10%, #1e3a5f 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(14, 165, 233, 0.12), transparent 50%),
+        var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(8, 12, 22, 0.98));
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, #22d3ee, #0ea5e9, #6366f1);
+    }
+
+    .inner { padding: 28px 22px 22px; }
+
+    .brand {
+      text-align: center;
+      margin-bottom: 18px;
+    }
+
+    .logo {
+      width: 84px;
+      height: 84px;
+      margin: 0 auto 14px;
+      border-radius: 50%;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      box-shadow: 0 0 0 3px rgba(103, 232, 249, 0.25), 0 10px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .logo-fallback {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, #0ea5e9, #0369a1);
+      color: #fff;
+      font-weight: 800;
+      font-size: 22px;
+      letter-spacing: 0.04em;
+    }
+
+    .company-name {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cyan-soft);
+      text-shadow: 0 0 24px rgba(103, 232, 249, 0.35);
+      line-height: 1.25;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      color: #fecaca;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+      animation: pulse 1.6s ease-out infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }
+      70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .headline {
+      margin: 16px 0 8px;
+      text-align: center;
+      font-size: 1.55rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: var(--orange);
+      text-transform: uppercase;
+    }
+
+    .message {
+      margin: 0 auto;
+      max-width: 34ch;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    .account-strip {
+      display: none;
+      margin: 18px 0 0;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(14, 165, 233, 0.08);
+      border: 1px solid rgba(14, 165, 233, 0.2);
+      font-size: 0.85rem;
+    }
+
+    .account-strip.visible { display: grid; gap: 6px; }
+    .account-strip .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .account-strip .label { color: var(--muted); }
+    .account-strip .value { color: #e2e8f0; font-weight: 650; text-align: right; }
+    .account-strip .amount {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .section {
+      margin-top: 22px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 12px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #e2e8f0;
+    }
+
+    .section-title svg { color: var(--cyan); flex-shrink: 0; }
+
+    .channel-tabs {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .channel-tab {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 212, 170, 0.35);
+      background: linear-gradient(135deg, rgba(0, 212, 170, 0.18), rgba(14, 165, 233, 0.12));
+      color: #ecfeff;
+      font-weight: 750;
+      font-size: 0.92rem;
+      letter-spacing: 0.02em;
+    }
+
+    .channel-tab .pm-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: #04111a;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 900;
+      color: var(--paymongo);
+      border: 1px solid rgba(0, 212, 170, 0.4);
+    }
+
+    .pay-card {
+      border-radius: 16px;
+      padding: 16px;
+      background: linear-gradient(145deg, #0369a1 0%, #0284c7 55%, #0ea5e9 100%);
+      box-shadow: 0 12px 28px rgba(2, 132, 199, 0.35);
+      color: #fff;
+    }
+
+    .pay-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .pay-card-name {
+      font-size: 1.05rem;
+      font-weight: 800;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.18);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .pay-card-desc {
+      margin: 0;
+      font-size: 0.86rem;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .methods {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    .methods span {
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .howto {
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .howto h3 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--cyan-soft);
+    }
+
+    .howto ol {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .howto li + li { margin-top: 4px; }
+
+    .lookup {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .lookup label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .lookup input {
+      width: 100%;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: #0b1220;
+      color: #f8fafc;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 0.95rem;
+      outline: none;
+    }
+
+    .lookup input:focus {
+      border-color: rgba(14, 165, 233, 0.6);
+      box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 14px;
+      padding: 15px 18px;
+      font-size: 0.98rem;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      cursor: pointer;
+      text-decoration: none;
+      color: #04111a;
+      background: linear-gradient(135deg, #00e6b8, #00b894);
+      box-shadow: 0 10px 24px rgba(0, 184, 148, 0.35);
+      transition: transform 0.15s ease, filter 0.15s ease;
+    }
+
+    .btn:hover { filter: brightness(1.05); }
+    .btn:active { transform: translateY(1px); }
+    .btn[disabled] {
+      opacity: 0.55;
+      cursor: not-allowed;
+      filter: none;
+    }
+
+    .btn svg { flex-shrink: 0; }
+
+    .notice {
+      margin-top: 16px;
+      display: flex;
+      gap: 12px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(30, 41, 59, 0.85);
+      border: 1px solid rgba(251, 146, 60, 0.25);
+      color: #cbd5e1;
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+
+    .notice-icon {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(251, 146, 60, 0.18);
+      color: var(--orange-soft);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 12px;
+      margin-top: 1px;
+    }
+
+    .notice strong { color: #fdba74; }
+
+    .support {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    .support-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 12px;
+      color: var(--cyan);
+      font-size: 0.88rem;
+      font-weight: 650;
+    }
+
+    .support-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .support-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 11px 14px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(103, 232, 249, 0.25);
+      color: #e2e8f0;
+      text-decoration: none;
+      font-size: 0.86rem;
+      font-weight: 650;
+    }
+
+    .support-btn:hover {
+      border-color: rgba(103, 232, 249, 0.5);
+      background: rgba(14, 165, 233, 0.1);
+    }
+
+    .footer-note {
+      margin: 16px 4px 0;
+      text-align: center;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .error-banner {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(127, 29, 29, 0.35);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      color: #fecaca;
+      font-size: 0.84rem;
+    }
+
+    .error-banner.visible { display: block; }
+
+    @media (min-width: 480px) {
+      .wrap { padding-top: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="inner">
+        <header class="brand">
+          <div class="logo" id="logoBox">
+            <div class="logo-fallback" id="logoFallback">PN</div>
+          </div>
+          <h1 class="company-name" id="companyName">PA-NORTH INTERNET SERVICES</h1>
+          <div class="badge">
+            <span class="badge-dot" aria-hidden="true"></span>
+            Service Paused
+          </div>
+        </header>
+
+        <h2 class="headline">Renewal Required</h2>
+        <p class="message" id="messageText">
+          Your internet connection has been paused due to an outstanding balance.
+          Please settle your account via PayMongo below to restore service automatically.
+        </p>
+
+        <div class="account-strip" id="accountStrip" aria-live="polite">
+          <div class="row"><span class="label">Account</span><span class="value" id="accountValue">ÔÇö</span></div>
+          <div class="row"><span class="label">Subscriber</span><span class="value" id="customerValue">ÔÇö</span></div>
+          <div class="row"><span class="label">Plan</span><span class="value" id="planValue">ÔÇö</span></div>
+          <div class="row"><span class="label">Amount due</span><span class="value amount" id="amountValue">ÔÇö</span></div>
+        </div>
+
+        <section class="section" aria-labelledby="payHeading">
+          <h3 class="section-title" id="payHeading">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <path d="M2 10h20" />
+            </svg>
+            1. Payment Channels
+          </h3>
+
+          <div class="channel-tabs" role="tablist" aria-label="Payment channel">
+            <div class="channel-tab" role="tab" aria-selected="true">
+              <span class="pm-mark" aria-hidden="true">Ôé▒</span>
+              PayMongo
+            </div>
+          </div>
+
+          <div class="pay-card">
+            <div class="pay-card-top">
+              <div class="pay-card-name">PayMongo Checkout</div>
+              <span class="pill">Secure Pay</span>
+            </div>
+            <p class="pay-card-desc">
+              Pay your outstanding balance online. PayMongo accepts GCash, Maya, cards, and other Philippine payment methods in one secure checkout.
+            </p>
+            <div class="methods" aria-label="Supported methods">
+              <span>GCash</span>
+              <span>Maya</span>
+              <span>Cards</span>
+              <span>QR Ph</span>
+              <span>Bank</span>
+            </div>
+          </div>
+
+          <div class="howto">
+            <h3>How to restore service</h3>
+            <ol>
+              <li>Tap <b>Pay now with PayMongo</b> to open your secure payment link.</li>
+              <li>Complete payment using GCash, Maya, card, or bank via PayMongo.</li>
+              <li>Keep your receipt. Service reactivates after payment is confirmed.</li>
+            </ol>
+          </div>
+
+          <div class="lookup" id="lookupBox">
+            <label for="payToken">Payment link token (optional)</label>
+            <input id="payToken" name="payToken" inputmode="text" autocomplete="off" placeholder="Paste token from your payment SMS / link" />
+            <label for="accountInput">Or account / PPPoE username</label>
+            <input id="accountInput" name="account" inputmode="text" autocomplete="username" placeholder="e.g. account number or username" />
+          </div>
+
+          <div class="error-banner" id="errorBanner" role="alert"></div>
+
+          <button class="btn" type="button" id="payBtn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+              <path d="M12 1v22" />
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+            Pay now with PayMongo
+          </button>
+        </section>
+
+        <div class="notice">
+          <div class="notice-icon" aria-hidden="true">i</div>
+          <div>
+            <strong>Payment Verification Notice:</strong>
+            Once your PayMongo payment is completed, keep a copy of your transaction receipt.
+            Service is usually restored within 5 to 10 minutes after confirmation.
+            If you experience delays, please contact support.
+          </div>
+        </div>
+
+        <footer class="support">
+          <div class="support-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4" />
+              <path d="M12 16h.01" />
+            </svg>
+            Need help? Contact support:
+          </div>
+          <div class="support-list" id="supportList"></div>
+        </footer>
+      </div>
+    </div>
+    <p class="footer-note" id="footerNote">
+      Non-payment profile web proxy ┬À Powered by PayMongo ┬À MT-Billing
+    </p>
+  </div>
+
+  <script>
+    /**
+     * MikroTik non-payment / expire web-proxy page.
+     * Deploy this file to the billing host (or router HTML directory) and point
+     * the non-payments profile web-proxy / redirect at it.
+     *
+     * Query params (optional):
+     *   ?token=...           payment link token ÔåÆ opens /pay/{token}
+     *   ?username=...        PPPoE username (display / lookup hint)
+     *   ?account=...         account number
+     *   ?amount=...          amount due
+     *   ?name=...            subscriber name
+     *   ?plan=...            plan name
+     *   ?payUrl=...          full absolute payment URL override
+     */
+    const CONFIG = {
+      companyName: 'PA-NORTH INTERNET SERVICES',
+      logoUrl: '/logo.png',
+      /** Public origin of the billing UI (empty = same origin as this page). */
+      payBaseUrl: '',
+      /** Optional absolute PayMongo / panel checkout URL when no token is known. */
+      fallbackPayUrl: '',
+      apiBase: '/api',
+      supportContacts: [
+        { name: 'Mary Grace Fajel', phone: '09081418108' },
+        { name: 'Aries Fajel', phone: '09281029129' },
+      ],
+    };
+
+    const qs = new URLSearchParams(location.search);
+    const state = {
+      token: (qs.get('token') || qs.get('pay') || '').trim(),
+      username: (qs.get('username') || qs.get('user') || '').trim(),
+      account: (qs.get('account') || '').trim(),
+      amount: qs.get('amount'),
+      name: (qs.get('name') || qs.get('customer') || '').trim(),
+      plan: (qs.get('plan') || '').trim(),
+      payUrl: (qs.get('payUrl') || qs.get('url') || '').trim(),
+    };
+
+    const el = (id) => document.getElementById(id);
+
+    function peso(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return null;
+      return 'Ôé▒' + v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function resolvePayBase() {
+      const configured = String(CONFIG.payBaseUrl || '').replace(/\/$/, '');
+      if (configured) return configured;
+      return location.origin.replace(/\/$/, '');
+    }
+
+    function buildPayUrl(token) {
+      const t = String(token || '').trim();
+      if (!t) return '';
+      return resolvePayBase() + '/pay/' + encodeURIComponent(t);
+    }
+
+    function showError(msg) {
+      const box = el('errorBanner');
+      if (!msg) {
+        box.classList.remove('visible');
+        box.textContent = '';
+        return;
+      }
+      box.textContent = msg;
+      box.classList.add('visible');
+    }
+
+    function renderSupport(contacts) {
+      const list = el('supportList');
+      list.innerHTML = '';
+      const rows = (contacts && contacts.length ? contacts : CONFIG.supportContacts).filter(Boolean);
+      for (const c of rows) {
+        const phone = String(c.phone || c).replace(/\D/g, '');
+        const label = c.name ? c.name + ' (' + c.phone + ')' : String(c.phone || c);
+        const a = document.createElement('a');
+        a.className = 'support-btn';
+        a.href = phone ? 'tel:' + phone : '#';
+        a.innerHTML =
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+          '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/>' +
+          '</svg>' +
+          '<span></span>';
+        a.querySelector('span').textContent = label;
+        list.appendChild(a);
+      }
+    }
+
+    function setLogo(src, name) {
+      const box = el('logoBox');
+      const fallback = el('logoFallback');
+      const initials = String(name || 'PN')
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase() || 'PN';
+      fallback.textContent = initials;
+
+      if (!src) return;
+      const img = new Image();
+      img.alt = name || 'Logo';
+      img.onload = function () {
+        box.innerHTML = '';
+        box.appendChild(img);
+      };
+      img.onerror = function () {
+        /* keep fallback */
+      };
+      img.src = src;
+    }
+
+    function renderAccountStrip() {
+      const hasAny = state.account || state.username || state.name || state.plan || state.amount;
+      const strip = el('accountStrip');
+      if (!hasAny) {
+        strip.classList.remove('visible');
+        return;
+      }
+      strip.classList.add('visible');
+      el('accountValue').textContent = state.account || state.username || 'ÔÇö';
+      el('customerValue').textContent = state.name || 'ÔÇö';
+      el('planValue').textContent = state.plan || 'ÔÇö';
+      el('amountValue').textContent = peso(state.amount) || (state.amount ? String(state.amount) : 'ÔÇö');
+    }
+
+    function applyCompany(company) {
+      if (!company) return;
+      if (company.name) {
+        CONFIG.companyName = company.name;
+        el('companyName').textContent = company.name;
+        el('messageText').textContent =
+          'Your ' + company.name + ' connection has been paused due to an outstanding balance. ' +
+          'Please settle your account via PayMongo below to restore service automatically.';
+      }
+      if (company.logo) setLogo(company.logo, company.name);
+      if (company.phone) {
+        const phones = String(company.phone)
+          .split(/[\n,;/]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (phones.length) {
+          renderSupport(phones.map((phone) => ({ name: 'Support', phone })));
+        }
+      }
+    }
+
+    async function loadBranding() {
+      try {
+        const r = await fetch(CONFIG.apiBase + '/company/branding', { headers: { Accept: 'application/json' } });
+        if (!r.ok) return;
+        const data = await r.json();
+        applyCompany(data);
+      } catch (_) {
+        /* offline / walled-garden without API ÔÇö use CONFIG defaults */
+      }
+    }
+
+    async function loadPaymentLink(token) {
+      if (!token) return null;
+      try {
+        const r = await fetch(CONFIG.apiBase + '/public/pay/' + encodeURIComponent(token), {
+          headers: { Accept: 'application/json' },
+        });
+        if (!r.ok) return null;
+        const data = await r.json();
+        state.token = token;
+        state.account = data.account || state.account;
+        state.username = data.username || state.username;
+        state.name = data.customer || state.name;
+        state.plan = data.plan || state.plan;
+        state.amount = data.amount != null ? data.amount : state.amount;
+        if (data.company) applyCompany(data.company);
+        renderAccountStrip();
+        el('payToken').value = token;
+        return data;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function startPayMongoCheckout(token) {
+      const r = await fetch(CONFIG.apiBase + '/public/pay/' + encodeURIComponent(token) + '/paymongo', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+      if (!j.checkoutUrl) throw new Error('PayMongo did not return a checkout URL');
+      location.href = j.checkoutUrl;
+    }
+
+    async function openPay() {
+      showError('');
+      const tokenInput = el('payToken').value.trim();
+      const accountInput = el('accountInput').value.trim();
+      const token = tokenInput || state.token;
+      const btn = el('payBtn');
+      btn.disabled = true;
+
+      try {
+        if (state.payUrl && /^https?:\/\//i.test(state.payUrl) && /paymongo\.com/i.test(state.payUrl)) {
+          location.href = state.payUrl;
+          return;
+        }
+
+        if (token) {
+          try {
+            await startPayMongoCheckout(token);
+            return;
+          } catch (e) {
+            // Fall back to the panel pay page if checkout isn't available yet
+            location.href = buildPayUrl(token);
+            return;
+          }
+        }
+
+        if (CONFIG.fallbackPayUrl) {
+          const url = new URL(CONFIG.fallbackPayUrl, location.origin);
+          if (accountInput) url.searchParams.set('account', accountInput);
+          if (state.username) url.searchParams.set('username', state.username);
+          location.href = url.toString();
+          return;
+        }
+
+        if (accountInput || state.username || state.account) {
+          showError(
+            'No payment token found for this session. Ask support to resend your PayMongo payment link, or paste the token from your SMS / email above.'
+          );
+          return;
+        }
+
+        showError('Paste your payment link token, or enter your account number / username, then try again.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function init() {
+      el('companyName').textContent = CONFIG.companyName;
+      el('messageText').textContent =
+        'Your ' + CONFIG.companyName + ' connection has been paused due to an outstanding balance. ' +
+        'Please settle your account via PayMongo below to restore service automatically.';
+      setLogo(CONFIG.logoUrl, CONFIG.companyName);
+      renderSupport(CONFIG.supportContacts);
+      renderAccountStrip();
+
+      if (state.token) el('payToken').value = state.token;
+      if (state.account || state.username) el('accountInput').value = state.account || state.username;
+
+      el('payBtn').addEventListener('click', openPay);
+      el('payToken').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') openPay();
+      });
+      el('accountInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') openPay();
+      });
+
+      loadBranding();
+      if (state.token) loadPaymentLink(state.token);
+    }
+
+    init();
+  </script>
+</body>
+</html>
