@@ -540,7 +540,7 @@
           <div class="howto">
             <h3>How to restore service</h3>
             <ol>
-              <li>Tap <b>Pay now with PayMongo</b> to open your secure payment link.</li>
+              <li>Tap <b>Pay now with PayMongo</b> — we identify your session from this connection (or your account below).</li>
               <li>Complete payment using GCash, Maya, card, or bank via PayMongo.</li>
               <li>Keep your receipt. Service reactivates after payment is confirmed.</li>
             </ol>
@@ -549,7 +549,7 @@
           <div class="lookup" id="lookupBox">
             <label for="payToken">Payment link token (optional)</label>
             <input id="payToken" name="payToken" inputmode="text" autocomplete="off" placeholder="Paste token from your payment SMS / link" />
-            <label for="accountInput">Or account / PPPoE username</label>
+            <label for="accountInput">Account / PPPoE username (if auto-detect fails)</label>
             <input id="accountInput" name="account" inputmode="text" autocomplete="username" placeholder="e.g. account number or username" />
           </div>
 
@@ -618,6 +618,8 @@
       payBaseUrl: 'https://panorth.tsogs.cloud',
       fallbackPayUrl: '',
       apiBase: 'https://panorth.tsogs.cloud/api',
+      /** Non-payment PPP pool — used to pick the right local IP for captive checkout. */
+      nonPayCidr: '172.15.10.0/24',
       supportContacts: [
         { name: 'Mary Grace Fajel', phone: '09081418108' },
         { name: 'Aries Fajel', phone: '09281029129' },
@@ -633,6 +635,7 @@
       name: (qs.get('name') || qs.get('customer') || '').trim(),
       plan: (qs.get('plan') || '').trim(),
       payUrl: (qs.get('payUrl') || qs.get('url') || '').trim(),
+      clientIp: (qs.get('ip') || qs.get('clientIp') || '').trim(),
     };
 
     const el = (id) => document.getElementById(id);
@@ -792,6 +795,130 @@
       location.href = j.checkoutUrl;
     }
 
+    function ipv4ToInt(ip) {
+      const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || '').trim());
+      if (!m) return null;
+      const parts = m.slice(1).map(Number);
+      if (parts.some((n) => n > 255)) return null;
+      return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+    }
+
+    function ipv4InCidr(ip, cidr) {
+      const parts = String(cidr || '').trim().split('/');
+      const bits = Math.min(32, Math.max(0, Number(parts[1]) || 0));
+      const ipN = ipv4ToInt(ip);
+      const netN = ipv4ToInt(parts[0]);
+      if (ipN == null || netN == null) return false;
+      if (bits === 0) return true;
+      const mask = bits === 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
+      return (ipN & mask) === (netN & mask);
+    }
+
+    /** Discover this device's PPP/non-pay IPv4 (WebRTC). Billing host cannot see it through NAT. */
+    function detectLocalIpv4s() {
+      return new Promise((resolve) => {
+        const RTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+        if (!RTCPeerConnection) {
+          resolve([]);
+          return;
+        }
+        const ips = [];
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          try { pc.close(); } catch (_) { /* ignore */ }
+          resolve(ips);
+        };
+        const pc = new RTCPeerConnection({ iceServers: [] });
+        try { pc.createDataChannel('mtb'); } catch (_) { /* ignore */ }
+        pc.onicecandidate = (e) => {
+          if (!e || !e.candidate || !e.candidate.candidate) {
+            if (!e || !e.candidate) finish();
+            return;
+          }
+          const m = /([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+          if (m && ips.indexOf(m[1]) < 0) ips.push(m[1]);
+        };
+        pc.createOffer()
+          .then((offer) => pc.setLocalDescription(offer))
+          .catch(() => finish());
+        setTimeout(finish, 1600);
+      });
+    }
+
+    async function resolveClientIp() {
+      if (state.clientIp && ipv4InCidr(state.clientIp, CONFIG.nonPayCidr)) return state.clientIp;
+      const ips = await detectLocalIpv4s();
+      const inPool = ips.filter((ip) => ipv4InCidr(ip, CONFIG.nonPayCidr));
+      const pick = inPool[0] || ips.find((ip) => !/^127\./.test(ip) && !/^169\.254\./.test(ip)) || '';
+      if (pick) state.clientIp = pick;
+      return pick || '';
+    }
+
+    async function startCaptiveCheckout(extra) {
+      const clientIp = (extra && extra.clientIp) || (await resolveClientIp());
+      const accountInput = el('accountInput').value.trim();
+      const body = {
+        clientIp: clientIp || undefined,
+        account: accountInput || state.account || undefined,
+        username: state.username || undefined,
+        nonPayCidr: CONFIG.nonPayCidr,
+        publicBaseUrl: resolvePayBase(),
+      };
+      if (!body.clientIp && !body.account && !body.username) {
+        throw new Error('Could not detect your session IP. Enter your account / PPPoE username, then try again.');
+      }
+      const r = await fetch(CONFIG.apiBase + '/public/captive/checkout', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+      if (j.username) state.username = j.username;
+      if (j.account) state.account = j.account;
+      if (j.customer) state.name = j.customer;
+      if (j.amount != null) state.amount = j.amount;
+      if (j.token) {
+        state.token = j.token;
+        el('payToken').value = j.token;
+      }
+      renderAccountStrip();
+      if (!j.checkoutUrl) throw new Error('PayMongo did not return a checkout URL');
+      location.href = j.checkoutUrl;
+    }
+
+    async function preloadCaptiveIdentity() {
+      try {
+        const clientIp = await resolveClientIp();
+        if (!clientIp && !state.username && !state.account) return;
+        const r = await fetch(CONFIG.apiBase + '/public/captive/resolve', {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientIp: clientIp || undefined,
+            username: state.username || undefined,
+            account: state.account || el('accountInput').value.trim() || undefined,
+            nonPayCidr: CONFIG.nonPayCidr,
+          }),
+        });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j.username) state.username = j.username;
+        if (j.account) state.account = j.account;
+        if (j.customer) state.name = j.customer;
+        if (j.plan) state.plan = j.plan;
+        if (j.amount != null) state.amount = j.amount;
+        if (state.account || state.username) {
+          el('accountInput').value = state.account || state.username;
+        }
+        renderAccountStrip();
+      } catch (_) {
+        /* ignore — pay button still works with manual account */
+      }
+    }
+
     async function openPay() {
       showError('');
       const tokenInput = el('payToken').value.trim();
@@ -806,33 +933,38 @@
           return;
         }
 
+        // Prefer captive checkout (PPP IP → create/reuse pay link → PayMongo)
+        try {
+          await startCaptiveCheckout({
+            clientIp: state.clientIp || undefined,
+          });
+          return;
+        } catch (captiveErr) {
+          // If user already has a token, fall through to token checkout
+          if (!token) {
+            if (CONFIG.fallbackPayUrl) {
+              const url = new URL(CONFIG.fallbackPayUrl, location.origin);
+              if (accountInput) url.searchParams.set('account', accountInput);
+              if (state.username) url.searchParams.set('username', state.username);
+              location.href = url.toString();
+              return;
+            }
+            showError(captiveErr.message || 'Could not start payment.');
+            return;
+          }
+        }
+
         if (token) {
           try {
             await startPayMongoCheckout(token);
             return;
           } catch (e) {
-            // Fall back to the panel pay page if checkout isn't available yet
             location.href = buildPayUrl(token);
             return;
           }
         }
 
-        if (CONFIG.fallbackPayUrl) {
-          const url = new URL(CONFIG.fallbackPayUrl, location.origin);
-          if (accountInput) url.searchParams.set('account', accountInput);
-          if (state.username) url.searchParams.set('username', state.username);
-          location.href = url.toString();
-          return;
-        }
-
-        if (accountInput || state.username || state.account) {
-          showError(
-            'No payment token found for this session. Ask support to resend your PayMongo payment link, or paste the token from your SMS / email above.'
-          );
-          return;
-        }
-
-        showError('Paste your payment link token, or enter your account number / username, then try again.');
+        showError('Could not start payment. Enter your account / PPPoE username and try again.');
       } finally {
         btn.disabled = false;
       }
@@ -860,6 +992,7 @@
 
       loadBranding();
       if (state.token) loadPaymentLink(state.token);
+      else preloadCaptiveIdentity();
     }
 
     init();
