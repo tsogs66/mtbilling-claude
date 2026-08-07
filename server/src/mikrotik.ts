@@ -2120,8 +2120,8 @@ const NONPAY_FW = {
   drop: 'MT-Billing nonpay drop other',
 } as const;
 const NONPAY_PROXY = {
-  allowPort: 'MT-Billing nonpay allow proxy port',
-  redirectHttp: 'MT-Billing nonpay redirect HTTP',
+  allowLanding: 'MT-Billing nonpay allow landing',
+  denyCaptive: 'MT-Billing nonpay captive deny',
 } as const;
 
 /** Management networks allowed to open WebFig / Winbox / SSH. */
@@ -2282,10 +2282,10 @@ export type NonPaymentWebProxyOpts = {
 
 /**
  * Non-payment captive setup for portal-pay flow:
- *  - HTTP :80 → redirect to webproxy → error.html (CTA → /portal)
- *  - HTTPS :443 → redirect to webproxy EXCEPT billing/PayMongo allowlist
- *    (so subscribers can open the portal and finish PayMongo over limited speed)
- *  - forward drop everything else (blocks HTTPS/QUIC bypass)
+ *  - HTTP :80 → NAT redirect to webproxy
+ *  - Proxy access: allow portal/PayMongo/landing, then DENY (serves error.html)
+ *  - HTTPS to portal/PayMongo allowed; other HTTPS dropped (no TLS→HTTP proxy
+ *    redirect — that breaks PC browsers / never shows error.html)
  *
  * Never touches: /ip address, pools, PPP profile addressing.
  */
@@ -2310,7 +2310,7 @@ export async function configureNonPaymentWebProxy(
   natHttpRedirect: boolean;
   natHttpsAllow: boolean;
   natHttpsRedirect: boolean;
-  proxyRedirect: boolean;
+  proxyDeny: boolean;
   routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
@@ -2362,38 +2362,40 @@ export async function configureNonPaymentWebProxy(
 
       const existing = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
 
-      const findProxy = (pred: (r: Record<string, string>) => boolean) =>
-        (existing || []).find(pred);
-
-      // Ensure allow for proxy port itself (hits on live setups are high).
-      let proxyPortAllow = !!findProxy(
-        (r) =>
-          String(r.action || '').toLowerCase() === 'allow' &&
-          String(r['src-address'] || '') === nonPayCidr &&
-          String(r['dst-port'] || '') === String(proxyPort)
-      );
-      if (!proxyPortAllow) {
-        await api.write('/ip/proxy/access/add', [
-          `=src-address=${nonPayCidr}`,
-          `=dst-port=${proxyPort}`,
-          '=action=allow',
-          `=comment=${NONPAY_PROXY.allowPort}`,
-          '=place-before=0',
-        ]);
-        existing.unshift({
-          action: 'allow',
-          'src-address': nonPayCidr,
-          'dst-port': String(proxyPort),
-          comment: NONPAY_PROXY.allowPort,
-        });
-        proxyPortAllow = true;
+      // IMPORTANT: never allow dst-port=<proxyPort> for the non-pay CIDR.
+      // Transparent NAT makes every HTTP request look like :8080, so that
+      // allow bypasses captive and the browser never sees error.html.
+      for (const row of [...(existing || [])]) {
+        const action = String(row.action || '').toLowerCase();
+        const src = String(row['src-address'] || '');
+        const dport = String(row['dst-port'] || '');
+        const isBadAllow =
+          action === 'allow' &&
+          src === nonPayCidr &&
+          dport === String(proxyPort) &&
+          !String(row['dst-host'] || '') &&
+          !String(row['dst-address'] || '');
+        const isLegacyRedirect = action === 'redirect' && src === nonPayCidr;
+        if (!isBadAllow && !isLegacyRedirect) continue;
+        const id = row['.id'];
+        if (!id) continue;
+        try {
+          await api.write('/ip/proxy/access/remove', [`=.id=${id}`]);
+          const idx = existing.indexOf(row);
+          if (idx >= 0) existing.splice(idx, 1);
+        } catch {
+          /* ignore */
+        }
       }
 
-      // Place host allows before the first redirect rule.
-      const redirectId =
-        (existing || []).find((r) => String(r.action || '').toLowerCase() === 'redirect')?.['.id'] ||
-        '';
-      const placeBeforeRedirect = redirectId ? [`=place-before=${redirectId}`] : [];
+      // Place new allows before any deny rule.
+      const denyId =
+        (existing || []).find(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'deny' &&
+            String(r['src-address'] || '') === nonPayCidr
+        )?.['.id'] || '';
+      const placeBeforeDeny = denyId ? [`=place-before=${denyId}`] : [];
 
       const alreadyAllowsHost = (host: string) =>
         (existing || []).some(
@@ -2411,6 +2413,30 @@ export async function configureNonPaymentWebProxy(
             (String(r['dst-address'] || '') === ip || String(r['dst-address'] || '') === `${ip}/32`)
         );
 
+      const alreadyAllowsLanding = (existing || []).some(
+        (r) =>
+          String(r.action || '').toLowerCase() === 'allow' &&
+          String(r['src-address'] || '') === nonPayCidr &&
+          (String(r['dst-address'] || '') === landingAddress ||
+            String(r['dst-address'] || '') === `${landingAddress}/32` ||
+            String(r.comment || '') === NONPAY_PROXY.allowLanding)
+      );
+      if (!alreadyAllowsLanding) {
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-address=${landingAddress}`,
+          '=action=allow',
+          `=comment=${NONPAY_PROXY.allowLanding}`,
+          ...placeBeforeDeny,
+        ]);
+        existing.push({
+          action: 'allow',
+          'src-address': nonPayCidr,
+          'dst-address': landingAddress,
+          comment: NONPAY_PROXY.allowLanding,
+        });
+      }
+
       const addedHosts: string[] = [];
       const skippedHosts: string[] = [];
       for (const host of uniqueHosts) {
@@ -2423,7 +2449,7 @@ export async function configureNonPaymentWebProxy(
           `=dst-host=${host}`,
           '=action=allow',
           `=comment=${WEBPROXY_RULE_COMMENT}`,
-          ...placeBeforeRedirect,
+          ...placeBeforeDeny,
         ]);
         addedHosts.push(host);
         existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-host': host });
@@ -2441,28 +2467,25 @@ export async function configureNonPaymentWebProxy(
           `=dst-address=${ip}`,
           '=action=allow',
           `=comment=${WEBPROXY_RULE_COMMENT} lan-api`,
-          ...placeBeforeRedirect,
+          ...placeBeforeDeny,
         ]);
         addedLanIps.push(ip);
         existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
       }
 
-      // Ensure HTTP proxy redirect: non-pay → landing:proxyPort (except landing itself).
-      let proxyRedirect = (existing || []).some(
+      // Final deny → MikroTik serves webproxy/error.html (portal CTA).
+      let proxyDeny = (existing || []).some(
         (r) =>
-          String(r.action || '').toLowerCase() === 'redirect' &&
+          String(r.action || '').toLowerCase() === 'deny' &&
           String(r['src-address'] || '') === nonPayCidr
       );
-      if (!proxyRedirect) {
+      if (!proxyDeny) {
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
-          `=dst-address=!${landingAddress}`,
-          '=dst-port=80',
-          '=action=redirect',
-          `=action-data=${landingAddress}:${proxyPort}`,
-          `=comment=${NONPAY_PROXY.redirectHttp}`,
+          '=action=deny',
+          `=comment=${NONPAY_PROXY.denyCaptive}`,
         ]);
-        proxyRedirect = true;
+        proxyDeny = true;
       }
 
       let fetchedErrorHtml = false;
@@ -2480,7 +2503,7 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
-      // --- NAT: HTTP + HTTPS redirect (portal/PayMongo HTTPS exempt) ---
+      // --- NAT: HTTP redirect only (HTTPS redirect to proxy breaks PC browsers) ---
       const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
       const hasNatComment = (comment: string) =>
         (nats || []).some((n) => String(n.comment || '') === comment);
@@ -2511,32 +2534,22 @@ export async function configureNonPaymentWebProxy(
         natHttpRedirect = true;
       }
 
-      // HTTPS allowlist must be evaluated before the HTTPS redirect rule.
-      let natHttpsAllow = hasNatComment(NONPAY_NAT.httpsAllow);
-      let natHttpsRedirect = hasNatComment(NONPAY_NAT.httpsRedirect);
-
-      if (!natHttpsRedirect) {
-        await api.write('/ip/firewall/nat/add', [
-          '=chain=dstnat',
-          '=action=redirect',
-          `=to-ports=${proxyPort}`,
-          '=protocol=tcp',
-          `=src-address-list=${nonPayAddressList}`,
-          '=dst-port=443',
-          `=comment=${NONPAY_NAT.httpsRedirect}`,
-          '=place-before=0',
-        ]);
-        natHttpsRedirect = true;
-        // refresh ids after insert
-        const after = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
-        nats.length = 0;
-        nats.push(...(after || []));
+      // Keep HTTPS allow (portal/PayMongo) if present; remove TLS→8080 redirect
+      // which shows SSL errors instead of error.html on PC browsers.
+      let natHttpsRedirect = false;
+      for (const n of nats || []) {
+        if (String(n.comment || '') !== NONPAY_NAT.httpsRedirect) continue;
+        const id = n['.id'];
+        if (!id) continue;
+        try {
+          await api.write('/ip/firewall/nat/remove', [`=.id=${id}`]);
+        } catch {
+          natHttpsRedirect = true;
+        }
       }
 
+      let natHttpsAllow = hasNatComment(NONPAY_NAT.httpsAllow);
       if (!natHttpsAllow) {
-        const httpsRedirId =
-          (nats || []).find((n) => String(n.comment || '') === NONPAY_NAT.httpsRedirect)?.['.id'] ||
-          '';
         await api.write('/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=accept',
@@ -2545,7 +2558,7 @@ export async function configureNonPaymentWebProxy(
           `=dst-address-list=${NONPAY_HTTPS_LIST}`,
           '=dst-port=443',
           `=comment=${NONPAY_NAT.httpsAllow}`,
-          ...(httpsRedirId ? [`=place-before=${httpsRedirId}`] : ['=place-before=0']),
+          '=place-before=0',
         ]);
         natHttpsAllow = true;
       }
@@ -2738,7 +2751,7 @@ export async function configureNonPaymentWebProxy(
         natHttpRedirect,
         natHttpsAllow,
         natHttpsRedirect,
-        proxyRedirect,
+        proxyDeny,
         routerUiLock,
       };
     },
