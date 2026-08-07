@@ -735,8 +735,11 @@ export async function bulkChangePppoeMikrotikProfiles(
  * Best-effort — a failure here never blocks the payment that was just recorded;
  * the server-side poller (notify.ts executeBillingEnforcement) remains the
  * fallback enforcement path whenever this can't reach the router right now.
+ *
+ * Call after create/update/payment/recheck so every active account has a
+ * deterministic grace→non-payments then disable schedule on MikroTik.
  */
-async function scheduleRouterExpiry(user: any, expirationProfile?: string | null): Promise<void> {
+export async function scheduleRouterExpiry(user: any, expirationProfile?: string | null): Promise<void> {
   if (!user?.router_id || !user?.username || !user?.subscription_due) return;
   const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
   if (!router?.host || !router?.api_user) return;
@@ -748,7 +751,12 @@ async function scheduleRouterExpiry(user: any, expirationProfile?: string | null
     // (must match hoursPastDue()'s convention in notify.ts, or the router and the panel would disagree).
     const graceAt = new Date(dueDayUtc + 24 * 3600000);
     const disableAt = new Date(graceAt.getTime() + graceHours * 3600000);
-    const nonPaymentProfile = expirationProfile && expirationProfile !== 'default' ? expirationProfile : 'non-payments';
+    const nonPaymentProfile =
+      (expirationProfile && expirationProfile !== 'default'
+        ? expirationProfile
+        : user.expiration_profile && user.expiration_profile !== 'default'
+          ? user.expiration_profile
+          : 'non-payments') || 'non-payments';
     await scheduleExpiryOnRouter(router, { username: user.username, graceAt, disableAt, nonPaymentProfile });
   } catch {
     /* best-effort */
@@ -961,6 +969,10 @@ export async function recordPppoePayment(
     'billing',
     `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}${cashierNote}`
   );
+
+  // Drop any pending grace/disable one-shots from the previous due date before
+  // restoring the plan profile — then provision a fresh schedule for the new due.
+  cancelRouterExpirySchedule(user).catch(() => undefined);
 
   // The payment itself (DB update above) is already committed at this point.
   // A slow/unreachable router must never hold up the HTTP response for it —

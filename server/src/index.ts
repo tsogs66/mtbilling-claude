@@ -118,6 +118,7 @@ import {
   mikrotikProfileForPlan,
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
+  scheduleRouterExpiry,
   withTimeout,
   enqueueRouterSync,
   resolveRouterSync,
@@ -1783,7 +1784,10 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
     /* optional — missing phone just skips portal provisioning */
   }
   const refreshed = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(insertedId) as any;
-  return { ok: true, row: refreshed || row };
+  const out = refreshed || row;
+  // Provision MikroTik grace→non-payments / disable one-shots for this due date
+  scheduleRouterExpiry(out, out.expiration_profile).catch(() => undefined);
+  return { ok: true, row: out };
 }
 
 app.post('/api/pppoe/users', async (req, res) => {
@@ -1913,6 +1917,12 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     }
   }
 
+  // Keep MikroTik grace/disable one-shots aligned with the (possibly new) due date
+  const st = String(row.status || '').toLowerCase();
+  if (st === 'active' || st === 'non-payment' || st === 'nonpayment') {
+    scheduleRouterExpiry(row, row.expiration_profile).catch(() => undefined);
+  }
+
   res.json(row);
 });
 
@@ -1934,6 +1944,8 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
     db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
   } else {
     db.prepare("UPDATE pppoe_users SET status = 'Active', online = 0, nonpayment_since = NULL WHERE id = ?").run(id);
+    const enabled = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+    scheduleRouterExpiry(enabled, enabled?.expiration_profile).catch(() => undefined);
   }
 
   const router = getRouterById(u.router_id);
@@ -5000,18 +5012,20 @@ app.get('/api/pppoe/billing-recheck', (req, res) => {
 app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
   const preview = previewBillingEnforcement({ service });
-  if (!preview.toExpire.length && !preview.toDisable.length) {
+  if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
+    // Still run once so active accounts get MikroTik grace/disable schedules provisioned
+    const result = await executeBillingEnforcement({ service, forceDisable: true });
     return res.json({
       ok: true,
-      message: 'No overdue or past-grace accounts found.',
+      message: `No overdue/past-grace/restore actions. Ensured ${result.schedulesEnsured} MikroTik schedule(s).`,
       ...preview,
-      result: null,
+      result,
     });
   }
   const result = await executeBillingEnforcement({ service, forceDisable: true });
   res.json({
     ok: true,
-    message: `Applied expiry to ${result.markedNonPayment} account(s); disabled ${result.disabled} past grace.`,
+    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; schedules ${result.schedulesEnsured}.`,
     preview,
     result,
   });

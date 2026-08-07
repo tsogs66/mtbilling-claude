@@ -145,6 +145,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [recheckPreview, setRecheckPreview] = useState<{
     toExpire: any[];
     toDisable: any[];
+    toRestore?: any[];
     graceHours: number;
     autodisableEnabled: boolean;
   } | null>(null);
@@ -445,7 +446,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     try {
       const r = await api.get('/pppoe/billing-recheck', { params: { service } });
       setRecheckPreview(r.data);
-      if (!(r.data.toExpire?.length || r.data.toDisable?.length)) {
+      if (!(r.data.toExpire?.length || r.data.toDisable?.length || r.data.toRestore?.length)) {
         showToast('No overdue or past-grace accounts found.');
         setRecheckPreview(null);
       }
@@ -1659,8 +1660,29 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         >
           <div className="space-y-4 text-sm text-slate-600">
             <p>
-              Grace is counted from each account’s <b>due date</b>. Within grace → switch PPP profile to non-payment (comment unchanged); past grace → disable only (comment unchanged).
+              Grace is counted from each account’s <b>due date</b>. Within grace → switch PPP profile to non-payment (comment unchanged);
+              past grace → disable only; due extended while on non-payment → restore plan profile. MikroTik schedulers handle grace/disable offline.
             </p>
+            {!!recheckPreview.toRestore?.length && (
+              <div>
+                <div className="font-semibold text-emerald-800 mb-1">
+                  Due extended → restore plan profile ({recheckPreview.toRestore.length})
+                </div>
+                <ul className="max-h-40 overflow-auto rounded-xl border border-emerald-100 bg-emerald-50/50 divide-y divide-emerald-100">
+                  {recheckPreview.toRestore.map((u: any) => (
+                    <li key={u.id} className="px-3 py-2 flex justify-between gap-2">
+                      <span>
+                        <b className="text-slate-800">{u.username}</b>
+                        <span className="text-slate-500"> · {u.customer}</span>
+                      </span>
+                      <span className="text-xs text-emerald-700 whitespace-nowrap">
+                        was {u.status} · due {u.due}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {!!recheckPreview.toExpire.length && (
               <div>
                 <div className="font-semibold text-amber-800 mb-1">
@@ -1701,6 +1723,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                 </ul>
               </div>
             )}
+            {!recheckPreview.toExpire.length && !recheckPreview.toDisable.length && !recheckPreview.toRestore?.length && (
+              <p className="text-xs text-slate-500">
+                No profile changes needed. Execute still refreshes MikroTik grace/disable schedules for active accounts.
+              </p>
+            )}
           </div>
         </Modal>
       )}
@@ -1720,12 +1747,18 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             <p>
               Non-payment / expire: <b>{recheckResult.result?.markedNonPayment ?? 0}</b>
               {' · '}
+              Restored: <b>{recheckResult.result?.restored ?? 0}</b>
+              {' · '}
               Disabled: <b>{recheckResult.result?.disabled ?? 0}</b>
+              {' · '}
+              Schedules: <b>{recheckResult.result?.schedulesEnsured ?? 0}</b>
               {(recheckResult.result?.routerErrors ?? 0) > 0 && (
                 <> · Router errors: <b className="text-rose-600">{recheckResult.result.routerErrors}</b></>
               )}
             </p>
-            <p className="text-xs text-slate-400">MikroTik secrets were synced where router API credentials are configured.</p>
+            <p className="text-xs text-slate-400">
+              MikroTik secrets and grace/disable schedulers were synced where router API credentials are configured.
+            </p>
           </div>
         </Modal>
       )}
