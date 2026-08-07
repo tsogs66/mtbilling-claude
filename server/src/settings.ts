@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript, ensureCaptiveWatchSystemScript, inspectNonPaymentCaptive, repairNonPaymentHttpRedirect, repairNonPaymentHttpRedirectViaScript } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -933,9 +933,10 @@ settingsRouter.post('/routers/test', async (req, res) => {
 });
 
 /**
- * Additive non-payment captive helper:
- * allow billing + PayMongo through web-proxy; optionally fetch error.html.
- * Does not touch NAT, IP pools, or existing untagged proxy rules.
+ * Non-payment captive helper (portal-pay flow):
+ * ensure HTTP + HTTPS redirect to webproxy (error.html → /portal),
+ * allow HTTPS only to billing + PayMongo, fetch error.html, lockdown bypass,
+ * install System → Scripts mtb-billing-expire scanner.
  */
 settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   const id = Number(req.params.id);
@@ -960,8 +961,137 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   }
   const errorPageUrl =
     String(b.errorPageUrl || '').trim() || `${publicBase}/error.html`;
+  const lanIp = detectLanIpv4();
+  const billingLanIps = [
+    ...(Array.isArray(b.billingLanIps) ? b.billingLanIps : []),
+    lanIp,
+    '192.168.0.120',
+  ]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  const conn = {
+    host: r.host,
+    port: Number(r.port) || 8728,
+    api_user: r.api_user,
+    api_pass: r.api_pass || '',
+  };
   try {
-    const result = await configureNonPaymentWebProxy(
+    const kickUser = String(b.kickUsername || b.username || '').trim();
+    // Prefer script-based repair — direct /ip/proxy API can hang on this board.
+    let repair: Awaited<ReturnType<typeof repairNonPaymentHttpRedirect>> | Awaited<
+      ReturnType<typeof repairNonPaymentHttpRedirectViaScript>
+    >;
+    try {
+      const viaScript = await repairNonPaymentHttpRedirectViaScript(conn, {
+        nonPayCidr: b.nonPayCidr,
+        proxyPort: b.proxyPort,
+        portalRedirectUrl: `${publicBase}/portal`,
+        username: kickUser || undefined,
+        billingLanIp: lanIp || '192.168.0.120',
+        landingAddress: b.landingAddress,
+        captiveApiPort: b.captiveApiPort,
+      });
+      repair = {
+        ok: true as const,
+        proxyEnabled: true,
+        natHttpRedirect: true,
+        proxyRedirect: true,
+        portalRedirectTo: `${publicBase}/portal`,
+        kicked: viaScript.kicked ?? null,
+        viaScript: viaScript.ran,
+        scheduledAt: viaScript.scheduledAt || null,
+        watch: viaScript.watch || null,
+        nat: viaScript.nat || null,
+      } as any;
+    } catch (scriptErr: any) {
+      // Last resort: direct API (may hang on /ip/proxy) + still install watch.
+      try {
+        await ensureCaptiveWatchSystemScript(conn, {
+          nonPayCidr: b.nonPayCidr,
+          proxyPort: b.proxyPort,
+          portalRedirectUrl: `${publicBase}/portal`,
+        });
+      } catch {
+        /* ignore */
+      }
+      repair = await repairNonPaymentHttpRedirect(conn, {
+        nonPayCidr: b.nonPayCidr,
+        proxyPort: b.proxyPort,
+        nonPayAddressList: b.nonPayAddressList,
+        portalRedirectUrl: `${publicBase}/portal`,
+        username: kickUser || undefined,
+      });
+      (repair as any).scriptError = scriptErr?.message || String(scriptErr);
+    }
+
+    if (kickUser) {
+      try {
+        db.prepare(
+          `UPDATE pppoe_users
+           SET status = 'non-payment',
+               nonpayment_since = COALESCE(nonpayment_since, ?)
+           WHERE router_id = ? AND lower(username) = lower(?)`
+        ).run(new Date().toISOString(), id, kickUser);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    let full: Awaited<ReturnType<typeof configureNonPaymentWebProxy>> | null = null;
+    let fullError: string | null = null;
+    if (b.full !== false && b.quick !== true) {
+      try {
+        full = await configureNonPaymentWebProxy(conn, {
+          nonPayCidr: b.nonPayCidr,
+          landingAddress: b.landingAddress,
+          billingHost,
+          allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
+          errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
+          portalRedirectUrl: `${publicBase}/portal`,
+          proxyPort: b.proxyPort,
+          lockdownFirewall: b.lockdownFirewall !== false,
+          nonPayAddressList: b.nonPayAddressList,
+          billingLanIps,
+          lockRouterUi: b.lockRouterUi !== false,
+          routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
+        });
+      } catch (e: any) {
+        fullError = e?.message || String(e);
+      }
+    }
+
+    const inspect =
+      b.skipInspect === true || b.quick === true
+        ? undefined
+        : await inspectNonPaymentCaptive(conn, {
+            nonPayCidr: b.nonPayCidr,
+            landingAddress: b.landingAddress,
+            proxyPort: b.proxyPort,
+            username: kickUser || 'Admin',
+          }).catch((e: any) => ({ error: e?.message || String(e) }));
+
+    res.json({
+      ok: true,
+      repair,
+      full,
+      fullError,
+      kick: kickUser
+        ? { username: kickUser, ok: !!repair.kicked, kicked: repair.kicked }
+        : null,
+      inspect,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Diagnose why non-payment webproxy redirect may not fire for a secret. */
+settingsRouter.get('/routers/:id/nonpayment-captive', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  try {
+    const inspect = await inspectNonPaymentCaptive(
       {
         host: r.host,
         port: Number(r.port) || 8728,
@@ -969,15 +1099,73 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         api_pass: r.api_pass || '',
       },
       {
-        nonPayCidr: b.nonPayCidr,
-        landingAddress: b.landingAddress,
-        billingHost,
-        allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
-        errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
-        proxyPort: b.proxyPort,
+        nonPayCidr: req.query.nonPayCidr ? String(req.query.nonPayCidr) : undefined,
+        landingAddress: req.query.landingAddress ? String(req.query.landingAddress) : undefined,
+        proxyPort: req.query.proxyPort ? Number(req.query.proxyPort) : undefined,
+        username: String(req.query.username || 'Admin'),
       }
     );
-    res.json(result);
+    res.json(inspect);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Inspect /system/script + /system/scheduler (Winbox System → Scripts). */
+settingsRouter.get('/routers/:id/system-scripts', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  const conn = {
+    host: r.host,
+    port: Number(r.port) || 8728,
+    api_user: r.api_user,
+    api_pass: r.api_pass || '',
+  };
+  const mtbOnly = String(req.query.mtb || '') === '1' || String(req.query.mtb || '') === 'true';
+  const includeSource =
+    String(req.query.source || '') === '1' || String(req.query.source || '') === 'true';
+  try {
+    const scripts = await fetchSystemScripts(conn, { includeSource });
+    let schedulers: Awaited<ReturnType<typeof fetchSystemSchedulers>> = [];
+    try {
+      schedulers = await fetchSystemSchedulers(conn);
+    } catch {
+      schedulers = [];
+    }
+    const filterMtb = <T extends { name: string }>(rows: T[]) =>
+      mtbOnly ? rows.filter((x) => String(x.name || '').startsWith('mtb-')) : rows;
+    res.json({
+      routerId: id,
+      router: r.name,
+      scripts: filterMtb(scripts),
+      schedulers: filterMtb(schedulers),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Install/replace the global mtb-billing-expire System script + 5-min scheduler. */
+settingsRouter.post('/routers/:id/billing-expire-script', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  const b = req.body || {};
+  try {
+    const result = await ensureBillingExpireSystemScript(
+      {
+        host: r.host,
+        port: Number(r.port) || 8728,
+        api_user: r.api_user,
+        api_pass: r.api_pass || '',
+      },
+      {
+        nonPaymentProfile: b.nonPaymentProfile || 'non-payments',
+        interval: b.interval || '00:05:00',
+      }
+    );
+    res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || String(e) });
   }

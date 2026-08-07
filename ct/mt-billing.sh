@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / Pa-North
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Proxmox VE helper — creates an Ubuntu LXC and installs MT-Billing.
 #
@@ -11,18 +11,18 @@
 #   Ubuntu 24.04. Full table: SYSTEM_REQUIREMENTS.md
 #
 # One-liner (Proxmox host, root) — requires a PUBLIC repo on main:
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 #
 # Unattended:
-#   mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh)"
+#   mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 #
 # Private repo or local copy:
-#   git clone https://github.com/tsogs66/mtbilling-claude.git && cd mtbilling-claude && sudo bash ct/mt-billing.sh
+#   git clone https://github.com/tsogs66/MT-Billing.git && cd MT-Billing && sudo bash ct/mt-billing.sh
 #   # or: sudo bash scripts/proxmox-install.sh
 
 set -eo pipefail
 
-MT_BILLING_RAW_URL="${MT_BILLING_RAW_URL:-https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/ct/mt-billing.sh}"
+MT_BILLING_RAW_URL="${MT_BILLING_RAW_URL:-https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh}"
 
 # bash -c "$(curl ...)" has no real file path — save to a temp copy for embedded-install extraction.
 resolve_script_path() {
@@ -81,7 +81,7 @@ var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_nesting="${var_nesting:-0}"
 
-export var_repo_url="${var_repo_url:-https://github.com/tsogs66/mtbilling-claude.git}"
+export var_repo_url="${var_repo_url:-https://github.com/tsogs66/MT-Billing.git}"
 export var_repo_branch="${var_repo_branch:-main}"
 export var_install_dir="${var_install_dir:-/opt/mt-billing}"
 export var_admin_user="${var_admin_user:-admin}"
@@ -150,7 +150,7 @@ description() {
   DESCRIPTION=$(
     cat <<EOF
 <div align='center'>
-  <a href='https://github.com/tsogs66/mtbilling-claude' target='_blank'>
+  <a href='https://github.com/tsogs66/MT-Billing' target='_blank'>
     <img src='https://img.shields.io/badge/GitHub-MT--Billing-blue?style=for-the-badge&logo=github&logoColor=white' alt='GitHub'/>
   </a>
 </div>
@@ -188,7 +188,7 @@ network_check
 update_os
 
 INSTALL_DIR="${var_install_dir:-/opt/mt-billing}"
-REPO_URL="${var_repo_url:-https://github.com/tsogs66/mtbilling-claude.git}"
+REPO_URL="${var_repo_url:-https://github.com/tsogs66/MT-Billing.git}"
 REPO_BRANCH="${var_repo_branch:-main}"
 SERVICE_USER="${var_service_user:-mtbilling}"
 API_PORT="${var_api_port:-4000}"

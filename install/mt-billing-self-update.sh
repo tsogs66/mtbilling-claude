@@ -12,7 +12,7 @@ set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
 STATE_DIR="${INSTALL_DIR}/server/data"
 STATE_FILE="${STATE_DIR}/.last-update.json"
 LOG_FILE="${STATE_DIR}/update-ui.log"

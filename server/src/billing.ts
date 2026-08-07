@@ -9,6 +9,8 @@ import {
   removePppActiveByName,
   buildPppSecretComment,
   ensurePppProfile,
+  ensureNonPaymentCaptiveProfile,
+  withRouter,
   scheduleExpiryOnRouter,
   cancelExpiryScheduleOnRouter,
 } from './mikrotik.js';
@@ -793,9 +795,23 @@ export async function syncUserToRouter(
           ? user.expiration_profile
           : 'non-payments';
       try {
-        await ensurePppProfile(router, expire);
+        await withRouter(
+          router,
+          (api) =>
+            ensureNonPaymentCaptiveProfile(api, {
+              profileName: expire,
+              nonPayCidr: '172.15.10.0/24',
+              landingAddress: '1.1.10.1',
+              rateLimit: '2M/2M',
+            }),
+          { timeoutSec: 15 }
+        );
       } catch {
-        /* profile may already exist */
+        try {
+          await ensurePppProfile(router, expire);
+        } catch {
+          /* profile may already exist */
+        }
       }
       await updatePppSecret(router, user.username, {
         profile: expire,
@@ -990,7 +1006,9 @@ export async function recordPppoePayment(
 
   // Drop any pending grace/disable one-shots from the previous due date before
   // restoring the plan profile — then provision a fresh schedule for the new due.
-  cancelRouterExpirySchedule(user).catch(() => undefined);
+  // Await cancel so a stale router scheduler cannot race the restore and flip
+  // the secret back to non-payments after payment.
+  await cancelRouterExpirySchedule(user).catch(() => undefined);
 
   // The payment itself (DB update above) is already committed at this point.
   // A slow/unreachable router must never hold up the HTTP response for it —

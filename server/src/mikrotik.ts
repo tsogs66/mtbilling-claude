@@ -21,13 +21,14 @@ export async function withRouter<T>(
   if (!conn.host || !conn.api_user) {
     throw new Error('router-not-configured');
   }
+  const timeoutSec = opts?.timeoutSec ?? 15;
   const api = new RouterOSAPI({
     host: conn.host,
     port: conn.port || 8728,
     user: conn.api_user,
     password: conn.api_pass || '',
     // 4s was too aggressive for WAN/API-over-VPN boards and multi-step writes.
-    timeout: opts?.timeoutSec ?? 15,
+    timeout: timeoutSec,
   });
   // node-routeros re-emits late/stray socket errors as 'error' on this instance
   // after its connect-phase listeners already fired once and were removed (e.g.
@@ -40,7 +41,29 @@ export async function withRouter<T>(
   api.on('error', () => {});
   await api.connect();
   try {
-    return await fn(api);
+    // Hard budget for the whole callback — node-routeros per-command timeout does
+    // not reliably abort stuck /system or /tool/fetch writes.
+    const budgetMs = Math.max(3_000, timeoutSec * 1000);
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try {
+          api.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error(`router-call-timeout after ${timeoutSec}s`));
+      }, budgetMs);
+      fn(api).then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(timer);
+          reject(e);
+        }
+      );
+    });
   } finally {
     try {
       api.close();
@@ -2020,15 +2043,44 @@ function rosScheduleFields(at: Date, offsetMs: number): { date: string; time: st
 }
 
 async function removeSchedulerByName(api: RouterOSAPI, name: string): Promise<void> {
-  const rows = (await api.write('/system/scheduler/print', [`?name=${name}`])) as Record<string, string>[];
-  for (const r of rows || []) {
-    if (!r['.id']) continue;
-    try {
-      await api.write('/system/scheduler/remove', [`=.id=${r['.id']}`]);
-    } catch {
-      /* already gone */
-    }
+  // Prefer direct remove by name — `/system/scheduler/print` hangs on some boards.
+  try {
+    await raceApi(
+      api.write('/system/scheduler/remove', [`=numbers=${name}`]),
+      5_000,
+      'sched-remove'
+    );
+  } catch {
+    /* missing entry or transient — do not fall back to print (can hang) */
   }
+}
+
+async function removeSystemScriptByName(api: RouterOSAPI, name: string): Promise<void> {
+  try {
+    await raceApi(
+      api.write('/system/script/remove', [`=numbers=${name}`]),
+      5_000,
+      'script-remove'
+    );
+  } catch {
+    /* missing entry or transient — do not fall back to print (can hang) */
+  }
+}
+
+function raceApi<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
 }
 
 /**
@@ -2046,6 +2098,8 @@ export async function cancelExpiryScheduleOnRouter(conn: RouterConn, username: s
     async (api) => {
       await removeSchedulerByName(api, schedName('grace', username));
       await removeSchedulerByName(api, schedName('disable', username));
+      await removeSystemScriptByName(api, schedName('grace', username));
+      await removeSystemScriptByName(api, schedName('disable', username));
     },
     { timeoutSec: 8 }
   );
@@ -2057,6 +2111,10 @@ export async function cancelExpiryScheduleOnRouter(conn: RouterConn, username: s
  * this panel's uptime. Always removes any existing entries for the
  * username first, so re-running this (e.g. after a new payment) replaces
  * the old schedule with one for the new due date.
+ *
+ * Scripts live under /system/script (Winbox → System → Scripts) and are
+ * invoked by matching /system/scheduler one-shots — same pattern as classic
+ * MikroTik non-payment / expire automation.
  */
 export async function scheduleExpiryOnRouter(
   conn: RouterConn,
@@ -2065,11 +2123,16 @@ export async function scheduleExpiryOnRouter(
   const { username, graceAt, disableAt, nonPaymentProfile } = opts;
   if (!username) return;
   await withRouter(conn, async (api) => {
-    await removeSchedulerByName(api, schedName('grace', username));
-    await removeSchedulerByName(api, schedName('disable', username));
+    const graceName = schedName('grace', username);
+    const disableName = schedName('disable', username);
+    await removeSchedulerByName(api, graceName);
+    await removeSchedulerByName(api, disableName);
+    await removeSystemScriptByName(api, graceName);
+    await removeSystemScriptByName(api, disableName);
 
     const offsetMs = await getRouterClockOffsetMs(api);
     const u = rosScriptEscape(username);
+    const expireProf = rosScriptEscape(nonPaymentProfile);
     // Skip past start times — RouterOS one-shots with a past clock often never
     // fire. The panel applies overdue actions immediately; only future events
     // belong on the router so grace/disable still work while the server is offline.
@@ -2082,62 +2145,1701 @@ export async function scheduleExpiryOnRouter(
       const grace = rosScheduleFields(graceAt, offsetMs);
       // Switch to non-payments AND drop active so the CPE redials into the
       // non-payment IP pool (web-proxy captive / error.html).
-      const graceScript =
-        `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no; ` +
-        `/ppp active remove [find name="${u}"]`;
-      await api.write('/system/scheduler/add', [
-        `=name=${schedName('grace', username)}`,
-        `=start-date=${grace.date}`,
-        `=start-time=${grace.time}`,
-        '=interval=0',
-        `=on-event=${graceScript}`,
-        '=comment=MT-Billing auto grace-switch',
-      ]);
+      const graceSource =
+        `:do {/ppp secret set [find name="${u}"] profile="${expireProf}" disabled=no;/ppp active remove [find name="${u}"]} on-error={}`;
+      try {
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${graceName}`,
+            `=source=${graceSource}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing auto grace-switch (non-payment profile + kick)',
+          ]),
+          8_000,
+          'script-add-grace'
+        );
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${graceName}`,
+            `=start-date=${grace.date}`,
+            `=start-time=${grace.time}`,
+            '=interval=0',
+            `=on-event=${graceName}`,
+            '=comment=MT-Billing auto grace-switch',
+          ]),
+          8_000,
+          'sched-add-grace'
+        );
+      } catch {
+        // Fallback: classic inline on-event (no /system/script entry).
+        await api.write('/system/scheduler/add', [
+          `=name=${graceName}`,
+          `=start-date=${grace.date}`,
+          `=start-time=${grace.time}`,
+          '=interval=0',
+          `=on-event=${graceSource}`,
+          '=comment=MT-Billing auto grace-switch',
+        ]);
+      }
     }
 
     if (scheduleDisable) {
       const disable = rosScheduleFields(disableAt, offsetMs);
-      const disableScript = `/ppp secret disable [find name="${u}"]; /ppp active remove [find name="${u}"]`;
-      await api.write('/system/scheduler/add', [
-        `=name=${schedName('disable', username)}`,
-        `=start-date=${disable.date}`,
-        `=start-time=${disable.time}`,
-        '=interval=0',
-        `=on-event=${disableScript}`,
-        '=comment=MT-Billing auto disable',
-      ]);
+      const disableSource =
+        `:do {/ppp secret disable [find name="${u}"];/ppp active remove [find name="${u}"]} on-error={}`;
+      try {
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${disableName}`,
+            `=source=${disableSource}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing auto disable past grace',
+          ]),
+          8_000,
+          'script-add-disable'
+        );
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${disableName}`,
+            `=start-date=${disable.date}`,
+            `=start-time=${disable.time}`,
+            '=interval=0',
+            `=on-event=${disableName}`,
+            '=comment=MT-Billing auto disable',
+          ]),
+          8_000,
+          'sched-add-disable'
+        );
+      } catch {
+        await api.write('/system/scheduler/add', [
+          `=name=${disableName}`,
+          `=start-date=${disable.date}`,
+          `=start-time=${disable.time}`,
+          '=interval=0',
+          `=on-event=${disableSource}`,
+          '=comment=MT-Billing auto disable',
+        ]);
+      }
     }
   }, { timeoutSec: 8 });
 }
 
+const BILLING_EXPIRE_SCRIPT = 'mtb-billing-expire';
+const BILLING_EXPIRE_SCHEDULER = 'mtb-billing-expire';
+
+/**
+ * Global RouterOS expire scanner (System → Scripts).
+ * Compact single-line body (API-safe). Reads dueDate / expireProfile from PPP
+ * secret comment JSON via find/pick and switches overdue secrets to the
+ * non-payment profile so they redial into the captive pool → error.html.
+ */
+export function buildBillingExpireScriptSource(nonPaymentProfile = 'non-payments'): string {
+  const prof = rosScriptEscape(nonPaymentProfile || 'non-payments');
+  // Semicolon-separated one-liner — avoids multiline API word issues.
+  return (
+    `:local expireProfile "${prof}";` +
+    `:local today [/system clock get date];` +
+    `:local mon [:pick $today 0 3];` +
+    `:local dd [:pick $today 4 6];` +
+    `:local yyyy [:pick $today 7 11];` +
+    `:local months {"jan"="01";"feb"="02";"mar"="03";"apr"="04";"may"="05";"jun"="06";"jul"="07";"aug"="08";"sep"="09";"oct"="10";"nov"="11";"dec"="12"};` +
+    `:local mm ($months->$mon);` +
+    `:if ([:len $mm] = 0) do={ :return };` +
+    `:local todayIso ($yyyy . "-" . $mm . "-" . $dd);` +
+    `:local dueMarker "\\"dueDate\\":\\"";` +
+    `:local expMarker "\\"expireProfile\\":\\"";` +
+    `:foreach i in=[/ppp secret find where disabled=no] do={` +
+    `:local name [/ppp secret get $i name];` +
+    `:local profile [/ppp secret get $i profile];` +
+    `:local comment [/ppp secret get $i comment];` +
+    `:if ([:len $comment] > 12) do={` +
+    `:do {` +
+    `:local p [:find $comment $dueMarker];` +
+    `:if ($p != nil) do={` +
+    `:local dueStart ($p + [:len $dueMarker]);` +
+    `:local due [:pick $comment $dueStart ($dueStart + 10)];` +
+    `:local expProf $expireProfile;` +
+    `:local ep [:find $comment $expMarker];` +
+    `:if ($ep != nil) do={` +
+    `:local epStart ($ep + [:len $expMarker]);` +
+    `:local epRaw [:pick $comment $epStart ($epStart + 32)];` +
+    `:local epEnd [:find $epRaw "\\""];` +
+    `:if ($epEnd != nil && $epEnd > 0) do={ :set expProf [:pick $epRaw 0 $epEnd] }` +
+    `};` +
+    `:if ([:len $due] = 10 && $due < $todayIso && $profile != $expProf) do={` +
+    `/ppp secret set $i profile=$expProf disabled=no;` +
+    `:do { /ppp active remove [find name=$name] } on-error={};` +
+    `:log info ("MT-Billing expire: " . $name . " due " . $due . " -> " . $expProf)` +
+    `}` +
+    `}` +
+    `} on-error={}` +
+    `}` +
+    `}`
+  );
+}
+
+/** Install/replace the global billing-expire system script + 5-minute scheduler. */
+export async function ensureBillingExpireSystemScript(
+  conn: RouterConn,
+  opts?: { nonPaymentProfile?: string; interval?: string }
+): Promise<{ script: string; scheduler: string; interval: string }> {
+  const nonPaymentProfile = opts?.nonPaymentProfile || 'non-payments';
+  const interval = opts?.interval || '00:05:00';
+  const source = buildBillingExpireScriptSource(nonPaymentProfile);
+  await withRouter(
+    conn,
+    async (api) => {
+      await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
+      await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
+      try {
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${BILLING_EXPIRE_SCRIPT}`,
+            `=source=${source}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+          ]),
+          12_000,
+          'add-expire-script'
+        );
+      } catch {
+        // Already present (remove may have been a no-op) — overwrite source.
+        await raceApi(
+          api.write('/system/script/set', [
+            `=numbers=${BILLING_EXPIRE_SCRIPT}`,
+            `=source=${source}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+          ]),
+          12_000,
+          'set-expire-script'
+        );
+      }
+      try {
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${BILLING_EXPIRE_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+            '=comment=MT-Billing periodic expire scan',
+          ]),
+          8_000,
+          'add-expire-sched'
+        );
+      } catch {
+        await raceApi(
+          api.write('/system/scheduler/set', [
+            `=numbers=${BILLING_EXPIRE_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+            '=comment=MT-Billing periodic expire scan',
+            '=disabled=no',
+          ]),
+          8_000,
+          'set-expire-sched'
+        );
+      }
+    },
+    { timeoutSec: 25 }
+  );
+  return { script: BILLING_EXPIRE_SCRIPT, scheduler: BILLING_EXPIRE_SCHEDULER, interval };
+}
+
+export async function fetchSystemScripts(
+  conn: RouterConn,
+  opts?: { includeSource?: boolean }
+): Promise<{ id: string; name: string; owner: string; policy: string; comment: string; source: string }[]> {
+  const includeSource = !!opts?.includeSource;
+  return withRouter(
+    conn,
+    async (api) => {
+      const props = includeSource
+        ? '=.proplist=.id,name,owner,policy,comment,source'
+        : '=.proplist=.id,name,owner,policy,comment';
+      const rows = (await raceApi(
+        api.write('/system/script/print', [props]),
+        15_000,
+        'script-print'
+      )) as Record<string, string>[];
+      return (rows || []).map((s) => ({
+        id: s['.id'] || '',
+        name: s.name || '',
+        owner: s.owner || '',
+        policy: s.policy || '',
+        comment: s.comment || '',
+        source: includeSource ? s.source || '' : '',
+      }));
+    },
+    { timeoutSec: 20 }
+  );
+}
+
+export async function fetchSystemSchedulers(conn: RouterConn): Promise<
+  {
+    id: string;
+    name: string;
+    startDate: string;
+    startTime: string;
+    interval: string;
+    onEvent: string;
+    comment: string;
+    disabled: boolean;
+  }[]
+> {
+  return withRouter(
+    conn,
+    async (api) => {
+      try {
+        const rows = (await raceApi(
+          api.write('/system/scheduler/print', [
+            '=.proplist=.id,name,start-date,start-time,interval,on-event,comment,disabled',
+          ]),
+          8_000,
+          'sched-print'
+        )) as Record<string, string>[];
+        return (rows || []).map((s) => ({
+          id: s['.id'] || '',
+          name: s.name || '',
+          startDate: s['start-date'] || '',
+          startTime: s['start-time'] || '',
+          interval: s.interval || '',
+          onEvent: s['on-event'] || '',
+          comment: s.comment || '',
+          disabled: rosBool(s.disabled),
+        }));
+      } catch {
+        // Some RouterOS builds hang on full scheduler print via API.
+        return [];
+      }
+    },
+    { timeoutSec: 12 }
+  );
+}
+
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
+const NONPAY_HTTPS_LIST = 'nonpay-https-allow';
+const NONPAY_POOL_NAME = 'non-payment';
+const NONPAY_NAT = {
+  httpRedirect: 'MT-Billing nonpay HTTP redirect',
+  httpRedirectCidr: 'MT-Billing nonpay HTTP redirect CIDR',
+  httpsAllow: 'MT-Billing nonpay HTTPS allow',
+  httpsRedirect: 'MT-Billing nonpay HTTPS redirect',
+  dnsBypassUdp: 'MT-Billing nonpay DNS bypass AdGuard',
+  dnsBypassTcp: 'MT-Billing nonpay DNS bypass AdGuard TCP',
+} as const;
+const NONPAY_FW = {
+  https: 'MT-Billing nonpay allow HTTPS billing',
+  dnsUdp: 'MT-Billing nonpay allow DNS',
+  dnsTcp: 'MT-Billing nonpay allow DNS TCP',
+  http: 'MT-Billing nonpay allow HTTP captive',
+  proxyInput: 'MT-Billing nonpay allow proxy input',
+  rejectTcp: 'MT-Billing nonpay reject TCP fast',
+  rejectQuic: 'MT-Billing nonpay reject QUIC fast',
+  drop: 'MT-Billing nonpay drop other',
+} as const;
+const NONPAY_PROXY = {
+  allowLanding: 'MT-Billing nonpay allow landing',
+  allowProxyPort: 'mtb-wp-allow-8080',
+  redirectHttp: 'mtb-wp-redir-80',
+  denyCaptive: 'MT-Billing nonpay captive deny',
+  redirectPortal: 'MT-Billing nonpay redirect portal',
+} as const;
+
+/** Management networks allowed to open WebFig / Winbox / SSH. */
+const ROUTER_MGMT_LIST = 'mt-billing-mgmt';
+const ROUTER_UI_BLOCK = 'MT-Billing block subscriber router UI';
+const DEFAULT_ROUTER_MGMT_CIDRS = ['192.168.0.0/24', '20.0.0.0/24', '10.10.0.0/16'];
+
+/**
+ * Block PPPoE/IPoE subscribers from the MikroTik login UI (WebFig www/www-ssl,
+ * Winbox, FTP, Telnet). Management stays on LAN/VPN CIDRs only.
+ *
+ * Captive non-pay traffic uses webproxy :8080 (not www :80), so this does not
+ * break error.html → /portal.
+ */
+export async function restrictSubscriberRouterLogin(
+  conn: RouterConn,
+  opts: {
+    mgmtCidrs?: string[];
+    /** Also restrict SSH to mgmt CIDRs (default true). */
+    lockSsh?: boolean;
+  } = {}
+): Promise<{
+  ok: true;
+  mgmtCidrs: string[];
+  servicesRestricted: string[];
+  filterAdded: boolean;
+  mgmtListEnsured: string[];
+}> {
+  const mgmtCidrs = [
+    ...new Set(
+      (opts.mgmtCidrs?.length ? opts.mgmtCidrs : DEFAULT_ROUTER_MGMT_CIDRS)
+        .map((c) => String(c || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  const lockSsh = opts.lockSsh !== false;
+  const addressCsv = mgmtCidrs.join(',');
+
+  return withRouter(
+    conn,
+    async (api) => {
+      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+      const mgmtListEnsured: string[] = [];
+      for (const cidr of mgmtCidrs) {
+        const exists = (addrList || []).some(
+          (r) => String(r.list || '') === ROUTER_MGMT_LIST && String(r.address || '') === cidr
+        );
+        if (exists) continue;
+        try {
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${ROUTER_MGMT_LIST}`,
+            `=address=${cidr}`,
+            `=comment=${ROUTER_UI_BLOCK}`,
+          ]);
+          mgmtListEnsured.push(cidr);
+          addrList.push({ list: ROUTER_MGMT_LIST, address: cidr });
+        } catch {
+          /* duplicate */
+        }
+      }
+
+      const services = (await api.write('/ip/service/print')) as Record<string, string>[];
+      const servicesRestricted: string[] = [];
+      const lockNames = new Set(['www', 'www-ssl', 'winbox', 'ftp', 'telnet', ...(lockSsh ? ['ssh'] : [])]);
+      for (const svc of services || []) {
+        const name = String(svc.name || '');
+        if (!lockNames.has(name)) continue;
+        // Skip dynamic connection rows (RouterOS lists live sessions under /ip/service).
+        const dyn = String(svc.dynamic || '').toLowerCase();
+        if (dyn === 'true' || dyn === 'yes') continue;
+        const id = svc['.id'];
+        if (!id) continue;
+        const current = String(svc.address || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .sort()
+          .join(',');
+        const want = [...mgmtCidrs].sort().join(',');
+        if (current === want) continue;
+        try {
+          await api.write('/ip/service/set', [`=.id=${id}`, `=address=${addressCsv}`]);
+          servicesRestricted.push(name);
+        } catch {
+          /* ignore single-service failure */
+        }
+      }
+
+      const filters = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+      let filterAdded = false;
+      const hasBlock = (filters || []).some((r) => String(r.comment || '') === ROUTER_UI_BLOCK);
+      if (!hasBlock) {
+        // Drop WebFig/Winbox/FTP/Telnet from anyone outside management.
+        // Proxy captive (:8080) is unaffected. Place near top of input chain.
+        const proxyAllowId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.proxyInput)?.['.id'] || '';
+        try {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=input',
+            '=action=drop',
+            '=protocol=tcp',
+            `=src-address-list=!${ROUTER_MGMT_LIST}`,
+            '=dst-port=80,443,8291,21,23',
+            `=comment=${ROUTER_UI_BLOCK}`,
+            ...(proxyAllowId ? [`=place-before=${proxyAllowId}`] : ['=place-before=0']),
+          ]);
+          filterAdded = true;
+        } catch {
+          filterAdded = false;
+        }
+      }
+
+      return {
+        ok: true as const,
+        mgmtCidrs,
+        servicesRestricted,
+        filterAdded,
+        mgmtListEnsured,
+      };
+    },
+    { timeoutSec: 30 }
+  );
+}
+
+/**
+ * Expand a /24 (or similar) CIDR into an IP pool range usable by RouterOS.
+ * Example: 172.15.10.0/24 → 172.15.10.2-172.15.10.254
+ */
+export function cidrToPoolRanges(cidr: string): string | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(String(cidr || '').trim());
+  if (!m) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  const prefix = Number(m[5]);
+  if (parts.some((n) => n > 255) || prefix < 8 || prefix > 30) return null;
+  if (prefix === 24) {
+    const base = `${parts[0]}.${parts[1]}.${parts[2]}`;
+    return `${base}.2-${base}.254`;
+  }
+  // Conservative fallback for other prefixes: keep host+1 .. last usable as dotted range via /24 style when possible
+  const hostBits = 32 - prefix;
+  const size = 2 ** hostBits;
+  if (size < 4 || size > 65536) return null;
+  const ipNum = ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+  const network = ipNum >>> hostBits << hostBits;
+  const first = network + 2;
+  const last = network + size - 2;
+  const toIp = (n: number) =>
+    [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+  return `${toIp(first)}-${toIp(last)}`;
+}
+
+function natRuleDisabled(n: Record<string, string>): boolean {
+  return rosBool(n.disabled);
+}
+
+/** True when a dstnat rule actually redirects non-pay HTTP to the webproxy port. */
+function isWorkingNonPayHttpRedirect(
+  n: Record<string, string>,
+  opts: { nonPayCidr: string; nonPayAddressList: string; proxyPort: number }
+): boolean {
+  if (String(n.chain || '') !== 'dstnat') return false;
+  if (String(n.action || '').toLowerCase() !== 'redirect') return false;
+  if (natRuleDisabled(n)) return false;
+  const proto = String(n.protocol || '').toLowerCase();
+  if (proto && proto !== 'tcp') return false;
+  if (String(n['dst-port'] || '') !== '80') return false;
+  if (String(n['to-ports'] || '') !== String(opts.proxyPort)) return false;
+  const srcList = String(n['src-address-list'] || '');
+  const srcAddr = String(n['src-address'] || '');
+  return srcList === opts.nonPayAddressList || srcAddr === opts.nonPayCidr;
+}
+
+/**
+ * Ensure the captive non-payment IP pool + PPP profile so overdue secrets
+ * redial into 172.15.10.0/24 (webproxy NAT match). Without this, Admin can be
+ * on profile "non-payments" but still get a normal pool → no redirect.
+ */
+export async function ensureNonPaymentCaptiveProfile(
+  api: RouterOSAPI,
+  opts: {
+    profileName?: string;
+    poolName?: string;
+    nonPayCidr?: string;
+    landingAddress?: string;
+    rateLimit?: string;
+  } = {}
+): Promise<{
+  profileName: string;
+  poolName: string;
+  nonPayCidr: string;
+  poolRanges: string;
+  remoteAddress: string;
+  localAddress: string;
+  createdPool: boolean;
+  createdProfile: boolean;
+  updatedProfile: boolean;
+}> {
+  const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const rateLimit = String(opts.rateLimit || '2M/2M').trim();
+  const poolRanges = cidrToPoolRanges(nonPayCidr) || '172.15.10.2-172.15.10.254';
+  const cidrPrefix = nonPayCidr.split('/')[0].split('.').slice(0, 3).join('.');
+
+  let createdPool = false;
+  const pools = (await api.write('/ip/pool/print')) as Record<string, string>[];
+  // Prefer an existing pool already covering the captive CIDR (often named "non-payments").
+  const preferredNames = [
+    String(opts.poolName || '').trim(),
+    profileName,
+    NONPAY_POOL_NAME,
+    'non-payments',
+    'non-payment',
+  ].filter(Boolean);
+  let poolRow =
+    (pools || []).find((p) => preferredNames.includes(String(p.name || ''))) ||
+    (pools || []).find((p) => String(p.ranges || '').includes(cidrPrefix)) ||
+    null;
+  let poolName = poolRow ? String(poolRow.name || '') : String(opts.poolName || NONPAY_POOL_NAME).trim() || NONPAY_POOL_NAME;
+
+  if (!poolRow) {
+    await api.write('/ip/pool/add', [
+      `=name=${poolName}`,
+      `=ranges=${poolRanges}`,
+      `=comment=${WEBPROXY_RULE_COMMENT}`,
+    ]);
+    createdPool = true;
+  } else {
+    const ranges = String(poolRow.ranges || '');
+    if (!ranges.includes(cidrPrefix)) {
+      try {
+        await raceApi(
+          api.write('/ip/pool/set', [`=.id=${poolRow['.id']}`, `=ranges=${poolRanges}`]),
+          5_000,
+          'pool-set'
+        );
+      } catch {
+        /* keep existing ranges if in use by active PPP */
+      }
+    }
+  }
+
+  let createdProfile = false;
+  let updatedProfile = false;
+  const profiles = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+  const prof = (profiles || []).find((p) => String(p.name || '') === profileName);
+  if (!prof) {
+    await api.write('/ppp/profile/add', [
+      `=name=${profileName}`,
+      `=local-address=${landingAddress}`,
+      `=remote-address=${poolName}`,
+      `=rate-limit=${rateLimit}`,
+      `=comment=${WEBPROXY_RULE_COMMENT}`,
+    ]);
+    createdProfile = true;
+  } else {
+    const remote = String(prof['remote-address'] || '');
+    const local = String(prof['local-address'] || '');
+    const args = [`=.id=${prof['.id']}`];
+    // Only rewrite remote-address when it does not already point at the captive pool/CIDR.
+    const remoteOk =
+      remote === poolName ||
+      remote === nonPayCidr ||
+      preferredNames.includes(remote) ||
+      (pools || []).some(
+        (p) => String(p.name || '') === remote && String(p.ranges || '').includes(cidrPrefix)
+      );
+    if (!remoteOk) args.push(`=remote-address=${poolName}`);
+    if (!local) args.push(`=local-address=${landingAddress}`);
+    if (!String(prof['rate-limit'] || '') && rateLimit) args.push(`=rate-limit=${rateLimit}`);
+    if (args.length > 1) {
+      await raceApi(api.write('/ppp/profile/set', args), 8_000, 'profile-set');
+      updatedProfile = true;
+    }
+  }
+
+  const refreshed = (await api.write('/ppp/profile/print', [`?name=${profileName}`])) as Record<
+    string,
+    string
+  >[];
+  const live = refreshed?.[0] || {};
+  return {
+    profileName,
+    poolName,
+    nonPayCidr,
+    poolRanges,
+    remoteAddress: live['remote-address'] || poolName,
+    localAddress: live['local-address'] || landingAddress,
+    createdPool,
+    createdProfile,
+    updatedProfile,
+  };
+}
+
+/**
+ * Snapshot of captive ingredients on the router (for debugging "no redirect").
+ */
+export async function inspectNonPaymentCaptive(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    landingAddress?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+    profileName?: string;
+    username?: string;
+  } = {}
+): Promise<Record<string, unknown>> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
+  const username = String(opts.username || '').trim();
+
+  return withRouter(
+    conn,
+    async (api) => {
+      // PPP first (reliable). /ip/proxy/* often hangs on this board — race it.
+      const secrets = username
+        ? ((await raceApi(
+            api.write('/ppp/secret/print', [`?name=${username}`]),
+            8_000,
+            'secret-print'
+          ).catch(() => [])) as Record<string, string>[])
+        : [];
+      const active = username
+        ? ((await raceApi(
+            api.write('/ppp/active/print', [`?name=${username}`]),
+            8_000,
+            'active-print'
+          ).catch(() => [])) as Record<string, string>[])
+        : [];
+      const profiles = (await raceApi(
+        api.write('/ppp/profile/print'),
+        8_000,
+        'profile-print'
+      ).catch(() => [])) as Record<string, string>[];
+      const pools = (await raceApi(api.write('/ip/pool/print'), 8_000, 'pool-print').catch(
+        () => []
+      )) as Record<string, string>[];
+      const nats = (await raceApi(
+        api.write('/ip/firewall/nat/print'),
+        10_000,
+        'nat-print'
+      ).catch(() => [])) as Record<string, string>[];
+      const addrList = (await raceApi(
+        api.write('/ip/firewall/address-list/print'),
+        8_000,
+        'addr-print'
+      ).catch(() => [])) as Record<string, string>[];
+
+      let proxy: Record<string, string> = {};
+      let access: Record<string, string>[] = [];
+      let proxyError: string | null = null;
+      try {
+        proxy =
+          ((await raceApi(api.write('/ip/proxy/print'), 6_000, 'proxy-print')) as Record<
+            string,
+            string
+          >[])?.[0] || {};
+        access = (await raceApi(
+          api.write('/ip/proxy/access/print'),
+          6_000,
+          'proxy-access-print'
+        )) as Record<string, string>[];
+      } catch (e: any) {
+        proxyError = e?.message || String(e);
+      }
+
+      const httpRedirects = (nats || []).filter((n) =>
+        isWorkingNonPayHttpRedirect(n, { nonPayCidr, nonPayAddressList, proxyPort })
+      );
+      const taggedRedirects = (nats || []).filter((n) => {
+        const c = String(n.comment || '');
+        return (
+          c === NONPAY_NAT.httpRedirect ||
+          c === NONPAY_NAT.httpRedirectCidr ||
+          c === 'mtb-cidr-redir' ||
+          c === 'non-payment'
+        );
+      });
+      const profile = (profiles || []).find((p) => String(p.name || '') === profileName) || null;
+      const pool =
+        (pools || []).find((p) => String(p.name || '') === NONPAY_POOL_NAME) ||
+        (pools || []).find((p) => String(p.name || '') === String(profile?.['remote-address'] || '')) ||
+        (pools || []).find((p) => String(p.name || '') === profileName) ||
+        null;
+
+      const secret = secrets?.[0] || null;
+      const session = active?.[0] || null;
+      const sessionIp = String(session?.address || '');
+      const inNonPayCidr =
+        !!sessionIp &&
+        sessionIp !== '-' &&
+        (() => {
+          try {
+            const [net, bits] = nonPayCidr.split('/');
+            const prefix = Number(bits || 24);
+            const ipParts = sessionIp.split('.').map(Number);
+            const netParts = net.split('.').map(Number);
+            if (ipParts.length !== 4 || netParts.length !== 4) return false;
+            const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+            const ipN =
+              ((ipParts[0] << 24) >>> 0) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+            const netN =
+              ((netParts[0] << 24) >>> 0) + (netParts[1] << 16) + (netParts[2] << 8) + netParts[3];
+            return (ipN & mask) === (netN & mask);
+          } catch {
+            return false;
+          }
+        })();
+
+      let errorHtml: { name: string; size: number } | null = null;
+      try {
+        const files = (await raceApi(
+          api.write('/file/print', ['=.proplist=name,size']),
+          6_000,
+          'file-print'
+        )) as Record<string, string>[];
+        const hit = (files || []).find((f) => {
+          const n = String(f.name || '');
+          return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+        });
+        if (hit) errorHtml = { name: hit.name, size: Number(hit.size || 0) };
+      } catch {
+        /* ignore */
+      }
+
+      const portalRedirect = (access || []).find(
+        (r) =>
+          !rosBool(r.disabled) &&
+          (String(r.comment || '') === 'mtb-portal-redir' ||
+            String(r.comment || '') === NONPAY_PROXY.redirectPortal) &&
+          String(r['redirect-to'] || '').length > 0
+      );
+
+      return {
+        proxy: {
+          enabled: proxy.enabled,
+          port: proxy.port,
+          anonymous: proxy.anonymous,
+          error: proxyError,
+        },
+        proxyAccess: (access || [])
+          .filter(
+            (r) =>
+              String(r['src-address'] || '') === nonPayCidr ||
+              /nonpay|non-pay|mtb-portal/i.test(String(r.comment || ''))
+          )
+          .map((r) => ({
+            id: r['.id'],
+            action: r.action,
+            src: r['src-address'],
+            dstHost: r['dst-host'],
+            dstAddress: r['dst-address'],
+            redirectTo: r['redirect-to'] || '',
+            comment: r.comment,
+            disabled: rosBool(r.disabled),
+          })),
+        portalRedirectTo: portalRedirect ? String(portalRedirect['redirect-to'] || '') : null,
+        addressList: (addrList || [])
+          .filter((r) => String(r.list || '') === nonPayAddressList)
+          .map((r) => ({
+            list: r.list,
+            address: r.address,
+            comment: r.comment,
+            disabled: rosBool(r.disabled),
+          })),
+        httpRedirectWorking: httpRedirects.length > 0,
+        httpRedirects: httpRedirects.map((n) => ({
+          id: n['.id'],
+          comment: n.comment,
+          srcAddress: n['src-address'],
+          srcAddressList: n['src-address-list'],
+          toPorts: n['to-ports'],
+          disabled: rosBool(n.disabled),
+        })),
+        taggedHttpRedirects: taggedRedirects.map((n) => ({
+          id: n['.id'],
+          comment: n.comment,
+          action: n.action,
+          srcAddress: n['src-address'],
+          srcAddressList: n['src-address-list'],
+          toPorts: n['to-ports'],
+          disabled: rosBool(n.disabled),
+        })),
+        profile: profile
+          ? {
+              name: profile.name,
+              localAddress: profile['local-address'],
+              remoteAddress: profile['remote-address'],
+              rateLimit: profile['rate-limit'],
+            }
+          : null,
+        pool: pool
+          ? { name: pool.name, ranges: pool.ranges, comment: pool.comment }
+          : null,
+        errorHtml,
+        secret: secret
+          ? {
+              name: secret.name,
+              profile: secret.profile,
+              disabled: rosBool(secret.disabled),
+            }
+          : null,
+        session: session
+          ? {
+              name: session.name,
+              address: session.address,
+              profile: session.profile,
+              uptime: session.uptime,
+              inNonPayCidr,
+            }
+          : null,
+        diagnosis: !secret
+          ? username
+            ? 'PPP secret not found on router'
+            : 'No username requested'
+          : rosBool(secret.disabled)
+            ? 'Secret is disabled — cannot browse or hit captive'
+            : String(secret.profile || '') !== profileName
+              ? `Secret profile is "${secret.profile}" (want "${profileName}") — not in captive pool`
+              : session && !inNonPayCidr
+                ? `Online at ${sessionIp} outside ${nonPayCidr} — pool/profile mismatch; kick session after repair`
+                : !session
+                  ? 'Secret looks ready but offline — connect CPE then browse http://example.com'
+                  : httpRedirects.length === 0
+                    ? 'No working HTTP→webproxy NAT redirect'
+                    : !portalRedirect
+                      ? 'NAT OK but no proxy deny+redirect-to portal rule — run captive repair'
+                      : 'Looks configured — try plain HTTP (not HTTPS) or wait for HTTPS fail-fast',
+      };
+    },
+    { timeoutSec: 35 }
+  );
+}
+
+/** RouterOS script: classic working webproxy captive → error.html */
+export function buildCaptiveEnsureScriptSource(opts: {
+  nonPayCidr?: string;
+  proxyPort?: number;
+  portalRedirectUrl?: string;
+  landingAddress?: string;
+  /** When set, also force this PPP secret onto non-payments and kick it. */
+  username?: string;
+  /** Remove this one-shot scheduler name at the end (if any). */
+  removeSchedulerName?: string;
+  /**
+   * When true, skip `/ip proxy` commands (legacy hang workaround).
+   * Default false — restores the last known-working access list.
+   */
+  skipProxyCommands?: boolean;
+}): string {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim() || '1.1.10.1';
+  const username = String(opts.username || '').trim();
+  const u = rosScriptEscape(username);
+  const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
+  const skipProxy = opts.skipProxyCommands === true;
+  const allowCmt = NONPAY_PROXY.allowProxyPort;
+  const redirCmt = NONPAY_PROXY.redirectHttp;
+
+  // Last working Winbox layout (hits proved it):
+  //   0) src=nonPay dst-port=8080 action=allow
+  //   1) src=nonPay dst-address=!landing dst-port=80 action=redirect  → error.html
+  // Do NOT call `/ip proxy set` here — that wedges script jobs on this board.
+  // NAT :80→:8080 is applied via API; script only fixes access list + PPP.
+  return (
+    `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
+    // Prefer webproxy path: drop the 9080 override so :80 hits :8080 first.
+    `:do {/ip firewall nat remove [find comment=mtb-http-to-9080]} on-error={};` +
+    `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
+    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir place-before=0} on-error={};` +
+    (skipProxy
+      ? ''
+      : // Remove our older portal-deny / mismatched rules, then install classic pair.
+        `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
+        `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.redirectPortal}"]} on-error={};` +
+        `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.denyCaptive}"]} on-error={};` +
+        `:do {/ip proxy access remove [find comment=${allowCmt}]} on-error={};` +
+        `:do {/ip proxy access remove [find comment=${redirCmt}]} on-error={};` +
+        // Untagged legacy pair (exact match on the working photo).
+        `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=${proxyPort} action=allow]} on-error={};` +
+        `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=redirect]} on-error={};` +
+        `:do {/ip proxy access add src-address=${nonPayCidr} dst-port=${proxyPort} action=allow comment=${allowCmt}} on-error={};` +
+        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect comment=${redirCmt}} on-error={};`) +
+    (username
+      ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
+        `:do {/ppp active remove [find name="${u}"]} on-error={};`
+      : '') +
+    (sched
+      ? `:do {/system scheduler remove [find name="${sched}"]} on-error={};`
+      : '')
+  );
+}
+
+/**
+ * Fast NAT path for classic webproxy captive (HTTP :80 → :8080).
+ * Also keeps landing:9080 → billing as a secondary path.
+ */
+export async function repairNonPaymentNatRedirect(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+    /** Billing LAN IPv4 for landing:9080 → panel HTTP (optional). */
+    billingLanIp?: string;
+    landingAddress?: string;
+    captiveApiPort?: number;
+  } = {}
+): Promise<{
+  ok: true;
+  addressList: boolean;
+  natHttpRedirect: boolean;
+  natTo9080: boolean;
+  captiveApiDstnat: boolean;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
+  const billingLanIp = String(opts.billingLanIp || '').trim();
+
+  return withRouter(
+    conn,
+    async (api) => {
+      let addressList = false;
+      try {
+        const addrList = (await raceApi(
+          api.write('/ip/firewall/address-list/print', [
+            '=.proplist=.id,list,address,disabled',
+          ]),
+          8_000,
+          'addr-print'
+        )) as Record<string, string>[];
+        const hasCidr = (addrList || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr &&
+            !rosBool(r.disabled)
+        );
+        if (!hasCidr) {
+          await raceApi(
+            api.write('/ip/firewall/address-list/add', [
+              `=list=${nonPayAddressList}`,
+              `=address=${nonPayCidr}`,
+              `=comment=${WEBPROXY_RULE_COMMENT}`,
+            ]),
+            8_000,
+            'addr-add'
+          );
+        }
+        addressList = true;
+      } catch {
+        addressList = false;
+      }
+
+      let natTo9080 = false;
+      let natHttpRedirect = false;
+      let captiveApiDstnat = false;
+      try {
+        const nats = (await raceApi(
+          api.write('/ip/firewall/nat/print', [
+            '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-address,dst-port,to-addresses,to-ports,comment,disabled',
+          ]),
+          10_000,
+          'nat-print'
+        )) as Record<string, string>[];
+
+        const removeByComment = async (comment: string) => {
+          for (const n of nats || []) {
+            if (String(n.comment || '') !== comment || !n['.id']) continue;
+            try {
+              await raceApi(
+                api.write('/ip/firewall/nat/remove', [`=.id=${n['.id']}`]),
+                5_000,
+                'nat-rm'
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+
+        // Classic path first: HTTP :80 → webproxy :8080 (error.html).
+        await removeByComment('mtb-http-to-9080');
+        await removeByComment('mtb-cidr-redir');
+        await removeByComment(NONPAY_NAT.httpRedirectCidr);
+        await raceApi(
+          api.write('/ip/firewall/nat/add', [
+            '=chain=dstnat',
+            '=action=redirect',
+            `=to-ports=${proxyPort}`,
+            '=protocol=tcp',
+            `=src-address=${nonPayCidr}`,
+            '=dst-port=80',
+            '=comment=mtb-cidr-redir',
+            '=place-before=0',
+          ]),
+          8_000,
+          'nat-8080'
+        );
+        natHttpRedirect = true;
+
+        // Secondary: :80 → :9080 only if webproxy path is absent (kept disabled
+        // by removing above). Re-add below 8080 as soft fallback — omit so
+        // classic webproxy wins exclusively.
+
+        // Allow non-pay clients to hit local webproxy port (input).
+        try {
+          const filters = (await raceApi(
+            api.write('/ip/firewall/filter/print', [
+              '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-port,comment,disabled',
+            ]),
+            8_000,
+            'filter-print'
+          )) as Record<string, string>[];
+          const hasProxyIn = (filters || []).some(
+            (r) =>
+              String(r.chain || '') === 'input' &&
+              (String(r.comment || '') === NONPAY_FW.proxyInput ||
+                String(r.comment || '') === 'mtb-allow-8080') &&
+              !rosBool(r.disabled)
+          );
+          if (!hasProxyIn) {
+            await raceApi(
+              api.write('/ip/firewall/filter/add', [
+                '=chain=input',
+                '=action=accept',
+                '=protocol=tcp',
+                `=src-address=${nonPayCidr}`,
+                `=dst-port=${proxyPort}`,
+                '=comment=mtb-allow-8080',
+                '=place-before=0',
+              ]),
+              8_000,
+              'filter-8080'
+            );
+          }
+        } catch {
+          /* best-effort */
+        }
+
+        // landing:9080 → billing LAN:80 (portal pay / API; not the interstitial).
+        if (billingLanIp && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(billingLanIp)) {
+          const apiComment = `${WEBPROXY_RULE_COMMENT} captive-api`;
+          const hasApi = (nats || []).some(
+            (n) =>
+              String(n.comment || '') === apiComment &&
+              !rosBool(n.disabled) &&
+              String(n['dst-port'] || '') === String(captiveApiPort)
+          );
+          if (!hasApi) {
+            await removeByComment(apiComment);
+            await raceApi(
+              api.write('/ip/firewall/nat/add', [
+                '=chain=dstnat',
+                '=action=dst-nat',
+                `=to-addresses=${billingLanIp}`,
+                '=to-ports=80',
+                '=protocol=tcp',
+                `=dst-address=${landingAddress}`,
+                `=dst-port=${captiveApiPort}`,
+                `=comment=${apiComment}`,
+              ]),
+              8_000,
+              'nat-api'
+            );
+          }
+          captiveApiDstnat = true;
+        }
+      } catch {
+        /* leave flags as set */
+      }
+
+      return {
+        ok: true as const,
+        addressList,
+        natHttpRedirect,
+        natTo9080,
+        captiveApiDstnat,
+      };
+    },
+    { timeoutSec: 25 }
+  );
+}
+
+const CAPTIVE_WATCH_SCRIPT = 'mtb-captive-watch';
+const CAPTIVE_WATCH_SCHEDULER = 'mtb-captive-watch';
+const CAPTIVE_FIX_SCRIPT = 'mtb-fix-captive';
+const CAPTIVE_FIX_ONCE = 'mtb-fix-once';
+
+async function upsertSystemScript(
+  api: RouterOSAPI,
+  name: string,
+  source: string,
+  comment: string
+): Promise<void> {
+  // Prefer set — avoids hung remove + "already exists" races on busy boards.
+  try {
+    await raceApi(
+      api.write('/system/script/set', [
+        `=numbers=${name}`,
+        `=source=${source}`,
+        '=dont-require-permissions=yes',
+        `=comment=${comment}`,
+      ]),
+      10_000,
+      'script-set'
+    );
+    return;
+  } catch {
+    /* missing — add below */
+  }
+  await raceApi(
+    api.write('/system/script/add', [
+      `=name=${name}`,
+      `=source=${source}`,
+      '=dont-require-permissions=yes',
+      `=comment=${comment}`,
+    ]),
+    10_000,
+    'script-add'
+  );
+}
+
+/**
+ * Recurring captive ensure (every 5m). Self-heals webproxy NAT + portal
+ * redirect without depending on a one-shot that may be stuck at midnight.
+ */
+export async function ensureCaptiveWatchSystemScript(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    portalRedirectUrl?: string;
+    interval?: string;
+  } = {}
+): Promise<{ script: string; scheduler: string; interval: string }> {
+  const interval = opts.interval || '00:05:00';
+  const source = buildCaptiveEnsureScriptSource({
+    nonPayCidr: opts.nonPayCidr,
+    proxyPort: opts.proxyPort,
+    portalRedirectUrl: opts.portalRedirectUrl,
+    landingAddress: '1.1.10.1',
+    skipProxyCommands: false,
+  });
+  await withRouter(
+    conn,
+    async (api) => {
+      await upsertSystemScript(
+        api,
+        CAPTIVE_WATCH_SCRIPT,
+        source,
+        'MT-Billing classic webproxy access (allow:8080 + redirect:80→error.html)'
+      );
+      await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+      try {
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+            '=comment=MT-Billing captive watch',
+          ]),
+          8_000,
+          'captive-watch-sched-add'
+        );
+      } catch {
+        await raceApi(
+          api.write('/system/scheduler/set', [
+            `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+            '=start-time=startup',
+            `=interval=${interval}`,
+            `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+            '=comment=MT-Billing captive watch',
+            '=disabled=no',
+          ]),
+          8_000,
+          'captive-watch-sched-set'
+        );
+      }
+    },
+    { timeoutSec: 25 }
+  );
+  return { script: CAPTIVE_WATCH_SCRIPT, scheduler: CAPTIVE_WATCH_SCHEDULER, interval };
+}
+
+/**
+ * Apply captive redirect via a near-future one-shot scheduler — avoids hung
+ * /ip/proxy API sessions. IMPORTANT: must use router clock + start-date/time
+ * a few seconds ahead. `start-time=00:00:01` alone sits until next midnight
+ * and never repairs the live board.
+ */
+export async function repairNonPaymentHttpRedirectViaScript(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    portalRedirectUrl?: string;
+    username?: string;
+    billingLanIp?: string;
+    landingAddress?: string;
+    captiveApiPort?: number;
+  } = {}
+): Promise<{
+  ok: true;
+  ran: string;
+  scheduledAt?: string;
+  watch?: string;
+  nat?:
+    | {
+        ok: true;
+        addressList: boolean;
+        natHttpRedirect: boolean;
+        natTo9080: boolean;
+        captiveApiDstnat: boolean;
+      }
+    | { error: string };
+  kicked?: string | null;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
+    .trim()
+    .replace(/\/$/, '');
+  const username = String(opts.username || '').trim();
+
+  // 0) NAT via API first (does not touch /ip/proxy — survives wedged proxy).
+  let nat:
+    | {
+        ok: true;
+        addressList: boolean;
+        natHttpRedirect: boolean;
+        natTo9080: boolean;
+        captiveApiDstnat: boolean;
+      }
+    | { error: string };
+  try {
+    nat = await repairNonPaymentNatRedirect(conn, {
+      nonPayCidr,
+      proxyPort,
+      billingLanIp: opts.billingLanIp,
+      landingAddress: opts.landingAddress,
+      captiveApiPort: opts.captiveApiPort,
+    });
+  } catch (e: any) {
+    nat = { error: e?.message || String(e) };
+  }
+
+  // Cancel any wedged prior one-shot / script job that is stuck in /ip proxy set.
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
+        try {
+          const jobs = (await raceApi(
+            api.write('/system/script/job/print', ['=.proplist=.id,script,owner']),
+            5_000,
+            'script-jobs'
+          )) as Record<string, string>[];
+          for (const j of jobs || []) {
+            const sn = String(j.script || '');
+            if (sn !== CAPTIVE_FIX_SCRIPT && sn !== CAPTIVE_WATCH_SCRIPT) continue;
+            try {
+              await raceApi(
+                api.write('/system/script/job/remove', [`=.id=${j['.id']}`]),
+                3_000,
+                'job-rm'
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      },
+      { timeoutSec: 12 }
+    );
+  } catch {
+    /* ignore */
+  }
+
+  const fixSource = buildCaptiveEnsureScriptSource({
+    nonPayCidr,
+    proxyPort,
+    portalRedirectUrl: portal,
+    landingAddress: opts.landingAddress || '1.1.10.1',
+    username: username || undefined,
+    removeSchedulerName: CAPTIVE_FIX_ONCE,
+    skipProxyCommands: false,
+  });
+  const watchSource = buildCaptiveEnsureScriptSource({
+    nonPayCidr,
+    proxyPort,
+    portalRedirectUrl: portal,
+    landingAddress: opts.landingAddress || '1.1.10.1',
+    skipProxyCommands: false,
+  });
+
+  // Separate API sessions so a hung remove/set cannot poison PPP kick.
+  let scheduledAt = '';
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        // Clear any previous one-shot that may still be wedged mid-run.
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
+        await upsertSystemScript(
+          api,
+          CAPTIVE_FIX_SCRIPT,
+          fixSource,
+          'MT-Billing one-shot captive redirect repair'
+        );
+        await upsertSystemScript(
+          api,
+          CAPTIVE_WATCH_SCRIPT,
+          watchSource,
+          'MT-Billing captive webproxy ensure (NAT + portal redirect)'
+        );
+      },
+      { timeoutSec: 22 }
+    );
+  } catch {
+    /* continue — watch/schedule may still work */
+  }
+
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
+        const offsetMs = await getRouterClockOffsetMs(api);
+        // Fire ~5s from now on the router's own clock (not midnight).
+        const when = new Date(Date.now() + 5_000);
+        const fields = rosScheduleFields(when, offsetMs);
+        scheduledAt = `${fields.date} ${fields.time}`;
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${CAPTIVE_FIX_ONCE}`,
+            `=start-date=${fields.date}`,
+            `=start-time=${fields.time}`,
+            '=interval=0',
+            `=on-event=${CAPTIVE_FIX_SCRIPT}`,
+            '=comment=MT-Billing captive repair once',
+          ]),
+          8_000,
+          'fix-once-add'
+        );
+        // Recurring self-heal (idempotent).
+        await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+        try {
+          await raceApi(
+            api.write('/system/scheduler/add', [
+              `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:01:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=comment=MT-Billing captive watch',
+            ]),
+            8_000,
+            'watch-sched-add'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/scheduler/set', [
+              `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:01:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=disabled=no',
+            ]),
+            8_000,
+            'watch-sched-set'
+          );
+        }
+      },
+      { timeoutSec: 22 }
+    );
+  } catch {
+    /* PPP kick below may still help once watch exists from a prior run */
+  }
+
+  let kicked: string | null = null;
+  if (username) {
+    try {
+      await withRouter(
+        conn,
+        async (api) => {
+          try {
+            await raceApi(
+              api.write('/ppp/secret/set', [
+                `=numbers=${username}`,
+                '=profile=non-payments',
+                '=disabled=no',
+              ]),
+              8_000,
+              'secret-set'
+            );
+          } catch {
+            /* ignore */
+          }
+          try {
+            const actives = (await raceApi(
+              api.write('/ppp/active/print', [`?name=${username}`, '=.proplist=.id,name']),
+              8_000,
+              'active-print'
+            )) as Record<string, string>[];
+            for (const a of actives || []) {
+              if (!a['.id']) continue;
+              try {
+                await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          kicked = username;
+        },
+        { timeoutSec: 15 }
+      );
+    } catch {
+      kicked = null;
+    }
+  }
+
+  return {
+    ok: true as const,
+    ran: CAPTIVE_FIX_SCRIPT,
+    scheduledAt: scheduledAt || undefined,
+    watch: CAPTIVE_WATCH_SCRIPT,
+    nat,
+    kicked,
+  };
+}
+
+/**
+ * Fast path: enable webproxy, ensure HTTP→8080 NAT, and set catch-all
+ * proxy access redirect to the subscriber portal. Avoids full firewall
+ * rebuild so it can run while the board is busy / recovering.
+ */
+export async function repairNonPaymentHttpRedirect(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+    portalRedirectUrl?: string;
+    username?: string;
+  } = {}
+): Promise<{
+  ok: true;
+  proxyEnabled: boolean;
+  natHttpRedirect: boolean;
+  proxyRedirect: boolean;
+  portalRedirectTo: string;
+  kicked?: string | null;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const portalRedirectTo = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
+    .trim()
+    .replace(/\/$/, '');
+  const username = String(opts.username || '').trim();
+
+  return withRouter(
+    conn,
+    async (api) => {
+      let proxyEnabled = false;
+      try {
+        await api.write('/ip/proxy/set', ['=enabled=yes', `=port=${proxyPort}`, '=anonymous=no']);
+        proxyEnabled = true;
+      } catch {
+        try {
+          await api.write('/ip/proxy/set', ['=enabled=yes']);
+          proxyEnabled = true;
+        } catch {
+          proxyEnabled = false;
+        }
+      }
+
+      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+      const hasCidr = (addrList || []).some(
+        (r) =>
+          String(r.list || '') === nonPayAddressList &&
+          String(r.address || '') === nonPayCidr &&
+          !rosBool(r.disabled)
+      );
+      if (!hasCidr) {
+        await api.write('/ip/firewall/address-list/add', [
+          `=list=${nonPayAddressList}`,
+          `=address=${nonPayCidr}`,
+          `=comment=${WEBPROXY_RULE_COMMENT}`,
+        ]);
+      }
+
+      const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+      const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
+      const hasList = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address-list'] || '') === nonPayAddressList
+      );
+      const hasCidrNat = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address'] || '') === nonPayCidr
+      );
+      if (!hasList) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirect}`,
+          '=place-before=0',
+        ]);
+      }
+      if (!hasCidrNat) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address=${nonPayCidr}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirectCidr}`,
+          '=place-before=0',
+        ]);
+      }
+
+      const access = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
+      // Drop experimental deny/portal rules; keep/install classic Winbox pair.
+      for (const row of access || []) {
+        if (String(row['src-address'] || '') !== nonPayCidr) continue;
+        const cmt = String(row.comment || '');
+        const action = String(row.action || '').toLowerCase();
+        const drop =
+          cmt === NONPAY_PROXY.redirectPortal ||
+          cmt === NONPAY_PROXY.denyCaptive ||
+          cmt === 'mtb-portal-redir' ||
+          (action === 'deny' &&
+            !String(row['dst-host'] || '') &&
+            !String(row['dst-port'] || '') &&
+            (!String(row['dst-address'] || '') || String(row['redirect-to'] || '')));
+        if (!drop || !row['.id']) continue;
+        try {
+          await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let proxyRedirect = false;
+      try {
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-port=${proxyPort}`,
+          '=action=allow',
+          `=comment=${NONPAY_PROXY.allowProxyPort}`,
+          '=place-before=0',
+        ]);
+      } catch {
+        /* may already exist */
+      }
+      try {
+        const landing = '1.1.10.1';
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-address=!${landing}`,
+          '=dst-port=80',
+          '=action=redirect',
+          `=comment=${NONPAY_PROXY.redirectHttp}`,
+        ]);
+        proxyRedirect = true;
+      } catch {
+        proxyRedirect = false;
+      }
+
+      let kicked: string | null = null;
+      if (username) {
+        try {
+          const secrets = (await api.write('/ppp/secret/print', [
+            `?name=${username}`,
+            '=.proplist=.id,name,profile',
+          ])) as Record<string, string>[];
+          const sec = secrets?.[0];
+          if (sec?.['.id']) {
+            await api.write('/ppp/secret/set', [
+              `=.id=${sec['.id']}`,
+              '=profile=non-payments',
+              '=disabled=no',
+            ]);
+          }
+          const actives = (await api.write('/ppp/active/print', [
+            `?name=${username}`,
+            '=.proplist=.id,name',
+          ])) as Record<string, string>[];
+          for (const a of actives || []) {
+            if (!a['.id']) continue;
+            try {
+              await api.write('/ppp/active/remove', [`=.id=${a['.id']}`]);
+            } catch {
+              /* ignore */
+            }
+          }
+          kicked = username;
+        } catch {
+          kicked = null;
+        }
+      }
+
+      return {
+        ok: true as const,
+        proxyEnabled,
+        natHttpRedirect: true,
+        proxyRedirect,
+        portalRedirectTo,
+        kicked,
+      };
+    },
+    { timeoutSec: 25 }
+  );
+}
 
 export type NonPaymentWebProxyOpts = {
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
   nonPayCidr?: string;
-  /** Host clients may reach for the landing page (router/local billing IP). */
+  /** Host clients may reach for the landing / webproxy page. */
   landingAddress?: string;
-  /** Public billing hostname (allowed through proxy for /error.html + /pay + /api). */
+  /** Public billing hostname (subscriber portal + branding). */
   billingHost?: string;
-  /** Extra hostnames to allow (PayMongo checkout, etc.). */
+  /** Extra hostnames allowed over HTTPS (PayMongo checkout, etc.). */
   allowHosts?: string[];
   /** Absolute URL of error.html — fetched onto the router as error.html when set. */
   errorPageUrl?: string;
+  /**
+   * Absolute portal URL used for webproxy action=redirect (HTTP captive).
+   * Prefer this over deny→error.html when browsers ignore the interstitial file.
+   */
+  portalRedirectUrl?: string;
   proxyPort?: number;
+  /**
+   * When true (default), ensure forward firewall lockdown so non-pay clients
+   * cannot browse past the captive interstitial except DNS + HTTP captive ports
+   * + HTTPS to billing/PayMongo (subscriber portal payment path).
+   */
+  lockdownFirewall?: boolean;
+  /** Firewall address-list name used for non-pay clients (NAT/filter). */
+  nonPayAddressList?: string;
+  /**
+   * Optional billing LAN IPv4(s) allowed through webproxy (legacy / diagnostics).
+   * Portal payment uses public HTTPS to billingHost, not these.
+   */
+  billingLanIps?: string[];
+  /** Local port on landingAddress that dstnats to billing LAN HTTP (default 9080). */
+  captiveApiPort?: number;
+  /**
+   * When true (default), restrict WebFig/Winbox so PPPoE subscribers cannot
+   * open the MikroTik login page (mgmt LAN/VPN only).
+   */
+  lockRouterUi?: boolean;
+  /** CIDRs allowed to open router admin UI (defaults: LAN + VPN). */
+  routerMgmtCidrs?: string[];
 };
 
 /**
- * SAFE captive helper for routers that already have non-payment web-proxy
- * (e.g. PANIS: NAT :80→:8080, proxy access allow 8080 + redirect except landing IP).
+ * Non-payment captive setup for portal-pay flow:
+ *  - HTTP :80 → NAT redirect to webproxy
+ *  - Proxy access: allow portal/PayMongo/landing, then DENY (serves error.html)
+ *  - HTTPS to portal/PayMongo allowed; other HTTPS dropped (no TLS→HTTP proxy
+ *    redirect — that breaks PC browsers / never shows error.html)
  *
  * Never touches:
  *  - /ip address, pools, PPP profile local/remote addressing
- *  - /ip firewall (filter/nat)
  *  - existing untagged /ip proxy access rules (your redirect stays)
  *
  * Only:
  *  - adds missing dst-host allow rules (billing + PayMongo) tagged for idempotent refresh
  *  - optionally fetches error.html into webproxy/error.html
+ *  - optionally ensures tagged forward filter lockdown (HTTPS bypass fix)
+ *  - ensures dstnat landing:9080 → billing LAN:80 (preserves PPPoE source IP for captive API)
+ *  - installs mtb-billing-expire System script + scheduler
  */
 export async function configureNonPaymentWebProxy(
   conn: RouterConn,
@@ -2150,10 +3852,37 @@ export async function configureNonPaymentWebProxy(
   addedHosts: string[];
   skippedHosts: string[];
   fetchedErrorHtml: boolean;
+  errorHtmlSource?: string | null;
+  errorHtmlBytes?: number;
+  billingExpireScript?: { script: string; scheduler: string; interval: string } | null;
+  captiveWatchScript?: { script: string; scheduler: string; interval: string } | null;
+  firewallLockdown: boolean;
+  firewallAdded: string[];
+  firewallSkipped: string[];
+  firewallDisabledBypass: number;
+  addedLanIps: string[];
+  skippedLanIps: string[];
+  proxyAnonymousOff: boolean;
+  captiveApiDstnat: boolean;
+  natHttpRedirect: boolean;
+  natHttpsAllow: boolean;
+  natHttpsRedirect: boolean;
+  proxyDeny: boolean;
+  captiveProfile?: Awaited<ReturnType<typeof ensureNonPaymentCaptiveProfile>>;
+  routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+  const lockdownFirewall = opts.lockdownFirewall !== false;
+  const lockRouterUi = opts.lockRouterUi !== false;
+  const billingLanIps = [...new Set(
+    (opts.billingLanIps || [])
+      .map((ip) => String(ip || '').trim())
+      .filter((ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip))
+  )];
   const billingHost = String(opts.billingHost || '')
     .trim()
     .replace(/^https?:\/\//i, '')
@@ -2172,9 +3901,134 @@ export async function configureNonPaymentWebProxy(
   return withRouter(
     conn,
     async (api) => {
+      // 0) Pool + PPP profile must put non-pay secrets into nonPayCidr or NAT never hits.
+      const captiveProfile = await ensureNonPaymentCaptiveProfile(api, {
+        profileName: 'non-payments',
+        poolName: NONPAY_POOL_NAME,
+        nonPayCidr,
+        landingAddress,
+        rateLimit: '2M/2M',
+      });
+
+      // Enable proxy + anonymous=no (XFF when anything still hits LAN HTTP).
+      let proxyAnonymousOff = false;
+      try {
+        await api.write('/ip/proxy/set', [
+          '=enabled=yes',
+          `=port=${proxyPort}`,
+          '=anonymous=no',
+        ]);
+        proxyAnonymousOff = true;
+      } catch {
+        try {
+          await api.write('/ip/proxy/set', ['=anonymous=no']);
+          proxyAnonymousOff = true;
+        } catch {
+          proxyAnonymousOff = false;
+        }
+      }
+
       const existing = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
 
-      // Additive only: never remove existing rules (keeps redirect / 8080 allow intact).
+      // Restore classic working access list (Winbox photo):
+      //   allow  src=nonPay dst-port=8080
+      //   redirect src=nonPay dst-address=!landing dst-port=80  → error.html
+      // Do NOT delete the allow:8080 rule — that was the last working setup.
+      const hasAllow8080 = (existing || []).some(
+        (r) =>
+          String(r.action || '').toLowerCase() === 'allow' &&
+          String(r['src-address'] || '') === nonPayCidr &&
+          String(r['dst-port'] || '') === String(proxyPort) &&
+          !rosBool(r.disabled)
+      );
+      const hasClassicRedirect = (existing || []).some((r) => {
+        const action = String(r.action || '').toLowerCase();
+        const src = String(r['src-address'] || '');
+        const dst = String(r['dst-address'] || '');
+        const dport = String(r['dst-port'] || '');
+        return (
+          action === 'redirect' &&
+          src === nonPayCidr &&
+          dport === '80' &&
+          (dst === `!${landingAddress}` || dst.startsWith('!')) &&
+          !rosBool(r.disabled)
+        );
+      });
+
+      // Drop our newer deny/portal-redirect experiments that fight the classic pair.
+      for (const row of [...(existing || [])]) {
+        const cmt = String(row.comment || '');
+        const action = String(row.action || '').toLowerCase();
+        const src = String(row['src-address'] || '');
+        if (src !== nonPayCidr) continue;
+        const drop =
+          cmt === NONPAY_PROXY.redirectPortal ||
+          cmt === NONPAY_PROXY.denyCaptive ||
+          cmt === 'mtb-portal-redir' ||
+          (action === 'deny' &&
+            !String(row['dst-host'] || '') &&
+            !String(row['dst-address'] || '') &&
+            !String(row['dst-port'] || ''));
+        if (!drop || !row['.id']) continue;
+        try {
+          await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
+          const idx = existing.indexOf(row);
+          if (idx >= 0) existing.splice(idx, 1);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (!hasAllow8080) {
+        try {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            `=dst-port=${proxyPort}`,
+            '=action=allow',
+            `=comment=${NONPAY_PROXY.allowProxyPort}`,
+            '=place-before=0',
+          ]);
+          existing.unshift({
+            action: 'allow',
+            'src-address': nonPayCidr,
+            'dst-port': String(proxyPort),
+            comment: NONPAY_PROXY.allowProxyPort,
+          });
+        } catch {
+          /* proxy API may hang — script repair covers this */
+        }
+      }
+
+      if (!hasClassicRedirect) {
+        try {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            `=dst-address=!${landingAddress}`,
+            '=dst-port=80',
+            '=action=redirect',
+            `=comment=${NONPAY_PROXY.redirectHttp}`,
+          ]);
+          existing.push({
+            action: 'redirect',
+            'src-address': nonPayCidr,
+            'dst-address': `!${landingAddress}`,
+            'dst-port': '80',
+            comment: NONPAY_PROXY.redirectHttp,
+          });
+        } catch {
+          /* script repair covers this */
+        }
+      }
+
+      // Place host allows before any deny (portal pay path); keep classic redirect.
+      const denyId =
+        (existing || []).find(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'deny' &&
+            String(r['src-address'] || '') === nonPayCidr
+        )?.['.id'] || '';
+      const placeBeforeDeny = denyId ? [`=place-before=${denyId}`] : [];
+
       const alreadyAllowsHost = (host: string) =>
         (existing || []).some(
           (r) =>
@@ -2182,6 +4036,38 @@ export async function configureNonPaymentWebProxy(
             String(r['src-address'] || '') === nonPayCidr &&
             String(r['dst-host'] || '').toLowerCase() === host
         );
+
+      const alreadyAllowsLanIp = (ip: string) =>
+        (existing || []).some(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'allow' &&
+            String(r['src-address'] || '') === nonPayCidr &&
+            (String(r['dst-address'] || '') === ip || String(r['dst-address'] || '') === `${ip}/32`)
+        );
+
+      const alreadyAllowsLanding = (existing || []).some(
+        (r) =>
+          String(r.action || '').toLowerCase() === 'allow' &&
+          String(r['src-address'] || '') === nonPayCidr &&
+          (String(r['dst-address'] || '') === landingAddress ||
+            String(r['dst-address'] || '') === `${landingAddress}/32` ||
+            String(r.comment || '') === NONPAY_PROXY.allowLanding)
+      );
+      if (!alreadyAllowsLanding) {
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-address=${landingAddress}`,
+          '=action=allow',
+          `=comment=${NONPAY_PROXY.allowLanding}`,
+          ...placeBeforeDeny,
+        ]);
+        existing.push({
+          action: 'allow',
+          'src-address': nonPayCidr,
+          'dst-address': landingAddress,
+          comment: NONPAY_PROXY.allowLanding,
+        });
+      }
 
       const addedHosts: string[] = [];
       const skippedHosts: string[] = [];
@@ -2195,24 +4081,631 @@ export async function configureNonPaymentWebProxy(
           `=dst-host=${host}`,
           '=action=allow',
           `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ...placeBeforeDeny,
         ]);
         addedHosts.push(host);
+        existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-host': host });
       }
 
-      let fetchedErrorHtml = false;
-      const errorPageUrl = String(opts.errorPageUrl || '').trim();
-      if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
-        try {
-          // MikroTik serves the captive page from webproxy/error.html
-          await api.write('/tool/fetch', [
-            `=url=${errorPageUrl}`,
-            '=dst-path=webproxy/error.html',
-            '=once=yes',
-          ]);
-          fetchedErrorHtml = true;
-        } catch {
-          fetchedErrorHtml = false;
+      const addedLanIps: string[] = [];
+      const skippedLanIps: string[] = [];
+      for (const ip of billingLanIps) {
+        if (alreadyAllowsLanIp(ip)) {
+          skippedLanIps.push(ip);
+          continue;
         }
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-address=${ip}`,
+          '=action=allow',
+          `=comment=${WEBPROXY_RULE_COMMENT} lan-api`,
+          ...placeBeforeDeny,
+        ]);
+        addedLanIps.push(ip);
+        existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
+      }
+
+      // Classic catch-all already ensured above (action=redirect → error.html).
+      // Do not add deny+redirect-to portal — that replaced the working Winbox layout.
+      const proxyDeny =
+        hasClassicRedirect ||
+        (existing || []).some(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'redirect' &&
+            String(r['src-address'] || '') === nonPayCidr &&
+            String(r['dst-port'] || '') === '80' &&
+            !rosBool(r.disabled)
+        );
+
+      // Prefer LAN HTTP for error.html — public HTTPS often lands Cloudflare
+      // challenge HTML on the router, which breaks the captive redirect page.
+      let fetchedErrorHtml = false;
+      let errorHtmlSource: string | null = null;
+      let errorHtmlBytes = 0;
+      try {
+        const existingFiles = (await raceApi(
+          api.write('/file/print', ['=.proplist=name,size']),
+          6_000,
+          'file-print-pre'
+        )) as Record<string, string>[];
+        const existingHtml = (existingFiles || []).find((f) => {
+          const n = String(f.name || '');
+          return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+        });
+        const existingSize = Number(existingHtml?.size || 0);
+        if (existingSize >= 1500) {
+          fetchedErrorHtml = true;
+          errorHtmlSource = 'already-on-router';
+          errorHtmlBytes = existingSize;
+        }
+      } catch {
+        /* fetch below */
+      }
+      const errorPageUrl = String(opts.errorPageUrl || '').trim();
+      const fetchCandidates: string[] = [];
+      if (!fetchedErrorHtml) {
+        for (const ip of billingLanIps.slice(0, 2)) {
+          fetchCandidates.push(`http://${ip}/error.html`);
+        }
+        if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
+          fetchCandidates.push(errorPageUrl);
+        }
+      }
+      for (const url of [...new Set(fetchCandidates)]) {
+        try {
+          await raceApi(
+            (async () => {
+              try {
+                await removeProbeFile(api, 'webproxy/error.html');
+              } catch {
+                /* ok */
+              }
+              await removeStaleFetches(api);
+              await cancelFetchTool(api);
+              const rows = (await api.write('/tool/fetch', [
+                `=url=${url}`,
+                '=dst-path=webproxy/error.html',
+                '=check-certificate=no',
+                '=http-method=get',
+              ])) as Record<string, string>[];
+              const immediate = extractImmediateFetchResult(rows);
+              if (immediate?.ok) return true;
+              if (immediate && !immediate.ok) return false;
+              const result = await waitForRouterFetch(api, rows);
+              return result.ok;
+            })(),
+            8_000,
+            'fetch-error-html'
+          );
+        } catch {
+          continue;
+        }
+        try {
+          const files = (await raceApi(
+            api.write('/file/print', ['=.proplist=name,size']),
+            6_000,
+            'file-print'
+          )) as Record<string, string>[];
+          const hit = (files || []).find((f) => {
+            const n = String(f.name || '');
+            return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+          });
+          const size = Number(hit?.size || 0);
+          if (!Number.isFinite(size) || size < 1500) continue;
+          fetchedErrorHtml = true;
+          errorHtmlSource = url;
+          errorHtmlBytes = size;
+          break;
+        } catch {
+          /* try next */
+        }
+      }
+
+      // --- Address-list MUST exist before NAT (NAT matches this list / CIDR) ---
+      {
+        const addrListEarly = (await api.write('/ip/firewall/address-list/print')) as Record<
+          string,
+          string
+        >[];
+        const hasCidr = (addrListEarly || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr &&
+            !rosBool(r.disabled)
+        );
+        if (!hasCidr) {
+          // Drop disabled duplicates then add.
+          for (const r of addrListEarly || []) {
+            if (String(r.list || '') !== nonPayAddressList) continue;
+            if (String(r.address || '') !== nonPayCidr) continue;
+            if (!r['.id']) continue;
+            try {
+              await api.write('/ip/firewall/address-list/remove', [`=.id=${r['.id']}`]);
+            } catch {
+              /* ignore */
+            }
+          }
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${nonPayAddressList}`,
+            `=address=${nonPayCidr}`,
+            `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ]);
+        }
+      }
+
+      // --- NAT: HTTP redirect only (HTTPS redirect to proxy breaks PC browsers) ---
+      const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+      const hasNatComment = (comment: string) =>
+        (nats || []).some((n) => String(n.comment || '') === comment && !natRuleDisabled(n));
+
+      const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
+      // Remove tagged-but-broken redirects so we can recreate working ones.
+      for (const n of nats || []) {
+        const cmt = String(n.comment || '');
+        const tagged =
+          cmt === NONPAY_NAT.httpRedirect ||
+          cmt === NONPAY_NAT.httpRedirectCidr ||
+          cmt === 'non-payment';
+        if (!tagged) continue;
+        if (isWorkingNonPayHttpRedirect(n, redirectOpts)) continue;
+        const id = n['.id'];
+        if (!id) continue;
+        try {
+          await api.write('/ip/firewall/nat/remove', [`=.id=${id}`]);
+          const idx = nats.indexOf(n);
+          if (idx >= 0) nats.splice(idx, 1);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const hasListRedirect = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address-list'] || '') === nonPayAddressList
+      );
+      const hasCidrRedirect = (nats || []).some(
+        (n) =>
+          isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+          String(n['src-address'] || '') === nonPayCidr
+      );
+
+      let natHttpRedirect = hasListRedirect || hasCidrRedirect;
+      if (!hasListRedirect) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirect}`,
+          '=place-before=0',
+        ]);
+        natHttpRedirect = true;
+      }
+      // Direct CIDR match — works even if address-list entry was deleted.
+      if (!hasCidrRedirect) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=redirect',
+          `=to-ports=${proxyPort}`,
+          '=protocol=tcp',
+          `=src-address=${nonPayCidr}`,
+          '=dst-port=80',
+          `=comment=${NONPAY_NAT.httpRedirectCidr}`,
+          '=place-before=0',
+        ]);
+        natHttpRedirect = true;
+      }
+
+      // Keep HTTPS allow (portal/PayMongo) if present; remove TLS→8080 redirect
+      // which shows SSL errors instead of error.html on PC browsers.
+      let natHttpsRedirect = false;
+      for (const n of nats || []) {
+        if (String(n.comment || '') !== NONPAY_NAT.httpsRedirect) continue;
+        const id = n['.id'];
+        if (!id) continue;
+        try {
+          await api.write('/ip/firewall/nat/remove', [`=.id=${id}`]);
+        } catch {
+          natHttpsRedirect = true;
+        }
+      }
+
+      let natHttpsAllow = hasNatComment(NONPAY_NAT.httpsAllow);
+      if (!natHttpsAllow) {
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          `=dst-address-list=${NONPAY_HTTPS_LIST}`,
+          '=dst-port=443',
+          `=comment=${NONPAY_NAT.httpsAllow}`,
+          '=place-before=0',
+        ]);
+        natHttpsAllow = true;
+      }
+
+      // Bypass global DNS hijack (e.g. AdGuard) for non-pay — use profile DNS fast.
+      const ensureDnsBypass = async (comment: string, proto: 'udp' | 'tcp') => {
+        if (hasNatComment(comment)) return;
+        const adguardId =
+          (nats || []).find((n) => /adguard/i.test(String(n.comment || '')))?.['.id'] || '';
+        await api.write('/ip/firewall/nat/add', [
+          '=chain=dstnat',
+          '=action=accept',
+          `=protocol=${proto}`,
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+          `=comment=${comment}`,
+          ...(adguardId ? [`=place-before=${adguardId}`] : ['=place-before=0']),
+        ]);
+      };
+      await ensureDnsBypass(NONPAY_NAT.dnsBypassUdp, 'udp');
+      await ensureDnsBypass(NONPAY_NAT.dnsBypassTcp, 'tcp');
+
+      const firewallAdded: string[] = [];
+      const firewallSkipped: string[] = [];
+      let firewallDisabledBypass = 0;
+
+      if (lockdownFirewall) {
+        const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+        const hasCidr = (addrList || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr
+        );
+        if (!hasCidr) {
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${nonPayAddressList}`,
+            `=address=${nonPayCidr}`,
+            `=comment=${WEBPROXY_RULE_COMMENT}`,
+          ]);
+        }
+
+        // FQDN entries resolve dynamically on RouterOS 7 — portal + PayMongo HTTPS.
+        for (const host of uniqueHosts) {
+          const hasHost = (addrList || []).some(
+            (r) =>
+              String(r.list || '') === NONPAY_HTTPS_LIST &&
+              String(r.address || '').toLowerCase() === host
+          );
+          if (hasHost) continue;
+          try {
+            await api.write('/ip/firewall/address-list/add', [
+              `=list=${NONPAY_HTTPS_LIST}`,
+              `=address=${host}`,
+              `=comment=${WEBPROXY_RULE_COMMENT}`,
+            ]);
+            addrList.push({ list: NONPAY_HTTPS_LIST, address: host });
+          } catch {
+            /* duplicate */
+          }
+        }
+
+        const filters = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+        const hasComment = (comment: string) =>
+          (filters || []).some((r) => String(r.comment || '') === comment);
+
+        const anchorId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          (filters || []).find(
+            (r) =>
+              String(r.chain || '') === 'forward' &&
+              String(r['src-address-list'] || '') === nonPayAddressList &&
+              String(r.action || '') === 'accept' &&
+              !String(r.comment || '').startsWith('MT-Billing nonpay')
+          )?.['.id'] ||
+          '';
+        const placeArgs = anchorId ? [`=place-before=${anchorId}`] : [];
+
+        const ensureAllow = async (comment: string, args: string[]) => {
+          if (hasComment(comment)) {
+            firewallSkipped.push(comment);
+            return;
+          }
+          await api.write('/ip/firewall/filter/add', [...args, `=comment=${comment}`, ...placeArgs]);
+          firewallAdded.push(comment);
+          filters.push({ comment });
+        };
+
+        await ensureAllow(NONPAY_FW.https, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          `=dst-address-list=${NONPAY_HTTPS_LIST}`,
+          '=dst-port=443',
+        ]);
+        await ensureAllow(NONPAY_FW.dnsUdp, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=udp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+        ]);
+        await ensureAllow(NONPAY_FW.dnsTcp, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          '=dst-port=53',
+        ]);
+        await ensureAllow(NONPAY_FW.http, [
+          '=chain=forward',
+          '=action=accept',
+          '=protocol=tcp',
+          `=src-address-list=${nonPayAddressList}`,
+          `=dst-port=80,${proxyPort},${captiveApiPort}`,
+        ]);
+
+        // Redirected HTTP lands on the router's proxy — allow input.
+        if (!hasComment(NONPAY_FW.proxyInput)) {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=input',
+            '=action=accept',
+            '=protocol=tcp',
+            `=src-address-list=${nonPayAddressList}`,
+            `=dst-port=${proxyPort}`,
+            `=comment=${NONPAY_FW.proxyInput}`,
+            '=place-before=0',
+          ]);
+          firewallAdded.push(NONPAY_FW.proxyInput);
+        } else {
+          firewallSkipped.push(NONPAY_FW.proxyInput);
+        }
+
+        if (hasComment(NONPAY_FW.drop)) {
+          firewallSkipped.push(NONPAY_FW.drop);
+        } else {
+          const bypassId =
+            (filters || []).find(
+              (r) =>
+                String(r.chain || '') === 'forward' &&
+                String(r['src-address-list'] || '') === nonPayAddressList &&
+                String(r.action || '') === 'accept' &&
+                !String(r.comment || '').startsWith('MT-Billing nonpay')
+            )?.['.id'] || '';
+          const dropPlace = bypassId ? [`=place-before=${bypassId}`] : [];
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=drop',
+            `=src-address-list=${nonPayAddressList}`,
+            `=comment=${NONPAY_FW.drop}`,
+            ...dropPlace,
+          ]);
+          firewallAdded.push(NONPAY_FW.drop);
+          filters.push({ comment: NONPAY_FW.drop });
+        }
+
+        // Chrome/Android: silent DROP makes HTTPS/DoH hang for tens of seconds.
+        // Reject with RST/ICMP so the tablet fails fast and captive HTTP wins.
+        const dropId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          (
+            (await api.write('/ip/firewall/filter/print')) as Record<string, string>[]
+          ).find((r) => String(r.comment || '') === NONPAY_FW.drop)?.['.id'] ||
+          '';
+        const beforeDrop = dropId ? [`=place-before=${dropId}`] : [];
+        if (!hasComment(NONPAY_FW.rejectTcp)) {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=reject',
+            '=reject-with=tcp-reset',
+            '=protocol=tcp',
+            `=src-address-list=${nonPayAddressList}`,
+            `=comment=${NONPAY_FW.rejectTcp}`,
+            ...beforeDrop,
+          ]);
+          firewallAdded.push(NONPAY_FW.rejectTcp);
+        } else {
+          firewallSkipped.push(NONPAY_FW.rejectTcp);
+        }
+        if (!hasComment(NONPAY_FW.rejectQuic)) {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=forward',
+            '=action=reject',
+            '=reject-with=icmp-port-unreachable',
+            '=protocol=udp',
+            `=src-address-list=${nonPayAddressList}`,
+            '=dst-port=443',
+            `=comment=${NONPAY_FW.rejectQuic}`,
+            ...beforeDrop,
+          ]);
+          firewallAdded.push(NONPAY_FW.rejectQuic);
+        } else {
+          firewallSkipped.push(NONPAY_FW.rejectQuic);
+        }
+
+        // Legacy inverted bypass: accept tcp !80,8080 (lets HTTPS through) and udp/443 (QUIC).
+        const fresh = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+        for (const r of fresh || []) {
+          if (String(r.chain || '') !== 'forward') continue;
+          if (String(r['src-address-list'] || '') !== nonPayAddressList) continue;
+          if (String(r.action || '') !== 'accept') continue;
+          const cmt = String(r.comment || '');
+          if (cmt.startsWith('MT-Billing nonpay')) continue;
+          const dport = String(r['dst-port'] || '');
+          const proto = String(r.protocol || '').toLowerCase();
+          const isHttpsBypass =
+            (proto === 'tcp' && (dport.includes('!80') || dport === '!80,8080')) ||
+            (proto === 'udp' && dport === '443');
+          if (!isHttpsBypass) continue;
+          if (String(r.disabled || '').toLowerCase() === 'true' || r.disabled === 'yes') continue;
+          const id = r['.id'];
+          if (!id) continue;
+          try {
+            await api.write('/ip/firewall/filter/disable', [`=.id=${id}`]);
+            firewallDisabledBypass += 1;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      // dstnat landing:9080 → billing LAN:80 so captive clients can reach LAN API
+      // while the TCP source remains the PPPoE address (unlike webproxy XFF).
+      let captiveApiDstnat = false;
+      const billingLanTarget = billingLanIps[0] || '';
+      if (billingLanTarget) {
+        const natsApi = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+        const natComment = `${WEBPROXY_RULE_COMMENT} captive-api`;
+        const hasNat = (natsApi || []).some(
+          (n) =>
+            String(n.comment || '') === natComment ||
+            String(n.comment || '') === 'MT-Billing captive API'
+        );
+        if (!hasNat) {
+          try {
+            await api.write('/ip/firewall/nat/add', [
+              '=chain=dstnat',
+              '=action=dst-nat',
+              `=to-addresses=${billingLanTarget}`,
+              '=to-ports=80',
+              '=protocol=tcp',
+              `=src-address-list=${nonPayAddressList}`,
+              `=dst-address=${landingAddress}`,
+              `=dst-port=${captiveApiPort}`,
+              `=comment=${natComment}`,
+            ]);
+            captiveApiDstnat = true;
+          } catch {
+            captiveApiDstnat = false;
+          }
+        } else {
+          captiveApiDstnat = true;
+        }
+      }
+
+      let routerUiLock: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>> | undefined;
+      if (lockRouterUi) {
+        try {
+          routerUiLock = await restrictSubscriberRouterLogin(conn, {
+            mgmtCidrs: opts.routerMgmtCidrs,
+          });
+        } catch {
+          routerUiLock = undefined;
+        }
+      }
+
+      // Install classic System → Scripts expire scanner (best-effort, bounded).
+      let billingExpireScript: { script: string; scheduler: string; interval: string } | null =
+        null;
+      try {
+        const source = buildBillingExpireScriptSource('non-payments');
+        await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
+        await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
+        try {
+          await raceApi(
+            api.write('/system/script/add', [
+              `=name=${BILLING_EXPIRE_SCRIPT}`,
+              `=source=${source}`,
+              '=dont-require-permissions=yes',
+              '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+            ]),
+            10_000,
+            'add-exp-script'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/script/set', [
+              `=numbers=${BILLING_EXPIRE_SCRIPT}`,
+              `=source=${source}`,
+              '=dont-require-permissions=yes',
+            ]),
+            10_000,
+            'set-exp-script'
+          );
+        }
+        try {
+          await raceApi(
+            api.write('/system/scheduler/add', [
+              `=name=${BILLING_EXPIRE_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+              '=comment=MT-Billing periodic expire scan',
+            ]),
+            6_000,
+            'add-exp-sched'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/scheduler/set', [
+              `=numbers=${BILLING_EXPIRE_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+              '=disabled=no',
+            ]),
+            6_000,
+            'set-exp-sched'
+          );
+        }
+        billingExpireScript = {
+          script: BILLING_EXPIRE_SCRIPT,
+          scheduler: BILLING_EXPIRE_SCHEDULER,
+          interval: '00:05:00',
+        };
+      } catch {
+        billingExpireScript = null;
+      }
+
+      // Recurring captive watch — keeps NAT + portal redirect healthy even if
+      // a one-shot repair was scheduled for the wrong clock time.
+      let captiveWatchScript: { script: string; scheduler: string; interval: string } | null =
+        null;
+      try {
+        const watchSource = buildCaptiveEnsureScriptSource({
+          nonPayCidr,
+          proxyPort,
+          portalRedirectUrl:
+            String(opts.portalRedirectUrl || '').trim() ||
+            (billingHost ? `https://${billingHost}/portal` : 'https://panorth.tsogs.cloud/portal'),
+          skipProxyCommands: false,
+          landingAddress,
+        });
+        await upsertSystemScript(
+          api,
+          CAPTIVE_WATCH_SCRIPT,
+          watchSource,
+          'MT-Billing captive webproxy ensure (NAT + portal redirect)'
+        );
+        await removeSchedulerByName(api, CAPTIVE_WATCH_SCHEDULER);
+        try {
+          await raceApi(
+            api.write('/system/scheduler/add', [
+              `=name=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=comment=MT-Billing captive watch',
+            ]),
+            6_000,
+            'add-captive-watch'
+          );
+        } catch {
+          await raceApi(
+            api.write('/system/scheduler/set', [
+              `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
+              '=start-time=startup',
+              '=interval=00:05:00',
+              `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
+              '=disabled=no',
+            ]),
+            6_000,
+            'set-captive-watch'
+          );
+        }
+        captiveWatchScript = {
+          script: CAPTIVE_WATCH_SCRIPT,
+          scheduler: CAPTIVE_WATCH_SCHEDULER,
+          interval: '00:05:00',
+        };
+      } catch {
+        captiveWatchScript = null;
       }
 
       return {
@@ -2223,9 +4716,27 @@ export async function configureNonPaymentWebProxy(
         addedHosts,
         skippedHosts,
         fetchedErrorHtml,
+        errorHtmlSource,
+        errorHtmlBytes,
+        billingExpireScript,
+        captiveWatchScript,
+        firewallLockdown: lockdownFirewall,
+        firewallAdded,
+        firewallSkipped,
+        firewallDisabledBypass,
+        addedLanIps,
+        skippedLanIps,
+        proxyAnonymousOff,
+        captiveApiDstnat,
+        captiveProfile,
+        natHttpRedirect,
+        natHttpsAllow,
+        natHttpsRedirect,
+        proxyDeny,
+        routerUiLock,
       };
     },
-    { timeoutSec: 45 }
+    { timeoutSec: 55 }
   );
 }
 

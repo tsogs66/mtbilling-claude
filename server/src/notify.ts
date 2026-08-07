@@ -939,6 +939,22 @@ export async function executeBillingEnforcement(opts?: {
   service?: string;
   /** Manual recheck: disable past-grace even if autodisable_enabled is off */
   forceDisable?: boolean;
+  /**
+   * When false, skip MikroTik schedule refresh for healthy active accounts.
+   * Manual HTTP recheck must stay under Cloudflare's ~100s limit — schedule
+   * ensure for every subscriber is the common cause of 524 timeouts.
+   * Default true (background scheduler / full runs).
+   */
+  ensureSchedules?: boolean;
+  /**
+   * When false, skip expiry-reminder / non-payment / disable SMS+email.
+   * Manual HTTP recheck should set this false — Semaphore/SMTP fan-out
+   * routinely exceeds Cloudflare's ~100s proxy limit (524).
+   * Default true (background automations).
+   */
+  sendNotices?: boolean;
+  /** Cap concurrent MikroTik syncs (expire/restore/disable). */
+  routerConcurrency?: number;
 }): Promise<{
   remindersSent: number;
   markedNonPayment: number;
@@ -954,6 +970,9 @@ export async function executeBillingEnforcement(opts?: {
   const s = getSettings();
   const now = Date.now();
   const forceDisable = !!opts?.forceDisable;
+  const ensureSchedules = opts?.ensureSchedules !== false;
+  const sendNotices = opts?.sendNotices !== false;
+  const routerConcurrency = Math.max(1, Math.min(8, Number(opts?.routerConcurrency) || 3));
   const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
   const summary = {
     remindersSent: 0,
@@ -976,9 +995,12 @@ export async function executeBillingEnforcement(opts?: {
     resolveRouterSync,
     scheduleRouterExpiry,
     cancelRouterExpirySchedule,
+    withTimeout,
   } = await import('./billing.js');
   const { baseUrl } = resolvePublicBaseUrl();
   const service = opts?.service ? String(opts.service).toLowerCase() : null;
+  /** Bound each MikroTik sync so one stuck board cannot hang HTTP recheck past Cloudflare. */
+  const syncBudgetMs = ensureSchedules ? 45_000 : 12_000;
 
   const all = (
     service
@@ -999,6 +1021,29 @@ export async function executeBillingEnforcement(opts?: {
     lng?: number;
     service?: string;
   })[];
+
+  async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const out: R[] = new Array(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(limit, Math.max(1, items.length)) }, async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]);
+      }
+    });
+    await Promise.all(workers);
+    return out;
+  }
+
+  // ---- Phase 1: overdue expire / disable + restore (must finish for HTTP recheck) ----
+  type ActionJob =
+    | { kind: 'restore'; u: (typeof all)[0]; restore: BillingCandidate }
+    | { kind: 'expire'; u: (typeof all)[0]; classified: BillingCandidate }
+    | { kind: 'disable'; u: (typeof all)[0]; classified: BillingCandidate };
+
+  const actionJobs: ActionJob[] = [];
+  const scheduleCandidates: (typeof all)[0][] = [];
 
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
@@ -1026,6 +1071,7 @@ export async function executeBillingEnforcement(opts?: {
       ? Math.max(1, Number(portalPrefs.due_reminder_days) || s.days_before)
       : s.days_before;
     const reminderAllowed =
+      sendNotices &&
       s.reminder_enabled &&
       (!portalPrefs || Number(portalPrefs.due_reminder_enabled) === 1) &&
       st === 'active' &&
@@ -1053,14 +1099,37 @@ export async function executeBillingEnforcement(opts?: {
       }
     }
 
-    // Due extended / still valid but stuck on non-payment → restore registered plan
     const restore = classifyRestoreUser(u);
     if (restore) {
+      actionJobs.push({ kind: 'restore', u, restore });
+      continue;
+    }
+
+    const classified = classifyOverdueUser(u, graceHours);
+    if (!classified) {
+      if (st === 'active' && u.subscription_due) scheduleCandidates.push(u);
+      continue;
+    }
+    if (classified.action === 'expire') {
+      actionJobs.push({ kind: 'expire', u, classified });
+      continue;
+    }
+    if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable)) {
+      actionJobs.push({ kind: 'disable', u, classified });
+    }
+  }
+
+  await mapPool(actionJobs, routerConcurrency, async (job) => {
+    if (job.kind === 'restore') {
+      const { u, restore } = job;
       db.prepare(
         "UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?"
       ).run(u.id);
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'restore');
+      const sync = await withTimeout(syncUserToRouter(full, 'restore'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during restore',
+      });
       if (sync.ok) {
         summary.profileSwitched++;
         resolveRouterSync(full.router_id, full.id);
@@ -1068,8 +1137,12 @@ export async function executeBillingEnforcement(opts?: {
         summary.routerErrors++;
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Restore after extended due failed');
       }
-      await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
-      summary.schedulesEnsured++;
+      if (ensureSchedules) {
+        await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+        summary.schedulesEnsured++;
+      } else {
+        void scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+      }
       summary.restored++;
       summary.restoredUsers.push({ ...restore, status: 'Active', action: 'restore' });
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -1077,21 +1150,11 @@ export async function executeBillingEnforcement(opts?: {
         'billing',
         `Restored ${u.username} to plan profile — due ${u.subscription_due} is not overdue${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
       );
-      continue;
+      return;
     }
 
-    const classified = classifyOverdueUser(u, graceHours);
-    if (!classified) {
-      // Active (or paid) with a future due date — keep MikroTik grace/disable schedules fresh
-      if (st === 'active' && u.subscription_due) {
-        await scheduleRouterExpiry(u, u.expiration_profile).catch(() => undefined);
-        summary.schedulesEnsured++;
-      }
-      continue;
-    }
-
-    // Within grace → non-payment expire profile on MikroTik (comment preserved)
-    if (classified.action === 'expire') {
+    if (job.kind === 'expire') {
+      const { u, classified } = job;
       if (!u.nonpayment_since) {
         db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(
           new Date(now).toISOString(),
@@ -1102,7 +1165,10 @@ export async function executeBillingEnforcement(opts?: {
       }
       summary.markedNonPayment++;
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'expire');
+      const sync = await withTimeout(syncUserToRouter(full, 'expire'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during expire',
+      });
       if (sync.ok) {
         summary.profileSwitched++;
         resolveRouterSync(full.router_id, full.id);
@@ -1111,45 +1177,57 @@ export async function executeBillingEnforcement(opts?: {
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Non-payment expire failed');
       }
 
-      // Grace already started — ensure the remaining disable one-shot is on the router
-      await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
-      summary.schedulesEnsured++;
+      // Background scheduler refresh must not block HTTP recheck (Cloudflare ~100s).
+      if (ensureSchedules) {
+        await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+        summary.schedulesEnsured++;
+      } else {
+        void scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+      }
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
-      const channels: ('email' | 'sms')[] = [];
-      if (s.email_enabled) channels.push('email');
-      if (s.sms_enabled) channels.push('sms');
-      if (channels.length) {
-        let payUrl = '';
-        try {
-          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-        } catch {
-          /* optional */
+      if (sendNotices) {
+        const channels: ('email' | 'sms')[] = [];
+        if (s.email_enabled) channels.push('email');
+        if (s.sms_enabled) channels.push('sms');
+        if (channels.length) {
+          let payUrl = '';
+          try {
+            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+          } catch {
+            /* optional */
+          }
+          const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
+          await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
         }
-        const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
-        await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
       }
-      continue;
+      return;
     }
 
-    // Past grace (from due date) → disable secret only (do not rewrite comment)
-    if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable)) {
+    if (job.kind === 'disable') {
+      const { u, classified } = job;
       if (!u.nonpayment_since) {
-        db.prepare("UPDATE pppoe_users SET nonpayment_since = ? WHERE id = ?").run(new Date(now).toISOString(), u.id);
+        db.prepare('UPDATE pppoe_users SET nonpayment_since = ? WHERE id = ?').run(new Date(now).toISOString(), u.id);
       }
       db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'disable');
+      const sync = await withTimeout(syncUserToRouter(full, 'disable'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during disable',
+      });
       if (sync.ok) {
         resolveRouterSync(full.router_id, full.id);
       } else {
         summary.routerErrors++;
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Disable failed');
       }
-      // Past disable — clear stale grace/disable one-shots
-      await cancelRouterExpirySchedule(full).catch(() => undefined);
+      if (ensureSchedules) {
+        await cancelRouterExpirySchedule(full).catch(() => undefined);
+      } else {
+        void cancelRouterExpirySchedule(full).catch(() => undefined);
+      }
 
       summary.disabled++;
       summary.disabledUsers.push({
@@ -1159,25 +1237,36 @@ export async function executeBillingEnforcement(opts?: {
         hoursInNonPayment: classified.hoursOverdue,
       });
 
-      const channels: ('email' | 'sms')[] = [];
-      if (s.email_enabled) channels.push('email');
-      if (s.sms_enabled) channels.push('sms');
-      let payUrl = '';
-      try {
-        const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-        payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-      } catch {
-        /* optional */
+      if (sendNotices) {
+        const channels: ('email' | 'sms')[] = [];
+        if (s.email_enabled) channels.push('email');
+        if (s.sms_enabled) channels.push('sms');
+        let payUrl = '';
+        try {
+          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+        } catch {
+          /* optional */
+        }
+        const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
+        if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
       }
-      const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
-      if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'warning',
         'billing',
         `Disabled ${u.username} — ${classified.hoursOverdue}h past due (grace ${graceHours}h)${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
       );
     }
+  });
+
+  // ---- Phase 2: optional schedule refresh for healthy actives (skip on manual HTTP recheck) ----
+  if (ensureSchedules && scheduleCandidates.length) {
+    await mapPool(scheduleCandidates, routerConcurrency, async (u) => {
+      await scheduleRouterExpiry(u, u.expiration_profile).catch(() => undefined);
+      summary.schedulesEnsured++;
+    });
   }
+
   return summary;
 }
 

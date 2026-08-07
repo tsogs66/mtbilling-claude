@@ -1,6 +1,6 @@
 [Unit]
 Description=MT-Billing auto-update (pull when GitHub has new commits)
-Documentation=https://github.com/tsogs66/mtbilling-claude
+Documentation=https://github.com/tsogs66/MT-Billing
 
 [Service]
 Type=oneshot

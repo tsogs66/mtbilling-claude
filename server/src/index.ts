@@ -29,6 +29,11 @@ import {
   updateFairUseThrottleSettings,
   getPublicPayOptions,
 } from './paymongo.js';
+import {
+  startCaptivePaymongoCheckout,
+  resolveCaptiveSubscriber,
+  captivePeerIp,
+} from './captivePay.js';
 import { startAutoBackupScheduler, runAutoBackupOnce } from './autoBackup.js';
 import { verifyTotpToken } from './totp.js';
 import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
@@ -295,6 +300,42 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
+/**
+ * Captive portal for non-payment PPPoE clients (pool 172.15.10.0/24).
+ * MikroTik dstnats their HTTP :80 → landing:9080 → this panel. Any Host
+ * header (example.com, etc.) must still land on /portal or error.html —
+ * otherwise there is no visible "redirect".
+ */
+app.use((req, res, next) => {
+  const xff = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  const raw = (xff || req.ip || req.socket.remoteAddress || '').replace(/^::ffff:/i, '');
+  if (!/^172\.15\.10\.\d{1,3}$/.test(raw)) return next();
+  const p = String(req.path || '');
+  if (
+    p.startsWith('/api') ||
+    p.startsWith('/portal') ||
+    p === '/error.html' ||
+    p.startsWith('/assets/') ||
+    p.startsWith('/cdn-cgi/')
+  ) {
+    return next();
+  }
+  const base =
+    String(process.env.PUBLIC_BASE_URL || '')
+      .trim()
+      .replace(/\/$/, '') || 'https://panorth.tsogs.cloud';
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    // Prefer the interstitial page (CTA → portal); absolute URL so Host: example.com still works.
+    if (p === '/' || p === '') {
+      return res.redirect(302, `${base}/error.html`);
+    }
+    return res.redirect(302, `${base}/portal`);
+  }
+  return res.redirect(302, `${base}/portal`);
+});
 
 // Never let Cloudflare / intermediate proxies cache authenticated API JSON —
 // LAN vs tunnel looking "different" is almost always a stale edge cache.
@@ -574,6 +615,73 @@ app.post('/api/public/pay/:token/paymongo', async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not start PayMongo checkout' });
+  }
+});
+
+/**
+ * Captive non-payment portal: resolve subscriber by PPP IP (body or
+ * X-Forwarded-For via MikroTik webproxy), create/reuse pay link, PayMongo checkout.
+ * Prefer LAN HTTP API through the transparent proxy so CPE-NAT clients still identify.
+ */
+app.post('/api/public/captive/checkout', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const nonPayCidr = b.nonPayCidr || undefined;
+    const peer = captivePeerIp(req, nonPayCidr);
+    const result = await startCaptivePaymongoCheckout({
+      clientIp: b.clientIp || b.ip || b.address || peer || null,
+      username: b.username || b.user || null,
+      account: b.account || b.accountNumber || null,
+      nonPayCidr,
+      publicBaseUrl:
+        b.publicBaseUrl ||
+        String(
+          (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)
+            ?.public_base_url || ''
+        ) ||
+        'https://panorth.tsogs.cloud',
+    });
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    const status = Number(e?.status) || 400;
+    res.status(status).json({
+      error: e?.message || 'Could not start captive checkout',
+      code: e?.code || undefined,
+    });
+  }
+});
+
+/** Captive helper: resolve who is on a non-payment PPP IP (no checkout). */
+app.post('/api/public/captive/resolve', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const nonPayCidr = b.nonPayCidr || undefined;
+    const peer = captivePeerIp(req, nonPayCidr);
+    const resolved = await resolveCaptiveSubscriber({
+      clientIp: b.clientIp || b.ip || b.address || peer || null,
+      username: b.username || b.user || null,
+      account: b.account || b.accountNumber || null,
+      nonPayCidr,
+    });
+    const u = resolved.user;
+    res.json({
+      ok: true,
+      matchedBy: resolved.matchedBy,
+      clientIp: resolved.clientIp || null,
+      username: u.username,
+      account: u.account_number ?? null,
+      customer: u.customer_name ?? null,
+      plan: u.profile ?? null,
+      status: u.status ?? null,
+      amount: u.price != null ? Number(u.price) : null,
+      due: u.subscription_due ?? null,
+    });
+  } catch (e: any) {
+    const status = Number(e?.status) || 400;
+    res.status(status).json({
+      error: e?.message || 'Could not resolve captive subscriber',
+      code: e?.code || undefined,
+    });
   }
 });
 
@@ -1872,6 +1980,20 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
   });
 
+  // Manual restore to Active must clear non-payment markers (payment path already does).
+  {
+    const nextStatus = String((b.status ?? existing.status) || '')
+      .toLowerCase()
+      .replace(/\s+/g, '-');
+    if (nextStatus === 'active') {
+      db.prepare('UPDATE pppoe_users SET nonpayment_since = NULL WHERE id = ?').run(id);
+    } else if (nextStatus === 'non-payment' || nextStatus === 'nonpayment') {
+      db.prepare(
+        `UPDATE pppoe_users SET nonpayment_since = COALESCE(nonpayment_since, ?) WHERE id = ?`
+      ).run(new Date().toISOString(), id);
+    }
+  }
+
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   // Keep / create portal credentials when account # + phone are available.
   try {
@@ -1909,6 +2031,18 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
         comment: commentFromPppoeUser(row),
         disabled: secretDisabledFromStatus(row.status),
       });
+      // Bounce active PPP when entering/leaving non-payment so the client
+      // immediately gets the non-payments pool (webproxy → error.html).
+      const prevSt = String(existing.status || '').toLowerCase();
+      const nowNonpay = st === 'non-payment' || st === 'nonpayment';
+      const wasNonpay = prevSt === 'non-payment' || prevSt === 'nonpayment';
+      if (nowNonpay !== wasNonpay || (nowNonpay && b.status != null)) {
+        try {
+          await removePppActiveByName(router, existing.username);
+        } catch {
+          /* session may already be gone */
+        }
+      }
     } catch (e: any) {
       return res.status(502).json({
         error: e?.message || 'Failed to update PPP secret on MikroTik',
@@ -5013,20 +5147,28 @@ app.get('/api/pppoe/billing-recheck', (req, res) => {
 app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
   const preview = previewBillingEnforcement({ service });
+  // Skip mass MikroTik schedule refresh on HTTP recheck — that path routinely
+  // exceeds Cloudflare's ~100s limit (524) before expire/restore finishes.
+  const runOpts = {
+    service,
+    forceDisable: true as const,
+    ensureSchedules: false as const,
+    sendNotices: false as const,
+    routerConcurrency: 2 as const,
+  };
   if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
-    // Still run once so active accounts get MikroTik grace/disable schedules provisioned
-    const result = await executeBillingEnforcement({ service, forceDisable: true });
+    const result = await executeBillingEnforcement(runOpts);
     return res.json({
       ok: true,
-      message: `No overdue/past-grace/restore actions. Ensured ${result.schedulesEnsured} MikroTik schedule(s).`,
+      message: `No overdue/past-grace/restore actions. Reminders ${result.remindersSent}.`,
       ...preview,
       result,
     });
   }
-  const result = await executeBillingEnforcement({ service, forceDisable: true });
+  const result = await executeBillingEnforcement(runOpts);
   res.json({
     ok: true,
-    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; schedules ${result.schedulesEnsured}.`,
+    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; router errors ${result.routerErrors}.`,
     preview,
     result,
   });
