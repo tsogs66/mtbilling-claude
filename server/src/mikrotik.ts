@@ -2938,16 +2938,14 @@ export async function repairNonPaymentHttpRedirectViaScript(
   const u = rosScriptEscape(username);
 
   const source =
-    `/ip proxy set enabled=yes port=${proxyPort} anonymous=no;` +
-    `:do {/ip firewall address-list remove [find list="non-payment" address="${nonPayCidr}"]} on-error={};` +
-    `/ip firewall address-list add list=non-payment address=${nonPayCidr} comment="${WEBPROXY_RULE_COMMENT}";` +
-    `:do {/ip firewall nat remove [find comment="${NONPAY_NAT.httpRedirectCidr}"]} on-error={};` +
-    `/ip firewall nat add chain=dstnat action=redirect to-ports=${proxyPort} protocol=tcp src-address=${nonPayCidr} dst-port=80 comment="${NONPAY_NAT.httpRedirectCidr}" place-before=0;` +
-    `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.redirectPortal}"]} on-error={};` +
-    `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.denyCaptive}"]} on-error={};` +
-    `/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to="${httpPortal}" comment="${NONPAY_PROXY.redirectPortal}";` +
+    `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};` +
+    `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
+    `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
+    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir} on-error={};` +
+    `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
+    `:do {/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to=${httpPortal} comment=mtb-portal-redir} on-error={};` +
     (username
-      ? `/ppp secret set [find name="${u}"] profile=non-payments disabled=no;` +
+      ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
       : '');
 
