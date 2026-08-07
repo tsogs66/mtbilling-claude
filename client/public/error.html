@@ -605,7 +605,12 @@
        * webproxy which adds X-Forwarded-For = PPPoE address — required when the
        * subscriber device is behind a CPE (browser only sees 192.168.x.x).
        */
-      lanApiBases: ['http://192.168.0.120/api'],
+      lanApiBases: [
+        // Same host as captive page; MikroTik dstnats :9080 → panorth LAN (keeps PPPoE src IP)
+        'http://1.1.10.1:9080/api',
+        // Through transparent webproxy (X-Forwarded-For) — may be stripped by nginx
+        'http://192.168.0.120/api',
+      ],
       /** Public HTTPS API fallback (Cloudflare). Needs detectable non-pay pool IP. */
       apiBase: 'https://panorth.tsogs.cloud/api',
       /** Non-payment PPP pool — used to pick the right local IP for captive checkout. */

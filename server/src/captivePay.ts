@@ -11,7 +11,7 @@
  * payment link and start PayMongo hosted checkout.
  */
 import { db } from './db.js';
-import { fetchPppActive, type RouterConn } from './mikrotik.js';
+import { fetchPppActive, withRouter, type RouterConn } from './mikrotik.js';
 import { ensureFreshPayLink, resolvePublicBaseUrl } from './billing.js';
 import { createPaymongoCheckout, ensurePaymongoColumns, getPublicPayOptions } from './paymongo.js';
 
@@ -117,6 +117,85 @@ export async function findPppUsernameByAddress(
   return null;
 }
 
+/**
+ * When the browser is behind a CPE, WebRTC cannot see the PPPoE IP and LAN
+ * proxy X-Forwarded-For may be overwritten by nginx. Fall back: look at who
+ * is actively hitting the captive webproxy (1.1.10.1:8080) on the non-pay
+ * pool. If exactly one PPPoE username maps to those connections, use it.
+ */
+export async function findCaptiveIdentityFromProxyActivity(opts?: {
+  nonPayCidr?: string;
+  landingAddress?: string;
+  proxyPort?: number;
+  timeoutMs?: number;
+}): Promise<{ username: string; address: string; routerId: number } | null> {
+  const nonPayCidr = String(opts?.nonPayCidr || DEFAULT_NONPAY_CIDR).trim() || DEFAULT_NONPAY_CIDR;
+  const landing = String(opts?.landingAddress || '1.1.10.1').trim() || '1.1.10.1';
+  const proxyPort = String(opts?.proxyPort || 8080);
+  const timeoutMs = Math.max(2000, Math.min(15000, Number(opts?.timeoutMs) || 6000));
+  const routers = db.prepare('SELECT * FROM routers ORDER BY id ASC').all() as any[];
+
+  for (const r of routers) {
+    const conn = routerConn(r);
+    if (!conn) continue;
+    try {
+      const result = await Promise.race([
+        withRouter(
+          conn,
+          async (api) => {
+            const [conns, sessions] = await Promise.all([
+              api.write('/ip/firewall/connection/print') as Promise<Record<string, string>[]>,
+              api.write('/ppp/active/print') as Promise<Record<string, string>[]>,
+            ]);
+
+            const nonpaySessions = (sessions || [])
+              .map((s) => ({
+                username: String(s.name || '').trim(),
+                address: normalizeIp(s.address || ''),
+              }))
+              .filter((s) => s.username && s.address && ipv4InCidr(s.address, nonPayCidr));
+
+            // Common case: only one subscriber on the non-pay pool right now.
+            if (nonpaySessions.length === 1) {
+              return nonpaySessions;
+            }
+
+            const activeIps = new Set<string>();
+            for (const c of conns || []) {
+              const src = normalizeIp(String(c['src-address'] || '').split(':')[0] || '');
+              const dst = normalizeIp(String(c['dst-address'] || '').split(':')[0] || '');
+              const dport = String(c['dst-port'] || '');
+              if (!src || !ipv4InCidr(src, nonPayCidr)) continue;
+              if (dport === proxyPort || dport === '9080' || dst === landing) {
+                activeIps.add(src);
+              }
+            }
+
+            const matches = nonpaySessions.filter((s) => activeIps.has(s.address));
+            // Dedupe by username
+            const seen = new Set<string>();
+            return matches.filter((s) => {
+              const k = s.username.toLowerCase();
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+          },
+          { timeoutSec: Math.ceil(timeoutMs / 1000) }
+        ),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+      ]);
+
+      if (result.length === 1) {
+        return { ...result[0], routerId: Number(r.id) };
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
 function findPppoeUser(opts: {
   username?: string | null;
   account?: string | null;
@@ -207,6 +286,15 @@ export async function resolveCaptiveSubscriber(opts: {
       });
     }
     return { user, matchedBy: 'account' };
+  }
+
+  // CPE / nginx may hide the PPP IP — infer from who is on the captive portal now.
+  const inferred = await findCaptiveIdentityFromProxyActivity({ nonPayCidr });
+  if (inferred) {
+    const user = findPppoeUser({ username: inferred.username });
+    if (user) {
+      return { user, matchedBy: 'ip', clientIp: inferred.address };
+    }
   }
 
   throw Object.assign(

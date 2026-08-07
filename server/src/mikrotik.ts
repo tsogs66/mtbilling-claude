@@ -2139,6 +2139,8 @@ export type NonPaymentWebProxyOpts = {
    * reach the API through transparent webproxy (X-Forwarded-For = PPPoE IP).
    */
   billingLanIps?: string[];
+  /** Local port on landingAddress that dstnats to billing LAN HTTP (default 9080). */
+  captiveApiPort?: number;
 };
 
 /**
@@ -2147,13 +2149,13 @@ export type NonPaymentWebProxyOpts = {
  *
  * Never touches:
  *  - /ip address, pools, PPP profile local/remote addressing
- *  - /ip firewall nat
  *  - existing untagged /ip proxy access rules (your redirect stays)
  *
  * Only:
  *  - adds missing dst-host allow rules (billing + PayMongo) tagged for idempotent refresh
  *  - optionally fetches error.html into webproxy/error.html
  *  - optionally ensures tagged forward filter lockdown (HTTPS bypass fix)
+ *  - ensures dstnat landing:9080 → billing LAN:80 (preserves PPPoE source IP for captive API)
  */
 export async function configureNonPaymentWebProxy(
   conn: RouterConn,
@@ -2173,10 +2175,12 @@ export async function configureNonPaymentWebProxy(
   addedLanIps: string[];
   skippedLanIps: string[];
   proxyAnonymousOff: boolean;
+  captiveApiDstnat: boolean;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
   const lockdownFirewall = opts.lockdownFirewall !== false;
   const billingLanIps = [...new Set(
@@ -2383,7 +2387,7 @@ export async function configureNonPaymentWebProxy(
           '=action=accept',
           '=protocol=tcp',
           `=src-address-list=${nonPayAddressList}`,
-          `=dst-port=80,${proxyPort}`,
+          `=dst-port=80,${proxyPort},${captiveApiPort}`,
         ]);
 
         if (hasComment(NONPAY_FW.drop)) {
@@ -2435,6 +2439,40 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
+      // dstnat landing:9080 → billing LAN:80 so captive JS can call same-host API
+      // while the TCP source remains the PPPoE address (unlike webproxy XFF).
+      let captiveApiDstnat = false;
+      const billingLanTarget = billingLanIps[0] || '';
+      if (billingLanTarget) {
+        const nats = (await api.write('/ip/firewall/nat/print')) as Record<string, string>[];
+        const natComment = `${WEBPROXY_RULE_COMMENT} captive-api`;
+        const hasNat = (nats || []).some(
+          (n) =>
+            String(n.comment || '') === natComment ||
+            String(n.comment || '') === 'MT-Billing captive API'
+        );
+        if (!hasNat) {
+          try {
+            await api.write('/ip/firewall/nat/add', [
+              '=chain=dstnat',
+              '=action=dst-nat',
+              `=to-addresses=${billingLanTarget}`,
+              '=to-ports=80',
+              '=protocol=tcp',
+              `=src-address-list=${nonPayAddressList}`,
+              `=dst-address=${landingAddress}`,
+              `=dst-port=${captiveApiPort}`,
+              `=comment=${natComment}`,
+            ]);
+            captiveApiDstnat = true;
+          } catch {
+            captiveApiDstnat = false;
+          }
+        } else {
+          captiveApiDstnat = true;
+        }
+      }
+
       return {
         ok: true as const,
         nonPayCidr,
@@ -2450,6 +2488,7 @@ export async function configureNonPaymentWebProxy(
         addedLanIps,
         skippedLanIps,
         proxyAnonymousOff,
+        captiveApiDstnat,
       };
     },
     { timeoutSec: 60 }
