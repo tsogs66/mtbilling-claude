@@ -2943,7 +2943,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
     `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir} on-error={};` +
     `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
-    `:do {/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to=${httpPortal} comment=mtb-portal-redir} on-error={};` +
+    `:do {/ip proxy access add src-address=${nonPayCidr} action=deny redirect-to="${httpPortal}" comment=mtb-portal-redir} on-error={};` +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
