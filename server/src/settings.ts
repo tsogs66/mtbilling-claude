@@ -1022,12 +1022,15 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
       }
     }
 
-    const inspect = await inspectNonPaymentCaptive(conn, {
-      nonPayCidr: b.nonPayCidr,
-      landingAddress: b.landingAddress,
-      proxyPort: b.proxyPort,
-      username: kickUser || 'Admin',
-    }).catch((e: any) => ({ error: e?.message || String(e) }));
+    const inspect =
+      b.skipInspect === true || b.quick === true
+        ? undefined
+        : await inspectNonPaymentCaptive(conn, {
+            nonPayCidr: b.nonPayCidr,
+            landingAddress: b.landingAddress,
+            proxyPort: b.proxyPort,
+            username: kickUser || 'Admin',
+          }).catch((e: any) => ({ error: e?.message || String(e) }));
 
     res.json({
       ok: true,

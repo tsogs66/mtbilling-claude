@@ -3029,32 +3029,46 @@ export async function repairNonPaymentHttpRedirect(
       }
 
       let proxyRedirect = false;
-      // RouterOS: redirect-to works with action=deny (not action=redirect).
+      // RouterOS: redirect-to is set on a deny rule (HTTP 302 to portal).
       try {
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
           '=action=deny',
-          `=redirect-to=${portalRedirectTo}`,
           `=comment=${NONPAY_PROXY.redirectPortal}`,
         ]);
-        proxyRedirect = true;
-      } catch (e1) {
+        const rows = (await api.write('/ip/proxy/access/print', [
+          `?comment=${NONPAY_PROXY.redirectPortal}`,
+          '=.proplist=.id,comment,action',
+        ])) as Record<string, string>[];
+        const id = rows?.[0]?.['.id'];
+        if (id) {
+          const targets = [
+            portalRedirectTo,
+            portalRedirectTo.replace(/^https:\/\//i, 'http://'),
+            'https://panorth.tsogs.cloud/portal',
+            'http://panorth.tsogs.cloud/portal',
+          ];
+          for (const to of [...new Set(targets)]) {
+            try {
+              await api.write('/ip/proxy/access/set', [`=.id=${id}`, `=redirect-to=${to}`]);
+              proxyRedirect = true;
+              break;
+            } catch {
+              /* try next URL form */
+            }
+          }
+        }
+      } catch {
         try {
-          await api.write('/ip/proxy/access/add', [
-            `=src-address=${nonPayCidr}`,
-            '=action=deny',
-            `=redirect-to=${portalRedirectTo.replace(/^https:\/\//i, 'http://')}`,
-            `=comment=${NONPAY_PROXY.redirectPortal}`,
-          ]);
-          proxyRedirect = true;
-        } catch {
           await api.write('/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
             '=action=deny',
             `=comment=${NONPAY_PROXY.denyCaptive}`,
           ]);
-          proxyRedirect = false;
+        } catch {
+          /* ignore */
         }
+        proxyRedirect = false;
       }
 
       let kicked: string | null = null;
@@ -3425,33 +3439,39 @@ export async function configureNonPaymentWebProxy(
           await api.write('/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
             '=action=deny',
-            `=redirect-to=${portalRedirectTarget}`,
             `=comment=${NONPAY_PROXY.redirectPortal}`,
           ]);
+          const rows = (await api.write('/ip/proxy/access/print', [
+            `?comment=${NONPAY_PROXY.redirectPortal}`,
+            '=.proplist=.id',
+          ])) as Record<string, string>[];
+          const id = rows?.[0]?.['.id'];
+          if (id) {
+            for (const to of [
+              portalRedirectTarget,
+              portalRedirectTarget.replace(/^https:\/\//i, 'http://'),
+            ]) {
+              try {
+                await api.write('/ip/proxy/access/set', [`=.id=${id}`, `=redirect-to=${to}`]);
+                break;
+              } catch {
+                /* next */
+              }
+            }
+          }
           proxyDeny = true;
           existing.push({
             action: 'deny',
             'src-address': nonPayCidr,
-            'redirect-to': portalRedirectTarget,
             comment: NONPAY_PROXY.redirectPortal,
           });
         } catch {
-          try {
-            await api.write('/ip/proxy/access/add', [
-              `=src-address=${nonPayCidr}`,
-              '=action=deny',
-              `=redirect-to=${portalRedirectTarget.replace(/^https:\/\//i, 'http://')}`,
-              `=comment=${NONPAY_PROXY.redirectPortal}`,
-            ]);
-            proxyDeny = true;
-          } catch {
-            await api.write('/ip/proxy/access/add', [
-              `=src-address=${nonPayCidr}`,
-              '=action=deny',
-              `=comment=${NONPAY_PROXY.denyCaptive}`,
-            ]);
-            proxyDeny = true;
-          }
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            '=action=deny',
+            `=comment=${NONPAY_PROXY.denyCaptive}`,
+          ]);
+          proxyDeny = true;
         }
       } else {
         proxyDeny = true;
