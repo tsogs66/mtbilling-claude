@@ -539,9 +539,13 @@
 
     async function loadBranding() {
       try {
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 1500) : null;
         const r = await fetch(resolveBase() + '/api/company/branding', {
           headers: { Accept: 'application/json' },
+          signal: ctrl ? ctrl.signal : undefined,
         });
+        if (timer) clearTimeout(timer);
         if (!r.ok) return;
         applyCompany(await r.json());
       } catch (_) {
