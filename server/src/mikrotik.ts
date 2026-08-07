@@ -2025,6 +2025,18 @@ async function removeSchedulerByName(api: RouterOSAPI, name: string): Promise<vo
   }
 }
 
+async function removeSystemScriptByName(api: RouterOSAPI, name: string): Promise<void> {
+  const rows = (await api.write('/system/script/print', [`?name=${name}`])) as Record<string, string>[];
+  for (const r of rows || []) {
+    if (!r['.id']) continue;
+    try {
+      await api.write('/system/script/remove', [`=.id=${r['.id']}`]);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 /**
  * Remove any pending grace/disable scheduler entries for a username. Call
  * this whenever an account is no longer heading toward disconnection on its
@@ -2040,6 +2052,8 @@ export async function cancelExpiryScheduleOnRouter(conn: RouterConn, username: s
     async (api) => {
       await removeSchedulerByName(api, schedName('grace', username));
       await removeSchedulerByName(api, schedName('disable', username));
+      await removeSystemScriptByName(api, schedName('grace', username));
+      await removeSystemScriptByName(api, schedName('disable', username));
     },
     { timeoutSec: 8 }
   );
@@ -2051,6 +2065,10 @@ export async function cancelExpiryScheduleOnRouter(conn: RouterConn, username: s
  * this panel's uptime. Always removes any existing entries for the
  * username first, so re-running this (e.g. after a new payment) replaces
  * the old schedule with one for the new due date.
+ *
+ * Scripts live under /system/script (Winbox → System → Scripts) and are
+ * invoked by matching /system/scheduler one-shots — same pattern as classic
+ * MikroTik non-payment / expire automation.
  */
 export async function scheduleExpiryOnRouter(
   conn: RouterConn,
@@ -2059,11 +2077,16 @@ export async function scheduleExpiryOnRouter(
   const { username, graceAt, disableAt, nonPaymentProfile } = opts;
   if (!username) return;
   await withRouter(conn, async (api) => {
-    await removeSchedulerByName(api, schedName('grace', username));
-    await removeSchedulerByName(api, schedName('disable', username));
+    const graceName = schedName('grace', username);
+    const disableName = schedName('disable', username);
+    await removeSchedulerByName(api, graceName);
+    await removeSchedulerByName(api, disableName);
+    await removeSystemScriptByName(api, graceName);
+    await removeSystemScriptByName(api, disableName);
 
     const offsetMs = await getRouterClockOffsetMs(api);
     const u = rosScriptEscape(username);
+    const expireProf = rosScriptEscape(nonPaymentProfile);
     // Skip past start times — RouterOS one-shots with a past clock often never
     // fire. The panel applies overdue actions immediately; only future events
     // belong on the router so grace/disable still work while the server is offline.
@@ -2076,32 +2099,183 @@ export async function scheduleExpiryOnRouter(
       const grace = rosScheduleFields(graceAt, offsetMs);
       // Switch to non-payments AND drop active so the CPE redials into the
       // non-payment IP pool (web-proxy captive / error.html).
-      const graceScript =
-        `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no; ` +
-        `/ppp active remove [find name="${u}"]`;
+      const graceSource =
+        `:do {\r\n` +
+        `  /ppp secret set [find name="${u}"] profile="${expireProf}" disabled=no\r\n` +
+        `  /ppp active remove [find name="${u}"]\r\n` +
+        `} on-error={}\r\n`;
+      await api.write('/system/script/add', [
+        `=name=${graceName}`,
+        `=source=${graceSource}`,
+        '=dont-require-permissions=yes',
+        '=comment=MT-Billing auto grace-switch (non-payment profile + kick)',
+      ]);
       await api.write('/system/scheduler/add', [
-        `=name=${schedName('grace', username)}`,
+        `=name=${graceName}`,
         `=start-date=${grace.date}`,
         `=start-time=${grace.time}`,
         '=interval=0',
-        `=on-event=${graceScript}`,
+        `=on-event=${graceName}`,
         '=comment=MT-Billing auto grace-switch',
       ]);
     }
 
     if (scheduleDisable) {
       const disable = rosScheduleFields(disableAt, offsetMs);
-      const disableScript = `/ppp secret disable [find name="${u}"]; /ppp active remove [find name="${u}"]`;
+      const disableSource =
+        `:do {\r\n` +
+        `  /ppp secret disable [find name="${u}"]\r\n` +
+        `  /ppp active remove [find name="${u}"]\r\n` +
+        `} on-error={}\r\n`;
+      await api.write('/system/script/add', [
+        `=name=${disableName}`,
+        `=source=${disableSource}`,
+        '=dont-require-permissions=yes',
+        '=comment=MT-Billing auto disable past grace',
+      ]);
       await api.write('/system/scheduler/add', [
-        `=name=${schedName('disable', username)}`,
+        `=name=${disableName}`,
         `=start-date=${disable.date}`,
         `=start-time=${disable.time}`,
         '=interval=0',
-        `=on-event=${disableScript}`,
+        `=on-event=${disableName}`,
         '=comment=MT-Billing auto disable',
       ]);
     }
   }, { timeoutSec: 8 });
+}
+
+const BILLING_EXPIRE_SCRIPT = 'mtb-billing-expire';
+const BILLING_EXPIRE_SCHEDULER = 'mtb-billing-expire';
+
+/**
+ * Global RouterOS expire scanner (System → Scripts).
+ * Reads dueDate / expireProfile from PPP secret comment JSON (find/pick — works
+ * without :deserialize) and switches overdue secrets to the non-payment profile
+ * so they redial into the captive pool → error.html.
+ * Complements per-user grace/disable one-shots and the panel 5-minute poller.
+ *
+ * Clock date format is RouterOS wall clock: mon/dd/yyyy (e.g. aug/07/2026).
+ */
+export function buildBillingExpireScriptSource(nonPaymentProfile = 'non-payments'): string {
+  const prof = rosScriptEscape(nonPaymentProfile || 'non-payments');
+  // Template literals: \$ → $ for RouterOS variables (avoid JS ${} interpolation).
+  return (
+    `# MT-Billing: overdue PPP secrets → non-payment profile (captive)\r\n` +
+    `:local expireProfile "${prof}"\r\n` +
+    `:local today [/system clock get date]\r\n` +
+    `:local mon [:pick \$today 0 3]\r\n` +
+    `:local dd [:pick \$today 4 6]\r\n` +
+    `:local yyyy [:pick \$today 7 11]\r\n` +
+    `:local months {"jan"="01";"feb"="02";"mar"="03";"apr"="04";"may"="05";"jun"="06";"jul"="07";"aug"="08";"sep"="09";"oct"="10";"nov"="11";"dec"="12"}\r\n` +
+    `:local mm (\$months->\$mon)\r\n` +
+    `:if ([:len \$mm] = 0) do={ :return }\r\n` +
+    `:local todayIso (\$yyyy . "-" . \$mm . "-" . \$dd)\r\n` +
+    `:local dueMarker "\\"dueDate\\":\\""\r\n` +
+    `:local expMarker "\\"expireProfile\\":\\""\r\n` +
+    `:foreach i in=[/ppp secret find where disabled=no] do={\r\n` +
+    `  :local name [/ppp secret get \$i name]\r\n` +
+    `  :local profile [/ppp secret get \$i profile]\r\n` +
+    `  :local comment [/ppp secret get \$i comment]\r\n` +
+    `  :if ([:len \$comment] > 12) do={\r\n` +
+    `    :do {\r\n` +
+    `      :local p [:find \$comment \$dueMarker]\r\n` +
+    `      :if (\$p != nil) do={\r\n` +
+    `        :local dueStart (\$p + [:len \$dueMarker])\r\n` +
+    `        :local due [:pick \$comment \$dueStart (\$dueStart + 10)]\r\n` +
+    `        :local expProf \$expireProfile\r\n` +
+    `        :local ep [:find \$comment \$expMarker]\r\n` +
+    `        :if (\$ep != nil) do={\r\n` +
+    `          :local epStart (\$ep + [:len \$expMarker])\r\n` +
+    `          :local epRaw [:pick \$comment \$epStart (\$epStart + 32)]\r\n` +
+    `          :local epEnd [:find \$epRaw "\\""]\r\n` +
+    `          :if (\$epEnd != nil && \$epEnd > 0) do={ :set expProf [:pick \$epRaw 0 \$epEnd] }\r\n` +
+    `        }\r\n` +
+    `        :if ([:len \$due] = 10 && \$due < \$todayIso && \$profile != \$expProf) do={\r\n` +
+    `          /ppp secret set \$i profile=\$expProf disabled=no\r\n` +
+    `          :do { /ppp active remove [find name=\$name] } on-error={}\r\n` +
+    `          :log info ("MT-Billing expire: " . \$name . " due " . \$due . " -> " . \$expProf)\r\n` +
+    `        }\r\n` +
+    `      }\r\n` +
+    `    } on-error={}\r\n` +
+    `  }\r\n` +
+    `}\r\n`
+  );
+}
+
+/** Install/replace the global billing-expire system script + 5-minute scheduler. */
+export async function ensureBillingExpireSystemScript(
+  conn: RouterConn,
+  opts?: { nonPaymentProfile?: string; interval?: string }
+): Promise<{ script: string; scheduler: string; interval: string }> {
+  const nonPaymentProfile = opts?.nonPaymentProfile || 'non-payments';
+  const interval = opts?.interval || '00:05:00';
+  const source = buildBillingExpireScriptSource(nonPaymentProfile);
+  await withRouter(
+    conn,
+    async (api) => {
+      await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
+      await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
+      await api.write('/system/script/add', [
+        `=name=${BILLING_EXPIRE_SCRIPT}`,
+        `=source=${source}`,
+        '=dont-require-permissions=yes',
+        '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+      ]);
+      await api.write('/system/scheduler/add', [
+        `=name=${BILLING_EXPIRE_SCHEDULER}`,
+        '=start-time=startup',
+        `=interval=${interval}`,
+        `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+        '=comment=MT-Billing periodic expire scan',
+      ]);
+    },
+    { timeoutSec: 15 }
+  );
+  return { script: BILLING_EXPIRE_SCRIPT, scheduler: BILLING_EXPIRE_SCHEDULER, interval };
+}
+
+export async function fetchSystemScripts(conn: RouterConn): Promise<
+  { id: string; name: string; owner: string; policy: string; comment: string; source: string }[]
+> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/system/script/print')) as Record<string, string>[];
+    return (rows || []).map((s) => ({
+      id: s['.id'] || '',
+      name: s.name || '',
+      owner: s.owner || '',
+      policy: s.policy || '',
+      comment: s.comment || '',
+      source: s.source || '',
+    }));
+  });
+}
+
+export async function fetchSystemSchedulers(conn: RouterConn): Promise<
+  {
+    id: string;
+    name: string;
+    startDate: string;
+    startTime: string;
+    interval: string;
+    onEvent: string;
+    comment: string;
+    disabled: boolean;
+  }[]
+> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/system/scheduler/print')) as Record<string, string>[];
+    return (rows || []).map((s) => ({
+      id: s['.id'] || '',
+      name: s.name || '',
+      startDate: s['start-date'] || '',
+      startTime: s['start-time'] || '',
+      interval: s.interval || '',
+      onEvent: s['on-event'] || '',
+      comment: s.comment || '',
+      disabled: rosBool(s.disabled),
+    }));
+  });
 }
 
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
@@ -2304,6 +2478,9 @@ export async function configureNonPaymentWebProxy(
   addedHosts: string[];
   skippedHosts: string[];
   fetchedErrorHtml: boolean;
+  errorHtmlSource?: string | null;
+  errorHtmlBytes?: number;
+  billingExpireScript?: { script: string; scheduler: string; interval: string } | null;
   firewallLockdown: boolean;
   firewallAdded: string[];
   firewallSkipped: string[];
@@ -2492,18 +2669,51 @@ export async function configureNonPaymentWebProxy(
         proxyDeny = true;
       }
 
+      // Prefer LAN HTTP for error.html — public HTTPS often lands Cloudflare
+      // challenge HTML on the router, which breaks the captive redirect page.
       let fetchedErrorHtml = false;
+      let errorHtmlSource: string | null = null;
+      let errorHtmlBytes = 0;
       const errorPageUrl = String(opts.errorPageUrl || '').trim();
+      const fetchCandidates: string[] = [];
+      for (const ip of billingLanIps) {
+        fetchCandidates.push(`http://${ip}/error.html`);
+      }
       if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
+        fetchCandidates.push(errorPageUrl);
+      }
+      for (const url of [...new Set(fetchCandidates)]) {
         try {
-          await api.write('/tool/fetch', [
-            `=url=${errorPageUrl}`,
-            '=dst-path=webproxy/error.html',
-            '=once=yes',
-          ]);
-          fetchedErrorHtml = true;
+          await removeProbeFile(api, 'webproxy/error.html');
         } catch {
-          fetchedErrorHtml = false;
+          /* ok */
+        }
+        try {
+          await removeStaleFetches(api);
+          await cancelFetchTool(api);
+          const rows = (await api.write('/tool/fetch', [
+            `=url=${url}`,
+            '=dst-path=webproxy/error.html',
+            '=check-certificate=no',
+            '=http-method=get',
+          ])) as Record<string, string>[];
+          const immediate = extractImmediateFetchResult(rows);
+          const result = immediate ?? (await waitForRouterFetch(api, rows));
+          if (!result.ok) continue;
+          const files = (await api.write('/file/print')) as Record<string, string>[];
+          const hit = (files || []).find((f) => {
+            const n = String(f.name || f['.id'] || '');
+            return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
+          });
+          const size = Number(hit?.size || 0);
+          // Reject tiny / challenge pages; real captive HTML is several KB.
+          if (!Number.isFinite(size) || size < 1500) continue;
+          fetchedErrorHtml = true;
+          errorHtmlSource = url;
+          errorHtmlBytes = size;
+          break;
+        } catch {
+          /* try next URL */
         }
       }
 
@@ -2795,6 +3005,35 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
+      // Install classic System → Scripts expire scanner (mtb-billing-expire).
+      let billingExpireScript: { script: string; scheduler: string; interval: string } | null =
+        null;
+      try {
+        const source = buildBillingExpireScriptSource('non-payments');
+        await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
+        await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
+        await api.write('/system/script/add', [
+          `=name=${BILLING_EXPIRE_SCRIPT}`,
+          `=source=${source}`,
+          '=dont-require-permissions=yes',
+          '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+        ]);
+        await api.write('/system/scheduler/add', [
+          `=name=${BILLING_EXPIRE_SCHEDULER}`,
+          '=start-time=startup',
+          '=interval=00:05:00',
+          `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+          '=comment=MT-Billing periodic expire scan',
+        ]);
+        billingExpireScript = {
+          script: BILLING_EXPIRE_SCRIPT,
+          scheduler: BILLING_EXPIRE_SCHEDULER,
+          interval: '00:05:00',
+        };
+      } catch {
+        billingExpireScript = null;
+      }
+
       return {
         ok: true as const,
         nonPayCidr,
@@ -2803,6 +3042,9 @@ export async function configureNonPaymentWebProxy(
         addedHosts,
         skippedHosts,
         fetchedErrorHtml,
+        errorHtmlSource,
+        errorHtmlBytes,
+        billingExpireScript,
         firewallLockdown: lockdownFirewall,
         firewallAdded,
         firewallSkipped,
@@ -2817,7 +3059,7 @@ export async function configureNonPaymentWebProxy(
         routerUiLock,
       };
     },
-    { timeoutSec: 60 }
+    { timeoutSec: 90 }
   );
 }
 

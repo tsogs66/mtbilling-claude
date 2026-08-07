@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex,nofollow" />
+  <!-- Works even if captive proxy strips/blocks script: open portal after a short pause. -->
+  <meta http-equiv="refresh" content="45;url=https://panorth.tsogs.cloud/portal" />
   <title>Renewal Required — Service Paused</title>
   <style>
     :root {
@@ -412,6 +414,13 @@
           <button class="btn btn-secondary" type="button" id="copyBtn">
             Copy portal link
           </button>
+          <noscript>
+            <p class="message" style="margin-top:14px">
+              JavaScript is blocked on this captive page.
+              Open <a href="https://panorth.tsogs.cloud/portal">https://panorth.tsogs.cloud/portal</a>
+              to pay and restore full speed.
+            </p>
+          </noscript>
         </section>
 
         <div class="notice">

@@ -6,7 +6,7 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter, configureNonPaymentWebProxy } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy, fetchSystemScripts, fetchSystemSchedulers, ensureBillingExpireSystemScript } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
 import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
@@ -935,7 +935,8 @@ settingsRouter.post('/routers/test', async (req, res) => {
 /**
  * Non-payment captive helper (portal-pay flow):
  * ensure HTTP + HTTPS redirect to webproxy (error.html → /portal),
- * allow HTTPS only to billing + PayMongo, fetch error.html, lockdown bypass.
+ * allow HTTPS only to billing + PayMongo, fetch error.html, lockdown bypass,
+ * install System → Scripts mtb-billing-expire scanner.
  */
 settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   const id = Number(req.params.id);
@@ -991,6 +992,61 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
       }
     );
     res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Inspect /system/script + /system/scheduler (Winbox System → Scripts). */
+settingsRouter.get('/routers/:id/system-scripts', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  const conn = {
+    host: r.host,
+    port: Number(r.port) || 8728,
+    api_user: r.api_user,
+    api_pass: r.api_pass || '',
+  };
+  const mtbOnly = String(req.query.mtb || '') === '1' || String(req.query.mtb || '') === 'true';
+  try {
+    const [scripts, schedulers] = await Promise.all([
+      fetchSystemScripts(conn),
+      fetchSystemSchedulers(conn),
+    ]);
+    const filterMtb = <T extends { name: string }>(rows: T[]) =>
+      mtbOnly ? rows.filter((x) => String(x.name || '').startsWith('mtb-')) : rows;
+    res.json({
+      routerId: id,
+      router: r.name,
+      scripts: filterMtb(scripts),
+      schedulers: filterMtb(schedulers),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+/** Install/replace the global mtb-billing-expire System script + 5-min scheduler. */
+settingsRouter.post('/routers/:id/billing-expire-script', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  const b = req.body || {};
+  try {
+    const result = await ensureBillingExpireSystemScript(
+      {
+        host: r.host,
+        port: Number(r.port) || 8728,
+        api_user: r.api_user,
+        api_pass: r.api_pass || '',
+      },
+      {
+        nonPaymentProfile: b.nonPaymentProfile || 'non-payments',
+        interval: b.interval || '00:05:00',
+      }
+    );
+    res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || String(e) });
   }
