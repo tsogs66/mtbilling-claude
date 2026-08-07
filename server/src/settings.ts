@@ -998,6 +998,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         viaScript: viaScript.ran,
         scheduledAt: viaScript.scheduledAt || null,
         watch: viaScript.watch || null,
+        nat: viaScript.nat || null,
       } as any;
     } catch (scriptErr: any) {
       // Last resort: direct API (may hang on /ip/proxy) + still install watch.

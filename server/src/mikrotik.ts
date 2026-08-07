@@ -2995,8 +2995,10 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const u = rosScriptEscape(username);
   const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
 
+  // Order matters: /ip proxy set can wedge RouterOS for a long time on some
+  // boards. Apply NAT + portal redirect + kick first, drop the one-shot
+  // scheduler next, and only then touch /ip proxy set.
   return (
-    `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};` +
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
     `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir} on-error={};` +
@@ -3008,7 +3010,133 @@ export function buildCaptiveEnsureScriptSource(opts: {
       : '') +
     (sched
       ? `:do {/system scheduler remove [find name="${sched}"]} on-error={};`
-      : '')
+      : '') +
+    `:do {/ip proxy set enabled=yes port=${proxyPort} anonymous=no} on-error={};`
+  );
+}
+
+/**
+ * Fast NAT-only captive path (no /ip/proxy API — that subsystem hangs on the
+ * live board). Ensures address-list + dstnat TCP/80 → webproxy port.
+ */
+export async function repairNonPaymentNatRedirect(
+  conn: RouterConn,
+  opts: {
+    nonPayCidr?: string;
+    proxyPort?: number;
+    nonPayAddressList?: string;
+  } = {}
+): Promise<{ ok: true; addressList: boolean; natHttpRedirect: boolean }> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
+
+  return withRouter(
+    conn,
+    async (api) => {
+      let addressList = false;
+      try {
+        const addrList = (await raceApi(
+          api.write('/ip/firewall/address-list/print', [
+            '=.proplist=.id,list,address,disabled',
+          ]),
+          8_000,
+          'addr-print'
+        )) as Record<string, string>[];
+        const hasCidr = (addrList || []).some(
+          (r) =>
+            String(r.list || '') === nonPayAddressList &&
+            String(r.address || '') === nonPayCidr &&
+            !rosBool(r.disabled)
+        );
+        if (!hasCidr) {
+          await raceApi(
+            api.write('/ip/firewall/address-list/add', [
+              `=list=${nonPayAddressList}`,
+              `=address=${nonPayCidr}`,
+              `=comment=${WEBPROXY_RULE_COMMENT}`,
+            ]),
+            8_000,
+            'addr-add'
+          );
+        }
+        addressList = true;
+      } catch {
+        addressList = false;
+      }
+
+      let natHttpRedirect = false;
+      try {
+        const nats = (await raceApi(
+          api.write('/ip/firewall/nat/print', [
+            '=.proplist=.id,chain,action,protocol,src-address,src-address-list,dst-port,to-ports,comment,disabled',
+          ]),
+          10_000,
+          'nat-print'
+        )) as Record<string, string>[];
+        const redirectOpts = { nonPayCidr, nonPayAddressList, proxyPort };
+        const hasCidrNat = (nats || []).some(
+          (n) =>
+            isWorkingNonPayHttpRedirect(n, redirectOpts) &&
+            String(n['src-address'] || '') === nonPayCidr
+        );
+        // Drop stale tagged rule then re-add so it sits near the top.
+        for (const n of nats || []) {
+          if (String(n.comment || '') !== 'mtb-cidr-redir' && String(n.comment || '') !== NONPAY_NAT.httpRedirectCidr)
+            continue;
+          try {
+            await raceApi(
+              api.write('/ip/firewall/nat/remove', [`=.id=${n['.id']}`]),
+              5_000,
+              'nat-rm'
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+        if (!hasCidrNat) {
+          await raceApi(
+            api.write('/ip/firewall/nat/add', [
+              '=chain=dstnat',
+              '=action=redirect',
+              `=to-ports=${proxyPort}`,
+              '=protocol=tcp',
+              `=src-address=${nonPayCidr}`,
+              '=dst-port=80',
+              '=comment=mtb-cidr-redir',
+              '=place-before=0',
+            ]),
+            8_000,
+            'nat-add'
+          );
+        } else {
+          // Ensure tagged copy exists for idempotent ops.
+          const hasTagged = (nats || []).some((n) => String(n.comment || '') === 'mtb-cidr-redir');
+          if (!hasTagged) {
+            await raceApi(
+              api.write('/ip/firewall/nat/add', [
+                '=chain=dstnat',
+                '=action=redirect',
+                `=to-ports=${proxyPort}`,
+                '=protocol=tcp',
+                `=src-address=${nonPayCidr}`,
+                '=dst-port=80',
+                '=comment=mtb-cidr-redir',
+                '=place-before=0',
+              ]),
+              8_000,
+              'nat-add-tag'
+            );
+          }
+        }
+        natHttpRedirect = true;
+      } catch {
+        natHttpRedirect = false;
+      }
+
+      return { ok: true as const, addressList, natHttpRedirect };
+    },
+    { timeoutSec: 25 }
   );
 }
 
@@ -3131,6 +3259,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
   ran: string;
   scheduledAt?: string;
   watch?: string;
+  nat?: { ok: true; addressList: boolean; natHttpRedirect: boolean } | { error: string };
   kicked?: string | null;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
@@ -3139,6 +3268,49 @@ export async function repairNonPaymentHttpRedirectViaScript(
     .trim()
     .replace(/\/$/, '');
   const username = String(opts.username || '').trim();
+
+  // 0) NAT via API first (does not touch /ip/proxy — survives wedged proxy).
+  let nat: { ok: true; addressList: boolean; natHttpRedirect: boolean } | { error: string };
+  try {
+    nat = await repairNonPaymentNatRedirect(conn, { nonPayCidr, proxyPort });
+  } catch (e: any) {
+    nat = { error: e?.message || String(e) };
+  }
+
+  // Cancel any wedged prior one-shot / script job that is stuck in /ip proxy set.
+  try {
+    await withRouter(
+      conn,
+      async (api) => {
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
+        try {
+          const jobs = (await raceApi(
+            api.write('/system/script/job/print', ['=.proplist=.id,script,owner']),
+            5_000,
+            'script-jobs'
+          )) as Record<string, string>[];
+          for (const j of jobs || []) {
+            const sn = String(j.script || '');
+            if (sn !== CAPTIVE_FIX_SCRIPT && sn !== CAPTIVE_WATCH_SCRIPT) continue;
+            try {
+              await raceApi(
+                api.write('/system/script/job/remove', [`=.id=${j['.id']}`]),
+                3_000,
+                'job-rm'
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      },
+      { timeoutSec: 12 }
+    );
+  } catch {
+    /* ignore */
+  }
 
   const fixSource = buildCaptiveEnsureScriptSource({
     nonPayCidr,
@@ -3159,6 +3331,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
     await withRouter(
       conn,
       async (api) => {
+        // Clear any previous one-shot that may still be wedged mid-run.
+        await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
         await upsertSystemScript(
           api,
           CAPTIVE_FIX_SCRIPT,
@@ -3184,8 +3358,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
       async (api) => {
         await removeSchedulerByName(api, CAPTIVE_FIX_ONCE);
         const offsetMs = await getRouterClockOffsetMs(api);
-        // Fire ~8s from now on the router's own clock (not midnight).
-        const when = new Date(Date.now() + 8_000);
+        // Fire ~5s from now on the router's own clock (not midnight).
+        const when = new Date(Date.now() + 5_000);
         const fields = rosScheduleFields(when, offsetMs);
         scheduledAt = `${fields.date} ${fields.time}`;
         await raceApi(
@@ -3207,7 +3381,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
             api.write('/system/scheduler/add', [
               `=name=${CAPTIVE_WATCH_SCHEDULER}`,
               '=start-time=startup',
-              '=interval=00:05:00',
+              '=interval=00:01:00',
               `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
               '=comment=MT-Billing captive watch',
             ]),
@@ -3219,7 +3393,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
             api.write('/system/scheduler/set', [
               `=numbers=${CAPTIVE_WATCH_SCHEDULER}`,
               '=start-time=startup',
-              '=interval=00:05:00',
+              '=interval=00:01:00',
               `=on-event=${CAPTIVE_WATCH_SCRIPT}`,
               '=disabled=no',
             ]),
@@ -3284,6 +3458,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
     ran: CAPTIVE_FIX_SCRIPT,
     scheduledAt: scheduledAt || undefined,
     watch: CAPTIVE_WATCH_SCRIPT,
+    nat,
     kicked,
   };
 }
