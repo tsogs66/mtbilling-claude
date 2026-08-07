@@ -6,10 +6,10 @@ import zlib from 'zlib';
 import QRCode from 'qrcode';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath, dataDir } from './db.js';
-import { probeRouter } from './mikrotik.js';
+import { probeRouter, configureNonPaymentWebProxy } from './mikrotik.js';
 import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 import { generateTotpSecret, totpUri, verifyTotpToken, generateBackupCodes } from './totp.js';
-import { detectLanBaseUrl, detectLanIpv4 } from './billing.js';
+import { detectLanBaseUrl, detectLanIpv4, resolvePublicBaseUrl } from './billing.js';
 
 export const settingsRouter = express.Router();
 
@@ -930,6 +930,57 @@ settingsRouter.post('/routers/test', async (req, res) => {
     version: result.version,
     error: result.error,
   });
+});
+
+/**
+ * Additive non-payment captive helper:
+ * allow billing + PayMongo through web-proxy; optionally fetch error.html.
+ * Does not touch NAT, IP pools, or existing untagged proxy rules.
+ */
+settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
+  const id = Number(req.params.id);
+  const r = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!r) return res.status(404).json({ error: 'Router not found' });
+  const b = req.body || {};
+  const app = getApp();
+  const publicBase =
+    String(b.billingBaseUrl || b.publicBaseUrl || app?.public_base_url || process.env.PUBLIC_BASE_URL || '')
+      .trim()
+      .replace(/\/$/, '') || 'https://panorth.tsogs.cloud';
+  let billingHost = String(b.billingHost || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '');
+  if (!billingHost) {
+    try {
+      billingHost = new URL(publicBase).hostname;
+    } catch {
+      billingHost = 'panorth.tsogs.cloud';
+    }
+  }
+  const errorPageUrl =
+    String(b.errorPageUrl || '').trim() || `${publicBase}/error.html`;
+  try {
+    const result = await configureNonPaymentWebProxy(
+      {
+        host: r.host,
+        port: Number(r.port) || 8728,
+        api_user: r.api_user,
+        api_pass: r.api_pass || '',
+      },
+      {
+        nonPayCidr: b.nonPayCidr,
+        landingAddress: b.landingAddress,
+        billingHost,
+        allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
+        errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
+        proxyPort: b.proxyPort,
+      }
+    );
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
 });
 
 settingsRouter.post('/routers', async (req, res) => {

@@ -784,8 +784,10 @@ export async function syncUserToRouter(
   if (!router?.host || !router?.api_user) return { ok: false, error: 'router-not-configured' };
   try {
     if (action === 'expire') {
-      // Within grace: switch PPP profile to non-payment only.
-      // Do NOT rewrite the secret comment — it keeps the original plan/due for payment restore.
+      // Within grace: switch PPP profile to non-payment, then drop the active
+      // session so the CPE redials and gets the non-payment IP pool (web-proxy
+      // captive / error.html). Do NOT rewrite the secret comment — it keeps the
+      // original plan/due for payment restore.
       const expire =
         user.expiration_profile && user.expiration_profile !== 'default'
           ? user.expiration_profile
@@ -800,6 +802,11 @@ export async function syncUserToRouter(
         disabled: false,
       });
       await setPppSecretEnabled(router, user.username, true);
+      try {
+        await removePppActiveByName(router, user.username);
+      } catch {
+        /* best-effort — client may already be offline */
+      }
     } else if (action === 'disable') {
       // Past grace: disable only. Leave comment and profile untouched so payment
       // still reads the original plan/due from the preserved comment.
@@ -825,6 +832,12 @@ export async function syncUserToRouter(
         disabled: false,
       });
       await setPppSecretEnabled(router, user.username, true);
+      // Drop active so reconnect picks the paid plan IP pool again (leaves 172.x captive pool).
+      try {
+        await removePppActiveByName(router, user.username);
+      } catch {
+        /* best-effort */
+      }
     }
     return { ok: true };
   } catch (e: any) {
@@ -872,6 +885,11 @@ async function syncReversedSubscriberToRouter(user: any): Promise<{ ok: boolean;
         disabled: false,
       });
       await setPppSecretEnabled(router, user.username, true);
+      try {
+        await removePppActiveByName(router, user.username);
+      } catch {
+        /* best-effort */
+      }
       return { ok: true };
     }
     return syncUserToRouter(user, 'restore');

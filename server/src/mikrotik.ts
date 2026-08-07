@@ -29,6 +29,15 @@ export async function withRouter<T>(
     // 4s was too aggressive for WAN/API-over-VPN boards and multi-step writes.
     timeout: opts?.timeoutSec ?? 15,
   });
+  // node-routeros re-emits late/stray socket errors as 'error' on this instance
+  // after its connect-phase listeners already fired once and were removed (e.g.
+  // an OS-level socket error arriving after the app-level connect timeout already
+  // rejected). Node's EventEmitter throws — crashing the whole process, not just
+  // this request — on an 'error' event with no listener. An unreachable router is
+  // an entirely normal condition (WAN down, reboot, wrong IP), so this must never
+  // be allowed to take the panel down; connect()/fn() rejecting is how callers
+  // actually observe the failure.
+  api.on('error', () => {});
   await api.connect();
   try {
     return await fn(api);
@@ -2065,7 +2074,11 @@ export async function scheduleExpiryOnRouter(
 
     if (scheduleGrace) {
       const grace = rosScheduleFields(graceAt, offsetMs);
-      const graceScript = `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no`;
+      // Switch to non-payments AND drop active so the CPE redials into the
+      // non-payment IP pool (web-proxy captive / error.html).
+      const graceScript =
+        `/ppp secret set [find name="${u}"] profile="${rosScriptEscape(nonPaymentProfile)}" disabled=no; ` +
+        `/ppp active remove [find name="${u}"]`;
       await api.write('/system/scheduler/add', [
         `=name=${schedName('grace', username)}`,
         `=start-date=${grace.date}`,
@@ -2089,6 +2102,125 @@ export async function scheduleExpiryOnRouter(
       ]);
     }
   }, { timeoutSec: 8 });
+}
+
+const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
+
+export type NonPaymentWebProxyOpts = {
+  /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
+  nonPayCidr?: string;
+  /** Host clients may reach for the landing page (router/local billing IP). */
+  landingAddress?: string;
+  /** Public billing hostname (allowed through proxy for /error.html + /pay + /api). */
+  billingHost?: string;
+  /** Extra hostnames to allow (PayMongo checkout, etc.). */
+  allowHosts?: string[];
+  /** Absolute URL of error.html — fetched onto the router as error.html when set. */
+  errorPageUrl?: string;
+  proxyPort?: number;
+};
+
+/**
+ * SAFE captive helper for routers that already have non-payment web-proxy
+ * (e.g. PANIS: NAT :80→:8080, proxy access allow 8080 + redirect except landing IP).
+ *
+ * Never touches:
+ *  - /ip address, pools, PPP profile local/remote addressing
+ *  - /ip firewall (filter/nat)
+ *  - existing untagged /ip proxy access rules (your redirect stays)
+ *
+ * Only:
+ *  - adds missing dst-host allow rules (billing + PayMongo) tagged for idempotent refresh
+ *  - optionally fetches error.html into webproxy/error.html
+ */
+export async function configureNonPaymentWebProxy(
+  conn: RouterConn,
+  opts: NonPaymentWebProxyOpts = {}
+): Promise<{
+  ok: true;
+  nonPayCidr: string;
+  landingAddress: string;
+  proxyPort: number;
+  addedHosts: string[];
+  skippedHosts: string[];
+  fetchedErrorHtml: boolean;
+}> {
+  const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
+  const billingHost = String(opts.billingHost || '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .toLowerCase();
+  const allowHosts = [
+    billingHost,
+    ...(opts.allowHosts || []),
+    'checkout.paymongo.com',
+    'api.paymongo.com',
+  ]
+    .map((h) => String(h || '').trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueHosts = [...new Set(allowHosts)];
+
+  return withRouter(
+    conn,
+    async (api) => {
+      const existing = (await api.write('/ip/proxy/access/print')) as Record<string, string>[];
+
+      // Additive only: never remove existing rules (keeps redirect / 8080 allow intact).
+      const alreadyAllowsHost = (host: string) =>
+        (existing || []).some(
+          (r) =>
+            String(r.action || '').toLowerCase() === 'allow' &&
+            String(r['src-address'] || '') === nonPayCidr &&
+            String(r['dst-host'] || '').toLowerCase() === host
+        );
+
+      const addedHosts: string[] = [];
+      const skippedHosts: string[] = [];
+      for (const host of uniqueHosts) {
+        if (alreadyAllowsHost(host)) {
+          skippedHosts.push(host);
+          continue;
+        }
+        await api.write('/ip/proxy/access/add', [
+          `=src-address=${nonPayCidr}`,
+          `=dst-host=${host}`,
+          '=action=allow',
+          `=comment=${WEBPROXY_RULE_COMMENT}`,
+        ]);
+        addedHosts.push(host);
+      }
+
+      let fetchedErrorHtml = false;
+      const errorPageUrl = String(opts.errorPageUrl || '').trim();
+      if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
+        try {
+          // MikroTik serves the captive page from webproxy/error.html
+          await api.write('/tool/fetch', [
+            `=url=${errorPageUrl}`,
+            '=dst-path=webproxy/error.html',
+            '=once=yes',
+          ]);
+          fetchedErrorHtml = true;
+        } catch {
+          fetchedErrorHtml = false;
+        }
+      }
+
+      return {
+        ok: true as const,
+        nonPayCidr,
+        landingAddress,
+        proxyPort,
+        addedHosts,
+        skippedHosts,
+        fetchedErrorHtml,
+      };
+    },
+    { timeoutSec: 45 }
+  );
 }
 
 /** Live Hotspot active sessions from RouterOS. */

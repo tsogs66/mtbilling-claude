@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Renewal Required ÔÇö Service Paused</title>
+  <title>Renewal Required — Service Paused</title>
   <style>
     :root {
       --bg: #070b14;
@@ -498,10 +498,10 @@
         </p>
 
         <div class="account-strip" id="accountStrip" aria-live="polite">
-          <div class="row"><span class="label">Account</span><span class="value" id="accountValue">ÔÇö</span></div>
-          <div class="row"><span class="label">Subscriber</span><span class="value" id="customerValue">ÔÇö</span></div>
-          <div class="row"><span class="label">Plan</span><span class="value" id="planValue">ÔÇö</span></div>
-          <div class="row"><span class="label">Amount due</span><span class="value amount" id="amountValue">ÔÇö</span></div>
+          <div class="row"><span class="label">Account</span><span class="value" id="accountValue">—</span></div>
+          <div class="row"><span class="label">Subscriber</span><span class="value" id="customerValue">—</span></div>
+          <div class="row"><span class="label">Plan</span><span class="value" id="planValue">—</span></div>
+          <div class="row"><span class="label">Amount due</span><span class="value amount" id="amountValue">—</span></div>
         </div>
 
         <section class="section" aria-labelledby="payHeading">
@@ -515,7 +515,7 @@
 
           <div class="channel-tabs" role="tablist" aria-label="Payment channel">
             <div class="channel-tab" role="tab" aria-selected="true">
-              <span class="pm-mark" aria-hidden="true">Ôé▒</span>
+              <span class="pm-mark" aria-hidden="true">₱</span>
               PayMongo
             </div>
           </div>
@@ -588,7 +588,7 @@
       </div>
     </div>
     <p class="footer-note" id="footerNote">
-      Non-payment profile web proxy ┬À Powered by PayMongo ┬À MT-Billing
+      Non-payment profile web proxy · Powered by PayMongo · MT-Billing
     </p>
   </div>
 
@@ -599,7 +599,7 @@
      * the non-payments profile web-proxy / redirect at it.
      *
      * Query params (optional):
-     *   ?token=...           payment link token ÔåÆ opens /pay/{token}
+     *   ?token=...           payment link token → opens /pay/{token}
      *   ?username=...        PPPoE username (display / lookup hint)
      *   ?account=...         account number
      *   ?amount=...          amount due
@@ -609,12 +609,15 @@
      */
     const CONFIG = {
       companyName: 'PA-NORTH INTERNET SERVICES',
-      logoUrl: '/logo.png',
-      /** Public origin of the billing UI (empty = same origin as this page). */
-      payBaseUrl: '',
-      /** Optional absolute PayMongo / panel checkout URL when no token is known. */
+      logoUrl: '',
+      /**
+       * When this file is served from MikroTik webproxy/error.html, relative
+       * /api calls hit the router — set absolute billing origin here.
+       * Example: https://panorth.tsogs.cloud
+       */
+      payBaseUrl: 'https://panorth.tsogs.cloud',
       fallbackPayUrl: '',
-      apiBase: '/api',
+      apiBase: 'https://panorth.tsogs.cloud/api',
       supportContacts: [
         { name: 'Mary Grace Fajel', phone: '09081418108' },
         { name: 'Aries Fajel', phone: '09281029129' },
@@ -637,7 +640,7 @@
     function peso(n) {
       const v = Number(n);
       if (!Number.isFinite(v)) return null;
-      return 'Ôé▒' + v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return '₱' + v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
     function resolvePayBase() {
@@ -716,10 +719,10 @@
         return;
       }
       strip.classList.add('visible');
-      el('accountValue').textContent = state.account || state.username || 'ÔÇö';
-      el('customerValue').textContent = state.name || 'ÔÇö';
-      el('planValue').textContent = state.plan || 'ÔÇö';
-      el('amountValue').textContent = peso(state.amount) || (state.amount ? String(state.amount) : 'ÔÇö');
+      el('accountValue').textContent = state.account || state.username || '—';
+      el('customerValue').textContent = state.name || '—';
+      el('planValue').textContent = state.plan || '—';
+      el('amountValue').textContent = peso(state.amount) || (state.amount ? String(state.amount) : '—');
     }
 
     function applyCompany(company) {
@@ -750,7 +753,7 @@
         const data = await r.json();
         applyCompany(data);
       } catch (_) {
-        /* offline / walled-garden without API ÔÇö use CONFIG defaults */
+        /* offline / walled-garden without API — use CONFIG defaults */
       }
     }
 
