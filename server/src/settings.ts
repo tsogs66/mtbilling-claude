@@ -986,6 +986,8 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         lockdownFirewall: b.lockdownFirewall !== false,
         nonPayAddressList: b.nonPayAddressList,
         billingLanIps,
+        lockRouterUi: b.lockRouterUi !== false,
+        routerMgmtCidrs: Array.isArray(b.routerMgmtCidrs) ? b.routerMgmtCidrs : undefined,
       }
     );
     res.json(result);

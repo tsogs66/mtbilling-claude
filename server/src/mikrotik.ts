@@ -2124,6 +2124,128 @@ const NONPAY_PROXY = {
   redirectHttp: 'MT-Billing nonpay redirect HTTP',
 } as const;
 
+/** Management networks allowed to open WebFig / Winbox / SSH. */
+const ROUTER_MGMT_LIST = 'mt-billing-mgmt';
+const ROUTER_UI_BLOCK = 'MT-Billing block subscriber router UI';
+const DEFAULT_ROUTER_MGMT_CIDRS = ['192.168.0.0/24', '20.0.0.0/24', '10.10.0.0/16'];
+
+/**
+ * Block PPPoE/IPoE subscribers from the MikroTik login UI (WebFig www/www-ssl,
+ * Winbox, FTP, Telnet). Management stays on LAN/VPN CIDRs only.
+ *
+ * Captive non-pay traffic uses webproxy :8080 (not www :80), so this does not
+ * break error.html → /portal.
+ */
+export async function restrictSubscriberRouterLogin(
+  conn: RouterConn,
+  opts: {
+    mgmtCidrs?: string[];
+    /** Also restrict SSH to mgmt CIDRs (default true). */
+    lockSsh?: boolean;
+  } = {}
+): Promise<{
+  ok: true;
+  mgmtCidrs: string[];
+  servicesRestricted: string[];
+  filterAdded: boolean;
+  mgmtListEnsured: string[];
+}> {
+  const mgmtCidrs = [
+    ...new Set(
+      (opts.mgmtCidrs?.length ? opts.mgmtCidrs : DEFAULT_ROUTER_MGMT_CIDRS)
+        .map((c) => String(c || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  const lockSsh = opts.lockSsh !== false;
+  const addressCsv = mgmtCidrs.join(',');
+
+  return withRouter(
+    conn,
+    async (api) => {
+      const addrList = (await api.write('/ip/firewall/address-list/print')) as Record<string, string>[];
+      const mgmtListEnsured: string[] = [];
+      for (const cidr of mgmtCidrs) {
+        const exists = (addrList || []).some(
+          (r) => String(r.list || '') === ROUTER_MGMT_LIST && String(r.address || '') === cidr
+        );
+        if (exists) continue;
+        try {
+          await api.write('/ip/firewall/address-list/add', [
+            `=list=${ROUTER_MGMT_LIST}`,
+            `=address=${cidr}`,
+            `=comment=${ROUTER_UI_BLOCK}`,
+          ]);
+          mgmtListEnsured.push(cidr);
+          addrList.push({ list: ROUTER_MGMT_LIST, address: cidr });
+        } catch {
+          /* duplicate */
+        }
+      }
+
+      const services = (await api.write('/ip/service/print')) as Record<string, string>[];
+      const servicesRestricted: string[] = [];
+      const lockNames = new Set(['www', 'www-ssl', 'winbox', 'ftp', 'telnet', ...(lockSsh ? ['ssh'] : [])]);
+      for (const svc of services || []) {
+        const name = String(svc.name || '');
+        if (!lockNames.has(name)) continue;
+        // Skip dynamic connection rows (RouterOS lists live sessions under /ip/service).
+        const dyn = String(svc.dynamic || '').toLowerCase();
+        if (dyn === 'true' || dyn === 'yes') continue;
+        const id = svc['.id'];
+        if (!id) continue;
+        const current = String(svc.address || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .sort()
+          .join(',');
+        const want = [...mgmtCidrs].sort().join(',');
+        if (current === want) continue;
+        try {
+          await api.write('/ip/service/set', [`=.id=${id}`, `=address=${addressCsv}`]);
+          servicesRestricted.push(name);
+        } catch {
+          /* ignore single-service failure */
+        }
+      }
+
+      const filters = (await api.write('/ip/firewall/filter/print')) as Record<string, string>[];
+      let filterAdded = false;
+      const hasBlock = (filters || []).some((r) => String(r.comment || '') === ROUTER_UI_BLOCK);
+      if (!hasBlock) {
+        // Drop WebFig/Winbox/FTP/Telnet from anyone outside management.
+        // Proxy captive (:8080) is unaffected. Place near top of input chain.
+        const proxyAllowId =
+          (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.proxyInput)?.['.id'] || '';
+        try {
+          await api.write('/ip/firewall/filter/add', [
+            '=chain=input',
+            '=action=drop',
+            '=protocol=tcp',
+            `=src-address-list=!${ROUTER_MGMT_LIST}`,
+            '=dst-port=80,443,8291,21,23',
+            `=comment=${ROUTER_UI_BLOCK}`,
+            ...(proxyAllowId ? [`=place-before=${proxyAllowId}`] : ['=place-before=0']),
+          ]);
+          filterAdded = true;
+        } catch {
+          filterAdded = false;
+        }
+      }
+
+      return {
+        ok: true as const,
+        mgmtCidrs,
+        servicesRestricted,
+        filterAdded,
+        mgmtListEnsured,
+      };
+    },
+    { timeoutSec: 30 }
+  );
+}
+
 export type NonPaymentWebProxyOpts = {
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
   nonPayCidr?: string;
@@ -2149,6 +2271,13 @@ export type NonPaymentWebProxyOpts = {
    * Portal payment uses public HTTPS to billingHost, not these.
    */
   billingLanIps?: string[];
+  /**
+   * When true (default), restrict WebFig/Winbox so PPPoE subscribers cannot
+   * open the MikroTik login page (mgmt LAN/VPN only).
+   */
+  lockRouterUi?: boolean;
+  /** CIDRs allowed to open router admin UI (defaults: LAN + VPN). */
+  routerMgmtCidrs?: string[];
 };
 
 /**
@@ -2182,12 +2311,14 @@ export async function configureNonPaymentWebProxy(
   natHttpsAllow: boolean;
   natHttpsRedirect: boolean;
   proxyRedirect: boolean;
+  routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
   const lockdownFirewall = opts.lockdownFirewall !== false;
+  const lockRouterUi = opts.lockRouterUi !== false;
   const billingLanIps = [...new Set(
     (opts.billingLanIps || [])
       .map((ip) => String(ip || '').trim())
@@ -2578,6 +2709,17 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
+      let routerUiLock: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>> | undefined;
+      if (lockRouterUi) {
+        try {
+          routerUiLock = await restrictSubscriberRouterLogin(conn, {
+            mgmtCidrs: opts.routerMgmtCidrs,
+          });
+        } catch {
+          routerUiLock = undefined;
+        }
+      }
+
       return {
         ok: true as const,
         nonPayCidr,
@@ -2597,6 +2739,7 @@ export async function configureNonPaymentWebProxy(
         natHttpsAllow,
         natHttpsRedirect,
         proxyRedirect,
+        routerUiLock,
       };
     },
     { timeoutSec: 60 }
