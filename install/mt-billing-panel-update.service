@@ -1,6 +1,6 @@
 [Unit]
 Description=MT-Billing panel update (triggered from Application Updater UI)
-Documentation=https://github.com/tsogs66/MT-Billing
+Documentation=https://github.com/tsogs66/mtbilling-claude
 # Do not require the API — this unit stops/restarts it
 After=network-online.target
 

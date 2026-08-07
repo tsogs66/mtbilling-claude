@@ -69,7 +69,7 @@ else
     CTID="$CTID" var_repo_branch="${var_repo_branch:-main}" bash "$FETCH" --run
   else
     BRANCH="${var_repo_branch:-main}"
-    RAW="https://raw.githubusercontent.com/tsogs66/MT-Billing/${BRANCH}/install/mt-billing-update.sh"
+    RAW="https://raw.githubusercontent.com/tsogs66/mtbilling-claude/${BRANCH}/install/mt-billing-update.sh"
     pct exec "$CTID" -- bash -c "curl -fsSL '$RAW' -o /tmp/mt-billing-update.sh && chmod +x /tmp/mt-billing-update.sh && MT_BILLING_AUTO_ONLY='${MT_BILLING_AUTO_ONLY:-0}' bash /tmp/mt-billing-update.sh $AUTO_FLAG"
   fi
 fi
