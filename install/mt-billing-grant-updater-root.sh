@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/mtbilling-claude
+# Source: https://github.com/tsogs66/MT-Billing
 #
 # Grant the Application Updater root privilege so "Update from GitHub" works
 # from the panel UI (API runs as the mtbilling service user).
 #
 # Run once on the LXC/VM as root:
-#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-grant-updater-root.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash
 #
 # Or locally:
 #   sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh
@@ -19,13 +19,13 @@ set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
 SERVICE_UNIT="/etc/systemd/system/mt-billing-api.service"
 PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
 SUDOERS_FILE="/etc/sudoers.d/mt-billing"
 UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-update.sh"
 SELF_UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-self-update.sh"
-RAW_BASE="https://raw.githubusercontent.com/tsogs66/mtbilling-claude/${REPO_BRANCH}/install"
+RAW_BASE="https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install"
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
@@ -86,7 +86,7 @@ fetch_helper mt-billing-panel-update.service 644 || true
 cat >"$PANEL_UPDATE_UNIT" <<EOF
 [Unit]
 Description=MT-Billing panel update (triggered from Application Updater UI)
-Documentation=https://github.com/tsogs66/mtbilling-claude
+Documentation=https://github.com/tsogs66/MT-Billing
 After=network-online.target
 
 [Service]
@@ -204,5 +204,5 @@ echo "Next:"
 echo "  1) Refresh the Application Updater page"
 echo "  2) Click Update from GitHub"
 echo "  Or pull now: sudo bash ${UPDATE_SCRIPT}"
-echo "  Full workaround (grant + update): curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash"
+echo "  Full workaround (grant + update): curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash"
 echo
