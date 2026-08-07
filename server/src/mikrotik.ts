@@ -2014,7 +2014,10 @@ function rosScheduleFields(at: Date, offsetMs: number): { date: string; time: st
 }
 
 async function removeSchedulerByName(api: RouterOSAPI, name: string): Promise<void> {
-  const rows = (await api.write('/system/scheduler/print', [`?name=${name}`])) as Record<string, string>[];
+  const rows = (await api.write('/system/scheduler/print', [
+    `?name=${name}`,
+    '=.proplist=.id,name',
+  ])) as Record<string, string>[];
   for (const r of rows || []) {
     if (!r['.id']) continue;
     try {
@@ -2026,7 +2029,10 @@ async function removeSchedulerByName(api: RouterOSAPI, name: string): Promise<vo
 }
 
 async function removeSystemScriptByName(api: RouterOSAPI, name: string): Promise<void> {
-  const rows = (await api.write('/system/script/print', [`?name=${name}`])) as Record<string, string>[];
+  const rows = (await api.write('/system/script/print', [
+    `?name=${name}`,
+    '=.proplist=.id,name',
+  ])) as Record<string, string>[];
   for (const r of rows || []) {
     if (!r['.id']) continue;
     try {
@@ -2035,6 +2041,22 @@ async function removeSystemScriptByName(api: RouterOSAPI, name: string): Promise
       /* already gone */
     }
   }
+}
+
+function raceApi<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
 }
 
 /**
@@ -2100,47 +2122,80 @@ export async function scheduleExpiryOnRouter(
       // Switch to non-payments AND drop active so the CPE redials into the
       // non-payment IP pool (web-proxy captive / error.html).
       const graceSource =
-        `:do {\r\n` +
-        `  /ppp secret set [find name="${u}"] profile="${expireProf}" disabled=no\r\n` +
-        `  /ppp active remove [find name="${u}"]\r\n` +
-        `} on-error={}\r\n`;
-      await api.write('/system/script/add', [
-        `=name=${graceName}`,
-        `=source=${graceSource}`,
-        '=dont-require-permissions=yes',
-        '=comment=MT-Billing auto grace-switch (non-payment profile + kick)',
-      ]);
-      await api.write('/system/scheduler/add', [
-        `=name=${graceName}`,
-        `=start-date=${grace.date}`,
-        `=start-time=${grace.time}`,
-        '=interval=0',
-        `=on-event=${graceName}`,
-        '=comment=MT-Billing auto grace-switch',
-      ]);
+        `:do {/ppp secret set [find name="${u}"] profile="${expireProf}" disabled=no;/ppp active remove [find name="${u}"]} on-error={}`;
+      try {
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${graceName}`,
+            `=source=${graceSource}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing auto grace-switch (non-payment profile + kick)',
+          ]),
+          8_000,
+          'script-add-grace'
+        );
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${graceName}`,
+            `=start-date=${grace.date}`,
+            `=start-time=${grace.time}`,
+            '=interval=0',
+            `=on-event=${graceName}`,
+            '=comment=MT-Billing auto grace-switch',
+          ]),
+          8_000,
+          'sched-add-grace'
+        );
+      } catch {
+        // Fallback: classic inline on-event (no /system/script entry).
+        await api.write('/system/scheduler/add', [
+          `=name=${graceName}`,
+          `=start-date=${grace.date}`,
+          `=start-time=${grace.time}`,
+          '=interval=0',
+          `=on-event=${graceSource}`,
+          '=comment=MT-Billing auto grace-switch',
+        ]);
+      }
     }
 
     if (scheduleDisable) {
       const disable = rosScheduleFields(disableAt, offsetMs);
       const disableSource =
-        `:do {\r\n` +
-        `  /ppp secret disable [find name="${u}"]\r\n` +
-        `  /ppp active remove [find name="${u}"]\r\n` +
-        `} on-error={}\r\n`;
-      await api.write('/system/script/add', [
-        `=name=${disableName}`,
-        `=source=${disableSource}`,
-        '=dont-require-permissions=yes',
-        '=comment=MT-Billing auto disable past grace',
-      ]);
-      await api.write('/system/scheduler/add', [
-        `=name=${disableName}`,
-        `=start-date=${disable.date}`,
-        `=start-time=${disable.time}`,
-        '=interval=0',
-        `=on-event=${disableName}`,
-        '=comment=MT-Billing auto disable',
-      ]);
+        `:do {/ppp secret disable [find name="${u}"];/ppp active remove [find name="${u}"]} on-error={}`;
+      try {
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${disableName}`,
+            `=source=${disableSource}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing auto disable past grace',
+          ]),
+          8_000,
+          'script-add-disable'
+        );
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${disableName}`,
+            `=start-date=${disable.date}`,
+            `=start-time=${disable.time}`,
+            '=interval=0',
+            `=on-event=${disableName}`,
+            '=comment=MT-Billing auto disable',
+          ]),
+          8_000,
+          'sched-add-disable'
+        );
+      } catch {
+        await api.write('/system/scheduler/add', [
+          `=name=${disableName}`,
+          `=start-date=${disable.date}`,
+          `=start-time=${disable.time}`,
+          '=interval=0',
+          `=on-event=${disableSource}`,
+          '=comment=MT-Billing auto disable',
+        ]);
+      }
     }
   }, { timeoutSec: 8 });
 }
@@ -2150,56 +2205,52 @@ const BILLING_EXPIRE_SCHEDULER = 'mtb-billing-expire';
 
 /**
  * Global RouterOS expire scanner (System → Scripts).
- * Reads dueDate / expireProfile from PPP secret comment JSON (find/pick — works
- * without :deserialize) and switches overdue secrets to the non-payment profile
- * so they redial into the captive pool → error.html.
- * Complements per-user grace/disable one-shots and the panel 5-minute poller.
- *
- * Clock date format is RouterOS wall clock: mon/dd/yyyy (e.g. aug/07/2026).
+ * Compact single-line body (API-safe). Reads dueDate / expireProfile from PPP
+ * secret comment JSON via find/pick and switches overdue secrets to the
+ * non-payment profile so they redial into the captive pool → error.html.
  */
 export function buildBillingExpireScriptSource(nonPaymentProfile = 'non-payments'): string {
   const prof = rosScriptEscape(nonPaymentProfile || 'non-payments');
-  // Template literals: \$ → $ for RouterOS variables (avoid JS ${} interpolation).
+  // Semicolon-separated one-liner — avoids multiline API word issues.
   return (
-    `# MT-Billing: overdue PPP secrets → non-payment profile (captive)\r\n` +
-    `:local expireProfile "${prof}"\r\n` +
-    `:local today [/system clock get date]\r\n` +
-    `:local mon [:pick \$today 0 3]\r\n` +
-    `:local dd [:pick \$today 4 6]\r\n` +
-    `:local yyyy [:pick \$today 7 11]\r\n` +
-    `:local months {"jan"="01";"feb"="02";"mar"="03";"apr"="04";"may"="05";"jun"="06";"jul"="07";"aug"="08";"sep"="09";"oct"="10";"nov"="11";"dec"="12"}\r\n` +
-    `:local mm (\$months->\$mon)\r\n` +
-    `:if ([:len \$mm] = 0) do={ :return }\r\n` +
-    `:local todayIso (\$yyyy . "-" . \$mm . "-" . \$dd)\r\n` +
-    `:local dueMarker "\\"dueDate\\":\\""\r\n` +
-    `:local expMarker "\\"expireProfile\\":\\""\r\n` +
-    `:foreach i in=[/ppp secret find where disabled=no] do={\r\n` +
-    `  :local name [/ppp secret get \$i name]\r\n` +
-    `  :local profile [/ppp secret get \$i profile]\r\n` +
-    `  :local comment [/ppp secret get \$i comment]\r\n` +
-    `  :if ([:len \$comment] > 12) do={\r\n` +
-    `    :do {\r\n` +
-    `      :local p [:find \$comment \$dueMarker]\r\n` +
-    `      :if (\$p != nil) do={\r\n` +
-    `        :local dueStart (\$p + [:len \$dueMarker])\r\n` +
-    `        :local due [:pick \$comment \$dueStart (\$dueStart + 10)]\r\n` +
-    `        :local expProf \$expireProfile\r\n` +
-    `        :local ep [:find \$comment \$expMarker]\r\n` +
-    `        :if (\$ep != nil) do={\r\n` +
-    `          :local epStart (\$ep + [:len \$expMarker])\r\n` +
-    `          :local epRaw [:pick \$comment \$epStart (\$epStart + 32)]\r\n` +
-    `          :local epEnd [:find \$epRaw "\\""]\r\n` +
-    `          :if (\$epEnd != nil && \$epEnd > 0) do={ :set expProf [:pick \$epRaw 0 \$epEnd] }\r\n` +
-    `        }\r\n` +
-    `        :if ([:len \$due] = 10 && \$due < \$todayIso && \$profile != \$expProf) do={\r\n` +
-    `          /ppp secret set \$i profile=\$expProf disabled=no\r\n` +
-    `          :do { /ppp active remove [find name=\$name] } on-error={}\r\n` +
-    `          :log info ("MT-Billing expire: " . \$name . " due " . \$due . " -> " . \$expProf)\r\n` +
-    `        }\r\n` +
-    `      }\r\n` +
-    `    } on-error={}\r\n` +
-    `  }\r\n` +
-    `}\r\n`
+    `:local expireProfile "${prof}";` +
+    `:local today [/system clock get date];` +
+    `:local mon [:pick $today 0 3];` +
+    `:local dd [:pick $today 4 6];` +
+    `:local yyyy [:pick $today 7 11];` +
+    `:local months {"jan"="01";"feb"="02";"mar"="03";"apr"="04";"may"="05";"jun"="06";"jul"="07";"aug"="08";"sep"="09";"oct"="10";"nov"="11";"dec"="12"};` +
+    `:local mm ($months->$mon);` +
+    `:if ([:len $mm] = 0) do={ :return };` +
+    `:local todayIso ($yyyy . "-" . $mm . "-" . $dd);` +
+    `:local dueMarker "\\"dueDate\\":\\"";` +
+    `:local expMarker "\\"expireProfile\\":\\"";` +
+    `:foreach i in=[/ppp secret find where disabled=no] do={` +
+    `:local name [/ppp secret get $i name];` +
+    `:local profile [/ppp secret get $i profile];` +
+    `:local comment [/ppp secret get $i comment];` +
+    `:if ([:len $comment] > 12) do={` +
+    `:do {` +
+    `:local p [:find $comment $dueMarker];` +
+    `:if ($p != nil) do={` +
+    `:local dueStart ($p + [:len $dueMarker]);` +
+    `:local due [:pick $comment $dueStart ($dueStart + 10)];` +
+    `:local expProf $expireProfile;` +
+    `:local ep [:find $comment $expMarker];` +
+    `:if ($ep != nil) do={` +
+    `:local epStart ($ep + [:len $expMarker]);` +
+    `:local epRaw [:pick $comment $epStart ($epStart + 32)];` +
+    `:local epEnd [:find $epRaw "\\""];` +
+    `:if ($epEnd != nil && $epEnd > 0) do={ :set expProf [:pick $epRaw 0 $epEnd] }` +
+    `};` +
+    `:if ([:len $due] = 10 && $due < $todayIso && $profile != $expProf) do={` +
+    `/ppp secret set $i profile=$expProf disabled=no;` +
+    `:do { /ppp active remove [find name=$name] } on-error={};` +
+    `:log info ("MT-Billing expire: " . $name . " due " . $due . " -> " . $expProf)` +
+    `}` +
+    `}` +
+    `} on-error={}` +
+    `}` +
+    `}`
   );
 }
 
@@ -2214,41 +2265,62 @@ export async function ensureBillingExpireSystemScript(
   await withRouter(
     conn,
     async (api) => {
-      await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
-      await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
-      await api.write('/system/script/add', [
-        `=name=${BILLING_EXPIRE_SCRIPT}`,
-        `=source=${source}`,
-        '=dont-require-permissions=yes',
-        '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
-      ]);
-      await api.write('/system/scheduler/add', [
-        `=name=${BILLING_EXPIRE_SCHEDULER}`,
-        '=start-time=startup',
-        `=interval=${interval}`,
-        `=on-event=${BILLING_EXPIRE_SCRIPT}`,
-        '=comment=MT-Billing periodic expire scan',
-      ]);
+      await raceApi(removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER), 8_000, 'rm-sched');
+      await raceApi(removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT), 8_000, 'rm-script');
+      await raceApi(
+        api.write('/system/script/add', [
+          `=name=${BILLING_EXPIRE_SCRIPT}`,
+          `=source=${source}`,
+          '=dont-require-permissions=yes',
+          '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+        ]),
+        12_000,
+        'add-expire-script'
+      );
+      await raceApi(
+        api.write('/system/scheduler/add', [
+          `=name=${BILLING_EXPIRE_SCHEDULER}`,
+          '=start-time=startup',
+          `=interval=${interval}`,
+          `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+          '=comment=MT-Billing periodic expire scan',
+        ]),
+        8_000,
+        'add-expire-sched'
+      );
     },
-    { timeoutSec: 15 }
+    { timeoutSec: 20 }
   );
   return { script: BILLING_EXPIRE_SCRIPT, scheduler: BILLING_EXPIRE_SCHEDULER, interval };
 }
 
-export async function fetchSystemScripts(conn: RouterConn): Promise<
-  { id: string; name: string; owner: string; policy: string; comment: string; source: string }[]
-> {
-  return withRouter(conn, async (api) => {
-    const rows = (await api.write('/system/script/print')) as Record<string, string>[];
-    return (rows || []).map((s) => ({
-      id: s['.id'] || '',
-      name: s.name || '',
-      owner: s.owner || '',
-      policy: s.policy || '',
-      comment: s.comment || '',
-      source: s.source || '',
-    }));
-  });
+export async function fetchSystemScripts(
+  conn: RouterConn,
+  opts?: { includeSource?: boolean }
+): Promise<{ id: string; name: string; owner: string; policy: string; comment: string; source: string }[]> {
+  const includeSource = !!opts?.includeSource;
+  return withRouter(
+    conn,
+    async (api) => {
+      const props = includeSource
+        ? '=.proplist=.id,name,owner,policy,comment,source'
+        : '=.proplist=.id,name,owner,policy,comment';
+      const rows = (await raceApi(
+        api.write('/system/script/print', [props]),
+        15_000,
+        'script-print'
+      )) as Record<string, string>[];
+      return (rows || []).map((s) => ({
+        id: s['.id'] || '',
+        name: s.name || '',
+        owner: s.owner || '',
+        policy: s.policy || '',
+        comment: s.comment || '',
+        source: includeSource ? s.source || '' : '',
+      }));
+    },
+    { timeoutSec: 20 }
+  );
 }
 
 export async function fetchSystemSchedulers(conn: RouterConn): Promise<
@@ -2263,19 +2335,29 @@ export async function fetchSystemSchedulers(conn: RouterConn): Promise<
     disabled: boolean;
   }[]
 > {
-  return withRouter(conn, async (api) => {
-    const rows = (await api.write('/system/scheduler/print')) as Record<string, string>[];
-    return (rows || []).map((s) => ({
-      id: s['.id'] || '',
-      name: s.name || '',
-      startDate: s['start-date'] || '',
-      startTime: s['start-time'] || '',
-      interval: s.interval || '',
-      onEvent: s['on-event'] || '',
-      comment: s.comment || '',
-      disabled: rosBool(s.disabled),
-    }));
-  });
+  return withRouter(
+    conn,
+    async (api) => {
+      const rows = (await raceApi(
+        api.write('/system/scheduler/print', [
+          '=.proplist=.id,name,start-date,start-time,interval,on-event,comment,disabled',
+        ]),
+        15_000,
+        'sched-print'
+      )) as Record<string, string>[];
+      return (rows || []).map((s) => ({
+        id: s['.id'] || '',
+        name: s.name || '',
+        startDate: s['start-date'] || '',
+        startTime: s['start-time'] || '',
+        interval: s.interval || '',
+        onEvent: s['on-event'] || '',
+        comment: s.comment || '',
+        disabled: rosBool(s.disabled),
+      }));
+    },
+    { timeoutSec: 20 }
+  );
 }
 
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
@@ -2676,7 +2758,7 @@ export async function configureNonPaymentWebProxy(
       let errorHtmlBytes = 0;
       const errorPageUrl = String(opts.errorPageUrl || '').trim();
       const fetchCandidates: string[] = [];
-      for (const ip of billingLanIps) {
+      for (const ip of billingLanIps.slice(0, 2)) {
         fetchCandidates.push(`http://${ip}/error.html`);
       }
       if (errorPageUrl && /^https?:\/\//i.test(errorPageUrl)) {
@@ -2684,36 +2766,51 @@ export async function configureNonPaymentWebProxy(
       }
       for (const url of [...new Set(fetchCandidates)]) {
         try {
-          await removeProbeFile(api, 'webproxy/error.html');
+          await raceApi(
+            (async () => {
+              try {
+                await removeProbeFile(api, 'webproxy/error.html');
+              } catch {
+                /* ok */
+              }
+              await removeStaleFetches(api);
+              await cancelFetchTool(api);
+              const rows = (await api.write('/tool/fetch', [
+                `=url=${url}`,
+                '=dst-path=webproxy/error.html',
+                '=check-certificate=no',
+                '=http-method=get',
+              ])) as Record<string, string>[];
+              const immediate = extractImmediateFetchResult(rows);
+              if (immediate?.ok) return true;
+              if (immediate && !immediate.ok) return false;
+              const result = await waitForRouterFetch(api, rows);
+              return result.ok;
+            })(),
+            8_000,
+            'fetch-error-html'
+          );
         } catch {
-          /* ok */
+          continue;
         }
         try {
-          await removeStaleFetches(api);
-          await cancelFetchTool(api);
-          const rows = (await api.write('/tool/fetch', [
-            `=url=${url}`,
-            '=dst-path=webproxy/error.html',
-            '=check-certificate=no',
-            '=http-method=get',
-          ])) as Record<string, string>[];
-          const immediate = extractImmediateFetchResult(rows);
-          const result = immediate ?? (await waitForRouterFetch(api, rows));
-          if (!result.ok) continue;
-          const files = (await api.write('/file/print')) as Record<string, string>[];
+          const files = (await raceApi(
+            api.write('/file/print', ['=.proplist=name,size']),
+            6_000,
+            'file-print'
+          )) as Record<string, string>[];
           const hit = (files || []).find((f) => {
-            const n = String(f.name || f['.id'] || '');
+            const n = String(f.name || '');
             return n === 'webproxy/error.html' || n.endsWith('/error.html') || n === 'error.html';
           });
           const size = Number(hit?.size || 0);
-          // Reject tiny / challenge pages; real captive HTML is several KB.
           if (!Number.isFinite(size) || size < 1500) continue;
           fetchedErrorHtml = true;
           errorHtmlSource = url;
           errorHtmlBytes = size;
           break;
         } catch {
-          /* try next URL */
+          /* try next */
         }
       }
 
@@ -3005,26 +3102,34 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
-      // Install classic System → Scripts expire scanner (mtb-billing-expire).
+      // Install classic System → Scripts expire scanner (best-effort, bounded).
       let billingExpireScript: { script: string; scheduler: string; interval: string } | null =
         null;
       try {
         const source = buildBillingExpireScriptSource('non-payments');
-        await removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER);
-        await removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT);
-        await api.write('/system/script/add', [
-          `=name=${BILLING_EXPIRE_SCRIPT}`,
-          `=source=${source}`,
-          '=dont-require-permissions=yes',
-          '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
-        ]);
-        await api.write('/system/scheduler/add', [
-          `=name=${BILLING_EXPIRE_SCHEDULER}`,
-          '=start-time=startup',
-          '=interval=00:05:00',
-          `=on-event=${BILLING_EXPIRE_SCRIPT}`,
-          '=comment=MT-Billing periodic expire scan',
-        ]);
+        await raceApi(removeSchedulerByName(api, BILLING_EXPIRE_SCHEDULER), 6_000, 'rm-exp-sched');
+        await raceApi(removeSystemScriptByName(api, BILLING_EXPIRE_SCRIPT), 6_000, 'rm-exp-script');
+        await raceApi(
+          api.write('/system/script/add', [
+            `=name=${BILLING_EXPIRE_SCRIPT}`,
+            `=source=${source}`,
+            '=dont-require-permissions=yes',
+            '=comment=MT-Billing: overdue PPP secrets → non-payment profile (captive error.html)',
+          ]),
+          10_000,
+          'add-exp-script'
+        );
+        await raceApi(
+          api.write('/system/scheduler/add', [
+            `=name=${BILLING_EXPIRE_SCHEDULER}`,
+            '=start-time=startup',
+            '=interval=00:05:00',
+            `=on-event=${BILLING_EXPIRE_SCRIPT}`,
+            '=comment=MT-Billing periodic expire scan',
+          ]),
+          6_000,
+          'add-exp-sched'
+        );
         billingExpireScript = {
           script: BILLING_EXPIRE_SCRIPT,
           scheduler: BILLING_EXPIRE_SCHEDULER,

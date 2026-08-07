@@ -1009,9 +1009,11 @@ settingsRouter.get('/routers/:id/system-scripts', async (req, res) => {
     api_pass: r.api_pass || '',
   };
   const mtbOnly = String(req.query.mtb || '') === '1' || String(req.query.mtb || '') === 'true';
+  const includeSource =
+    String(req.query.source || '') === '1' || String(req.query.source || '') === 'true';
   try {
     const [scripts, schedulers] = await Promise.all([
-      fetchSystemScripts(conn),
+      fetchSystemScripts(conn, { includeSource }),
       fetchSystemSchedulers(conn),
     ]);
     const filterMtb = <T extends { name: string }>(rows: T[]) =>
