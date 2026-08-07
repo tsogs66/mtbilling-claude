@@ -1012,10 +1012,13 @@ settingsRouter.get('/routers/:id/system-scripts', async (req, res) => {
   const includeSource =
     String(req.query.source || '') === '1' || String(req.query.source || '') === 'true';
   try {
-    const [scripts, schedulers] = await Promise.all([
-      fetchSystemScripts(conn, { includeSource }),
-      fetchSystemSchedulers(conn),
-    ]);
+    const scripts = await fetchSystemScripts(conn, { includeSource });
+    let schedulers: Awaited<ReturnType<typeof fetchSystemSchedulers>> = [];
+    try {
+      schedulers = await fetchSystemSchedulers(conn);
+    } catch {
+      schedulers = [];
+    }
     const filterMtb = <T extends { name: string }>(rows: T[]) =>
       mtbOnly ? rows.filter((x) => String(x.name || '').startsWith('mtb-')) : rows;
     res.json({
