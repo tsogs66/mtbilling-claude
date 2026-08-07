@@ -5079,20 +5079,22 @@ app.get('/api/pppoe/billing-recheck', (req, res) => {
 app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
   const preview = previewBillingEnforcement({ service });
+  // Skip mass MikroTik schedule refresh on HTTP recheck — that path routinely
+  // exceeds Cloudflare's ~100s limit (524) before expire/restore finishes.
+  const runOpts = { service, forceDisable: true as const, ensureSchedules: false as const };
   if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
-    // Still run once so active accounts get MikroTik grace/disable schedules provisioned
-    const result = await executeBillingEnforcement({ service, forceDisable: true });
+    const result = await executeBillingEnforcement(runOpts);
     return res.json({
       ok: true,
-      message: `No overdue/past-grace/restore actions. Ensured ${result.schedulesEnsured} MikroTik schedule(s).`,
+      message: `No overdue/past-grace/restore actions. Reminders ${result.remindersSent}.`,
       ...preview,
       result,
     });
   }
-  const result = await executeBillingEnforcement({ service, forceDisable: true });
+  const result = await executeBillingEnforcement(runOpts);
   res.json({
     ok: true,
-    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; schedules ${result.schedulesEnsured}.`,
+    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; router errors ${result.routerErrors}.`,
     preview,
     result,
   });
