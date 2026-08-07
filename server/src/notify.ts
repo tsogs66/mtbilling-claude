@@ -995,9 +995,12 @@ export async function executeBillingEnforcement(opts?: {
     resolveRouterSync,
     scheduleRouterExpiry,
     cancelRouterExpirySchedule,
+    withTimeout,
   } = await import('./billing.js');
   const { baseUrl } = resolvePublicBaseUrl();
   const service = opts?.service ? String(opts.service).toLowerCase() : null;
+  /** Bound each MikroTik sync so one stuck board cannot hang HTTP recheck past Cloudflare. */
+  const syncBudgetMs = ensureSchedules ? 45_000 : 12_000;
 
   const all = (
     service
@@ -1123,7 +1126,10 @@ export async function executeBillingEnforcement(opts?: {
         "UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?"
       ).run(u.id);
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'restore');
+      const sync = await withTimeout(syncUserToRouter(full, 'restore'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during restore',
+      });
       if (sync.ok) {
         summary.profileSwitched++;
         resolveRouterSync(full.router_id, full.id);
@@ -1134,6 +1140,8 @@ export async function executeBillingEnforcement(opts?: {
       if (ensureSchedules) {
         await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
         summary.schedulesEnsured++;
+      } else {
+        void scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
       }
       summary.restored++;
       summary.restoredUsers.push({ ...restore, status: 'Active', action: 'restore' });
@@ -1157,7 +1165,10 @@ export async function executeBillingEnforcement(opts?: {
       }
       summary.markedNonPayment++;
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'expire');
+      const sync = await withTimeout(syncUserToRouter(full, 'expire'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during expire',
+      });
       if (sync.ok) {
         summary.profileSwitched++;
         resolveRouterSync(full.router_id, full.id);
@@ -1166,9 +1177,13 @@ export async function executeBillingEnforcement(opts?: {
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Non-payment expire failed');
       }
 
-      // Always schedule remaining disable one-shot for accounts we just expired
-      await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
-      summary.schedulesEnsured++;
+      // Background scheduler refresh must not block HTTP recheck (Cloudflare ~100s).
+      if (ensureSchedules) {
+        await scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+        summary.schedulesEnsured++;
+      } else {
+        void scheduleRouterExpiry(full, full.expiration_profile).catch(() => undefined);
+      }
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
@@ -1198,14 +1213,21 @@ export async function executeBillingEnforcement(opts?: {
       }
       db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
       const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-      const sync = await syncUserToRouter(full, 'disable');
+      const sync = await withTimeout(syncUserToRouter(full, 'disable'), syncBudgetMs, {
+        ok: false,
+        error: 'Router timed out during disable',
+      });
       if (sync.ok) {
         resolveRouterSync(full.router_id, full.id);
       } else {
         summary.routerErrors++;
         enqueueRouterSync(full.router_id, full.id, sync.error || 'Disable failed');
       }
-      await cancelRouterExpirySchedule(full).catch(() => undefined);
+      if (ensureSchedules) {
+        await cancelRouterExpirySchedule(full).catch(() => undefined);
+      } else {
+        void cancelRouterExpirySchedule(full).catch(() => undefined);
+      }
 
       summary.disabled++;
       summary.disabledUsers.push({

@@ -444,10 +444,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     setRecheckBusy(true);
     setRecheckResult(null);
     try {
-      const r = await api.get('/pppoe/billing-recheck', { params: { service } });
+      const r = await api.get('/pppoe/billing-recheck', { params: { service }, timeout: 60000 });
       setRecheckPreview(r.data);
-      if (!(r.data.toExpire?.length || r.data.toDisable?.length || r.data.toRestore?.length)) {
-        showToast('No overdue or past-grace accounts found.');
+      const hasWork =
+        !!(r.data.toExpire?.length || r.data.toDisable?.length || r.data.toRestore?.length);
+      if (!hasWork) {
+        showToast('No overdue, past-grace, or restore actions found.');
         setRecheckPreview(null);
       }
     } catch (e: any) {
@@ -460,12 +462,18 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const confirmBillingRecheck = async () => {
     setRecheckBusy(true);
     try {
-      const r = await api.post('/pppoe/billing-recheck', { service });
+      // Router profile switches can take longer than the default 20s axios timeout.
+      const r = await api.post('/pppoe/billing-recheck', { service }, { timeout: 120000 });
       setRecheckPreview(null);
       setRecheckResult(r.data);
       loadUsers();
     } catch (e: any) {
-      showToast(e?.response?.data?.error || 'Could not apply expiry protocols.');
+      const msg =
+        e?.code === 'ECONNABORTED'
+          ? 'Recheck is taking too long — refresh the list; some accounts may already be updated.'
+          : e?.response?.data?.error || 'Could not apply expiry protocols.';
+      showToast(msg);
+      loadUsers();
     } finally {
       setRecheckBusy(false);
     }
