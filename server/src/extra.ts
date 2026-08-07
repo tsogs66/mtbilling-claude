@@ -871,7 +871,7 @@ extraRouter.get('/zerotier', (_req, res) => {
   });
 });
 
-// ---------------- Updater (GitHub: tsogs66/MT-Billing) ----------------
+// ---------------- Updater (GitHub: tsogs66/mtbilling-claude) ----------------
 extraRouter.get('/updater', async (_req, res) => {
   try {
     const status = await getUpdaterStatus();

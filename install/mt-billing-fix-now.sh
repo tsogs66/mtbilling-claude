@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # One-shot workaround: grant updater root privilege AND pull/build/restart now.
 # Use this when the panel "Update from GitHub" button still fails.
 #
 # On the LXC/VM (as root):
-#   curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash
 #
 # Or locally:
 #   sudo bash /opt/mt-billing/install/mt-billing-fix-now.sh
@@ -16,8 +16,8 @@ set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
-RAW_BASE="https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
+RAW_BASE="https://raw.githubusercontent.com/tsogs66/mtbilling-claude/${REPO_BRANCH}/install"
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }

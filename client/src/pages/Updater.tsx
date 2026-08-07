@@ -164,7 +164,7 @@ export default function Updater() {
 
     const tick = async () => {
       if (Date.now() - startedAtRef.current > TIMEOUT_MS) {
-        finishFailed('Update timed out. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash');
+        finishFailed('Update timed out. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash');
         return;
       }
 
@@ -344,12 +344,12 @@ export default function Updater() {
 
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-500">
           <a
-            href={info?.repo || 'https://github.com/tsogs66/MT-Billing'}
+            href={info?.repo || 'https://github.com/tsogs66/mtbilling-claude'}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-brand-700 hover:underline font-medium"
           >
-            <ExternalLink size={12} /> {info?.repo || 'https://github.com/tsogs66/MT-Billing'}
+            <ExternalLink size={12} /> {info?.repo || 'https://github.com/tsogs66/mtbilling-claude'}
           </a>
           <span className="inline-flex items-center gap-1">
             <GitBranch size={12} /> branch <b className="text-slate-700">{info?.branch || 'main'}</b>
@@ -386,7 +386,7 @@ export default function Updater() {
             <div className="font-semibold text-slate-800 mb-1">If Update from GitHub fails</div>
             <p className="text-xs text-slate-500 mb-2 leading-relaxed whitespace-pre-wrap">{info.applyHint}</p>
             <code className="block text-[11px] leading-relaxed font-mono bg-white border border-slate-200 rounded-lg px-3 py-2 overflow-x-auto select-all">
-              curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
+              curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/install/mt-billing-fix-now.sh | sudo bash
             </code>
             <p className="text-xs text-slate-500 mt-2">
               Run once on the Pi or LXC as root. After that, Update from GitHub works from this page without SSH.

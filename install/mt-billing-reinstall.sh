@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # Guest reinstall script — run inside the MT-Billing LXC/VM (or via Proxmox pct exec).
 # Use after a large GitHub update when a normal pull/build is not enough: wipes the
@@ -27,7 +27,7 @@
 #
 # Environment:
 #   var_install_dir / INSTALL_DIR   default /opt/mt-billing
-#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/MT-Billing.git
+#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/mtbilling-claude.git
 #   var_repo_branch / REPO_BRANCH   default main
 #   var_service_user / SERVICE_USER default mtbilling
 #   var_api_port / API_PORT         default 4000
@@ -39,7 +39,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
 SERVICE_USER="${var_service_user:-${SERVICE_USER:-mtbilling}}"
 API_PORT="${var_api_port:-${API_PORT:-4000}}"
