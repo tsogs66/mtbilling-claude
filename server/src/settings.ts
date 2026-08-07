@@ -933,10 +933,9 @@ settingsRouter.post('/routers/test', async (req, res) => {
 });
 
 /**
- * Additive non-payment captive helper:
- * allow billing + PayMongo through web-proxy; optionally fetch error.html;
- * ensure forward firewall lockdown so HTTPS/QUIC cannot bypass the portal.
- * Does not touch NAT, IP pools, or existing untagged proxy rules.
+ * Non-payment captive helper (portal-pay flow):
+ * ensure HTTP + HTTPS redirect to webproxy (error.html → /portal),
+ * allow HTTPS only to billing + PayMongo, fetch error.html, lockdown bypass.
  */
 settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   const id = Number(req.params.id);
