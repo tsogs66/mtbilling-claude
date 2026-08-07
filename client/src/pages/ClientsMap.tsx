@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, CloudSun, Sparkles } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, Sparkles } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
@@ -387,50 +387,6 @@ function oltIcon(name: string, active = false, online?: boolean | null) {
     </div>`,
     iconSize: [120, 28],
     iconAnchor: [14, 14],
-  });
-}
-
-/** Small CSS-animated rain/snow/sun/cloud/fog effect above a weather chip. */
-function weatherFxHtml(category: WeatherCategory): string {
-  const rand = (min: number, max: number) => (min + Math.random() * (max - min)).toFixed(2);
-  if (category === 'rain' || category === 'storm') {
-    const drops = Array.from({ length: 11 }, () =>
-      `<span class="wx-drop" style="left:${rand(2, 54)}px;animation-delay:${rand(0, 1.2)}s;animation-duration:${rand(0.55, 0.95)}s"></span>`
-    ).join('');
-    const flash = category === 'storm' ? '<span class="wx-flash"></span>' : '';
-    return `<div class="map-weather-fx">${drops}${flash}</div>`;
-  }
-  if (category === 'snow') {
-    const flakes = Array.from({ length: 11 }, () =>
-      `<span class="wx-flake" style="left:${rand(2, 54)}px;animation-delay:${rand(0, 2)}s;animation-duration:${rand(1.8, 2.8)}s"></span>`
-    ).join('');
-    return `<div class="map-weather-fx">${flakes}</div>`;
-  }
-  if (category === 'clear') {
-    return `<div class="map-weather-fx"><span class="wx-sun"></span></div>`;
-  }
-  if (category === 'cloud') {
-    return `<div class="map-weather-fx"><span class="wx-cloud wx-cloud-a"></span><span class="wx-cloud wx-cloud-b"></span></div>`;
-  }
-  if (category === 'fog') {
-    return `<div class="map-weather-fx"><span class="wx-fogband wx-fogband-a"></span><span class="wx-fogband wx-fogband-b"></span></div>`;
-  }
-  return '';
-}
-
-/** Floating current-weather chip overlaid above a server/OLT marker, with a small animated effect. */
-function weatherBadgeIcon(w: WeatherNow, lite = false) {
-  const category = weatherCategory(w.code);
-  return L.divIcon({
-    className: 'map-weather-marker',
-    html: `<div class="map-weather-stack">
-      ${lite ? '' : weatherFxHtml(category)}
-      <div class="map-weather-chip" title="${escapeHtml(w.label)} · ${Math.round(w.humidityPct)}% humidity · wind ${Math.round(w.windKph)} km/h">
-        <span class="map-weather-emoji">${w.emoji}</span><span class="map-weather-temp">${Math.round(w.tempC)}°C</span>
-      </div>
-    </div>`,
-    iconSize: [64, lite ? 36 : 64],
-    iconAnchor: [32, lite ? 40 : 62],
   });
 }
 
@@ -835,7 +791,6 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
-  const [weatherOn, setWeatherOn] = useState(() => !detectLowPowerMap());
   const [weather, setWeather] = useState<Record<string, WeatherNow | null>>({});
   const weatherTargets = useMemo(
     () => [
@@ -844,8 +799,21 @@ export default function ClientsMap() {
     ],
     [servers, olts]
   );
+
+  /**
+   * Full-map weather simulation — off by default, opt-in via the toolbar.
+   * Unlike a tiled radar image, this is a plain screen-space overlay (not
+   * georeferenced), so it has no native zoom level and never breaks or goes
+   * blank as the map is zoomed in/out over an OLT.
+   */
+  const [weatherFxOn, setWeatherFxOn] = useState(false);
   useEffect(() => {
-    if (!weatherOn || weatherTargets.length === 0) return;
+    if (lowPowerMap) setWeatherFxOn(false);
+  }, [lowPowerMap]);
+
+  // Fetch weather only when Weather FX is on (drives overlay category).
+  useEffect(() => {
+    if (!weatherFxOn || lowPowerMap || weatherTargets.length === 0) return;
     let cancelled = false;
     const run = () => {
       weatherTargets.forEach(({ key, lat, lng }) => {
@@ -861,18 +829,8 @@ export default function ClientsMap() {
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weatherOn, JSON.stringify(weatherTargets)]);
+  }, [weatherFxOn, lowPowerMap, JSON.stringify(weatherTargets)]);
 
-  /**
-   * Full-map weather simulation — off by default, opt-in via the toolbar.
-   * Unlike a tiled radar image, this is a plain screen-space overlay (not
-   * georeferenced), so it has no native zoom level and never breaks or goes
-   * blank as the map is zoomed in/out over an OLT.
-   */
-  const [weatherFxOn, setWeatherFxOn] = useState(false);
-  useEffect(() => {
-    if (lowPowerMap) setWeatherFxOn(false);
-  }, [lowPowerMap]);
   const dominantWeatherCategory = useMemo<WeatherCategory | null>(() => {
     const counts: Partial<Record<WeatherCategory, number>> = {};
     for (const w of Object.values(weather)) {
@@ -1208,14 +1166,6 @@ export default function ClientsMap() {
               onClick={() => setTopoOpen((v) => !v)}
             >
               <SlidersHorizontal size={15} /> Topology Config
-            </button>
-            <button
-              type="button"
-              title="Show current weather at each Server/OLT location"
-              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${weatherOn ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
-              onClick={() => setWeatherOn((v) => !v)}
-            >
-              <CloudSun size={15} /> Weather
             </button>
             <button
               type="button"
@@ -1727,30 +1677,16 @@ export default function ClientsMap() {
             })()}
 
             {servers.map((s) => {
-              const w = weather[`srv-${s.id}`];
               return (
                 <Marker key={`srv-${s.id}`} position={[s.lat, s.lng]} icon={serverIcon(s.name, highlightChain?.serverId === s.id)}>
                   <Popup>
                     <b>{s.name}</b><br />Server
-                    {w ? (
-                      <>
-                        <br />{w.emoji} {Math.round(w.tempC)}°C — {w.label}
-                        <br />Wind {Math.round(w.windKph)} km/h · Humidity {Math.round(w.humidityPct)}%
-                      </>
-                    ) : null}
                   </Popup>
                 </Marker>
               );
             })}
 
-            {weatherOn && servers.map((s) => {
-              const w = weather[`srv-${s.id}`];
-              if (!w) return null;
-              return <Marker key={`srv-wx-${s.id}`} position={[s.lat, s.lng]} icon={weatherBadgeIcon(w, lowPowerMap)} interactive={false} />;
-            })}
-
             {naps.map((n) => {
-              const w = n.kind === 'olt' ? weather[`olt-${n.id}`] : undefined;
               const chain = n.kind === 'nap' ? computeNapChainDbm(n.id, napChainById, splitterRows, splittersById) : null;
               return (
                 <Marker
@@ -1795,21 +1731,9 @@ export default function ClientsMap() {
                       </>
                     ) : null}
                     {n.vendor || n.model ? <><br />{[n.vendor, n.model].filter(Boolean).join(' · ')}</> : null}
-                    {w ? (
-                      <>
-                        <br />{w.emoji} {Math.round(w.tempC)}°C — {w.label}
-                        <br />Wind {Math.round(w.windKph)} km/h · Humidity {Math.round(w.humidityPct)}%
-                      </>
-                    ) : null}
                   </Popup>
                 </Marker>
               );
-            })}
-
-            {weatherOn && olts.map((o) => {
-              const w = weather[`olt-${o.id}`];
-              if (!w) return null;
-              return <Marker key={`olt-wx-${o.id}`} position={[o.lat, o.lng]} icon={weatherBadgeIcon(w, lowPowerMap)} interactive={false} />;
             })}
 
             {filteredClients.map((c) => {
