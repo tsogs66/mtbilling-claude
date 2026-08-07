@@ -3971,7 +3971,8 @@ app.get('/api/map', async (req, res) => {
   const clientSql = `
       SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
               u.nap_id AS napId, u.router_id AS routerId, u.service, u.account_number AS account,
-              u.profile AS plan, u.subscription_due AS due, u.plc_port AS plcPort, u.address,
+              u.profile AS plan, u.subscription_due AS due, u.nonpayment_since AS nonpaymentSince,
+              u.plc_port AS plcPort, u.address,
               n.name AS napName, n.parent_id AS oltId,
               o.name AS oltName,
               r.name AS serverName

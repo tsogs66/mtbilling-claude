@@ -791,8 +791,14 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
       if (sec.disabled) {
         status = 'disabled';
       } else if (status.toLowerCase() === 'disabled') {
-        // Secret is enabled on MikroTik — clear stale billing/DB disabled flag.
-        status = 'Active';
+        // Secret is enabled on MikroTik. Normally this means an admin re-enabled a
+        // manually-disabled account, so reflect Active. But when the account is on a
+        // billing hold — expiry / non-payment enforcement always stamps
+        // nonpayment_since — the panel 'disabled' is the authoritative intent and the
+        // router simply hasn't been re-synced yet (the router-sync queue retries).
+        // Clearing it to Active here would mask expired subscribers whose disable
+        // command didn't land, so keep 'disabled' until the hold is actually cleared.
+        if (!u.nonpaymentSince) status = 'Active';
       }
     }
 
