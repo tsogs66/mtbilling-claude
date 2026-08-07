@@ -29,6 +29,10 @@ import {
   updateFairUseThrottleSettings,
   getPublicPayOptions,
 } from './paymongo.js';
+import {
+  startCaptivePaymongoCheckout,
+  resolveCaptiveSubscriber,
+} from './captivePay.js';
 import { startAutoBackupScheduler, runAutoBackupOnce } from './autoBackup.js';
 import { verifyTotpToken } from './totp.js';
 import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
@@ -574,6 +578,69 @@ app.post('/api/public/pay/:token/paymongo', async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not start PayMongo checkout' });
+  }
+});
+
+/**
+ * Captive non-payment portal: resolve subscriber by PPP IP (preferred) or
+ * account/username, ensure a pending pay link, start PayMongo checkout.
+ * Do not trust req.ip — NAT hides the pool address; the page must send clientIp.
+ */
+app.post('/api/public/captive/checkout', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const result = await startCaptivePaymongoCheckout({
+      clientIp: b.clientIp || b.ip || b.address || null,
+      username: b.username || b.user || null,
+      account: b.account || b.accountNumber || null,
+      nonPayCidr: b.nonPayCidr || undefined,
+      publicBaseUrl:
+        b.publicBaseUrl ||
+        String(
+          (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)
+            ?.public_base_url || ''
+        ) ||
+        'https://panorth.tsogs.cloud',
+    });
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    const status = Number(e?.status) || 400;
+    res.status(status).json({
+      error: e?.message || 'Could not start captive checkout',
+      code: e?.code || undefined,
+    });
+  }
+});
+
+/** Captive helper: resolve who is on a non-payment PPP IP (no checkout). */
+app.post('/api/public/captive/resolve', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const resolved = await resolveCaptiveSubscriber({
+      clientIp: b.clientIp || b.ip || b.address || null,
+      username: b.username || b.user || null,
+      account: b.account || b.accountNumber || null,
+      nonPayCidr: b.nonPayCidr || undefined,
+    });
+    const u = resolved.user;
+    res.json({
+      ok: true,
+      matchedBy: resolved.matchedBy,
+      clientIp: resolved.clientIp || null,
+      username: u.username,
+      account: u.account_number ?? null,
+      customer: u.customer_name ?? null,
+      plan: u.profile ?? null,
+      status: u.status ?? null,
+      amount: u.price != null ? Number(u.price) : null,
+      due: u.subscription_due ?? null,
+    });
+  } catch (e: any) {
+    const status = Number(e?.status) || 400;
+    res.status(status).json({
+      error: e?.message || 'Could not resolve captive subscriber',
+      code: e?.code || undefined,
+    });
   }
 });
 
