@@ -3029,21 +3029,32 @@ export async function repairNonPaymentHttpRedirect(
       }
 
       let proxyRedirect = false;
+      // RouterOS: redirect-to works with action=deny (not action=redirect).
       try {
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
-          '=action=redirect',
+          '=action=deny',
           `=redirect-to=${portalRedirectTo}`,
           `=comment=${NONPAY_PROXY.redirectPortal}`,
         ]);
         proxyRedirect = true;
-      } catch {
-        await api.write('/ip/proxy/access/add', [
-          `=src-address=${nonPayCidr}`,
-          '=action=deny',
-          `=comment=${NONPAY_PROXY.denyCaptive}`,
-        ]);
-        proxyRedirect = false;
+      } catch (e1) {
+        try {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            '=action=deny',
+            `=redirect-to=${portalRedirectTo.replace(/^https:\/\//i, 'http://')}`,
+            `=comment=${NONPAY_PROXY.redirectPortal}`,
+          ]);
+          proxyRedirect = true;
+        } catch {
+          await api.write('/ip/proxy/access/add', [
+            `=src-address=${nonPayCidr}`,
+            '=action=deny',
+            `=comment=${NONPAY_PROXY.denyCaptive}`,
+          ]);
+          proxyRedirect = false;
+        }
       }
 
       let kicked: string | null = null;
@@ -3396,33 +3407,51 @@ export async function configureNonPaymentWebProxy(
       }
 
       let proxyDeny = false;
-      const hasPortalRedirect = (existing || []).some(
-        (r) =>
-          String(r.action || '').toLowerCase() === 'redirect' &&
-          String(r['src-address'] || '') === nonPayCidr &&
-          !rosBool(r.disabled)
-      );
+      const hasPortalRedirect = (existing || []).some((r) => {
+        const action = String(r.action || '').toLowerCase();
+        const src = String(r['src-address'] || '');
+        const to = String(r['redirect-to'] || '');
+        return (
+          src === nonPayCidr &&
+          action === 'deny' &&
+          !!to &&
+          !rosBool(r.disabled) &&
+          !String(r['dst-host'] || '') &&
+          !String(r['dst-address'] || '')
+        );
+      });
       if (!hasPortalRedirect) {
         try {
           await api.write('/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
-            '=action=redirect',
+            '=action=deny',
             `=redirect-to=${portalRedirectTarget}`,
             `=comment=${NONPAY_PROXY.redirectPortal}`,
           ]);
-          proxyDeny = true; // catch-all present (redirect)
+          proxyDeny = true;
           existing.push({
-            action: 'redirect',
+            action: 'deny',
             'src-address': nonPayCidr,
+            'redirect-to': portalRedirectTarget,
             comment: NONPAY_PROXY.redirectPortal,
           });
         } catch {
-          await api.write('/ip/proxy/access/add', [
-            `=src-address=${nonPayCidr}`,
-            '=action=deny',
-            `=comment=${NONPAY_PROXY.denyCaptive}`,
-          ]);
-          proxyDeny = true;
+          try {
+            await api.write('/ip/proxy/access/add', [
+              `=src-address=${nonPayCidr}`,
+              '=action=deny',
+              `=redirect-to=${portalRedirectTarget.replace(/^https:\/\//i, 'http://')}`,
+              `=comment=${NONPAY_PROXY.redirectPortal}`,
+            ]);
+            proxyDeny = true;
+          } catch {
+            await api.write('/ip/proxy/access/add', [
+              `=src-address=${nonPayCidr}`,
+              '=action=deny',
+              `=comment=${NONPAY_PROXY.denyCaptive}`,
+            ]);
+            proxyDeny = true;
+          }
         }
       } else {
         proxyDeny = true;
