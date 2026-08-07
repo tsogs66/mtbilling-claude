@@ -2966,7 +2966,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
         '=name=mtb-fix-once',
         `=on-event=${scriptName}`,
         '=start-time=00:00:01',
-        '=interval=00:00:05',
+        '=interval=0',
         '=comment=MT-Billing captive repair once',
       ]);
       if (username) {
