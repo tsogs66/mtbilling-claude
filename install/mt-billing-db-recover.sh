@@ -7,13 +7,16 @@
 #
 # Usage (on the billing host):
 #   sudo bash /opt/mt-billing/install/mt-billing-db-recover.sh
+#   sudo bash /opt/mt-billing/install/mt-billing-db-recover.sh --from backup-2026-07-30T13-08-15-196Z.db
+#   sudo bash /opt/mt-billing/install/mt-billing-db-recover.sh --from /root/my-backup.db
 #   sudo bash /opt/mt-billing/install/mt-billing-db-recover.sh --reset-db
 #
 # Order of operations:
 #   1) stop API
-#   2) restore newest healthy backup (panel backups or /var/backups)
-#   3) else sqlite3 .recover from the corrupt live DB
-#   4) with --reset-db: wipe DB and let the API re-seed (loses billing data)
+#   2) if --from given, restore that file (name under server/data/backups/ or full path)
+#   3) else restore newest healthy backup (panel backups or /var/backups)
+#   4) else sqlite3 .recover from the corrupt live DB
+#   5) with --reset-db: wipe DB and let the API re-seed (loses billing data)
 #
 set -euo pipefail
 
@@ -27,21 +30,33 @@ API_HEALTH="http://127.0.0.1:4000/api/health"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 QUARANTINE="${DATA_DIR}/corrupt-${STAMP}"
 RESET_DB=0
+FROM_PATH=""
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
 log_warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
 log_err() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
 
+prev=""
 for arg in "$@"; do
+  if [[ "$prev" == "--from" ]]; then
+    FROM_PATH="$arg"
+    prev=""
+    continue
+  fi
   case "$arg" in
+    --from) prev="--from" ;;
     --reset-db) RESET_DB=1 ;;
     -h|--help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
   esac
 done
+if [[ "$prev" == "--from" ]]; then
+  log_err "--from requires a backup file name or path"
+  exit 1
+fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
   log_err "Run as root: sudo bash $0"
@@ -146,6 +161,52 @@ find_backup_candidates() {
   printf '%s\n' "${found[@]+"${found[@]}"}"
 }
 
+apply_backup_file() {
+  local candidate="$1"
+  if ! db_ok "$candidate"; then
+    log_err "Backup failed integrity_check: ${candidate}"
+    return 1
+  fi
+  quarantine_live
+  cp -a "$candidate" "$DB_PATH"
+  rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
+  log_ok "Restored from ${candidate}"
+  return 0
+}
+
+resolve_from_arg() {
+  local arg="$1"
+  local candidates=()
+  if [[ -f "$arg" ]]; then
+    candidates+=("$arg")
+  fi
+  if [[ -f "${PANEL_BACKUPS}/${arg}" ]]; then
+    candidates+=("${PANEL_BACKUPS}/${arg}")
+  fi
+  if [[ -f "${DATA_DIR}/${arg}" ]]; then
+    candidates+=("${DATA_DIR}/${arg}")
+  fi
+  if [[ -f "/root/${arg}" ]]; then
+    candidates+=("/root/${arg}")
+  fi
+  if [[ -f "/tmp/${arg}" ]]; then
+    candidates+=("/tmp/${arg}")
+  fi
+  if [[ "${#candidates[@]}" -eq 0 ]]; then
+    log_err "Backup not found: ${arg}"
+    log_err "Tried: ${arg}, ${PANEL_BACKUPS}/${arg}, ${DATA_DIR}/${arg}, /root/${arg}, /tmp/${arg}"
+    return 1
+  fi
+  printf '%s\n' "${candidates[0]}"
+}
+
+restore_from_explicit() {
+  local resolved
+  resolved="$(resolve_from_arg "$FROM_PATH")" || return 1
+  log_info "Using --from backup: ${resolved}"
+  apply_backup_file "$resolved"
+}
+
 restore_from_backup() {
   log_info "Searching for healthy backups..."
   local candidate
@@ -154,15 +215,10 @@ restore_from_backup() {
     [[ -z "$candidate" ]] && continue
     tried=$((tried + 1))
     log_info "Testing backup: ${candidate}"
-    if db_ok "$candidate"; then
-      quarantine_live
-      cp -a "$candidate" "$DB_PATH"
-      # Drop leftover WAL/SHM so SQLite opens the restored main file cleanly
-      rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
-      log_ok "Restored from ${candidate}"
+    if apply_backup_file "$candidate"; then
       return 0
     fi
-    log_warn "Backup failed integrity_check: ${candidate}"
+    log_warn "Skipping unhealthy backup: ${candidate}"
   done < <(find_backup_candidates)
 
   if [[ "$tried" -eq 0 ]]; then
