@@ -2120,6 +2120,53 @@ body {
   opacity: 0.7;
 }
 
+/*
+ * Mobile / tablet: keep flowing dashes + soft glow look via the underlay stroke,
+ * but disable per-cable SVG drop-shadow filters (main GPU stall on Android Chrome).
+ * ONU pulse stays, with a shorter ring so box-shadow animation is cheaper.
+ */
+.leaflet-interactive.flow-line-client.flow-line-lite,
+.leaflet-interactive.flow-line-client.flow-line-lite.is-hot,
+.leaflet-interactive.flow-line-client.flow-line-lite.flow-line-client-online,
+.leaflet-interactive.flow-line-client.flow-line-lite.flow-line-client-offline,
+.leaflet-interactive.flow-line-client.flow-line-lite.flow-line-client-expired,
+.leaflet-interactive.flow-line-client.flow-line-lite.flow-line-client-non-payment,
+.leaflet-interactive.flow-line-client.flow-line-lite.flow-line-client-disabled,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client.is-hot,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client-online,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client-offline,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client-expired,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client-non-payment,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-client-disabled,
+.map-stage.is-constrained-map .leaflet-interactive.flow-line-pulse-online {
+  filter: none !important;
+}
+@media (pointer: coarse), (hover: none) and (max-width: 1024px) {
+  .leaflet-interactive.flow-line-client,
+  .leaflet-interactive.flow-line-client.is-hot,
+  .leaflet-interactive.flow-line-client-online,
+  .leaflet-interactive.flow-line-client-offline,
+  .leaflet-interactive.flow-line-client-expired,
+  .leaflet-interactive.flow-line-client-non-payment,
+  .leaflet-interactive.flow-line-client-disabled,
+  .leaflet-interactive.flow-line-pulse-online {
+    filter: none !important;
+  }
+  .map-onu-round.online {
+    animation-name: onu-color-pulse-lite;
+    animation-duration: 2.2s;
+  }
+  .mapfx-drop,
+  .mapfx-flake {
+    filter: none !important;
+  }
+}
+.map-stage.is-constrained-map .map-onu-round.online {
+  animation-name: onu-color-pulse-lite;
+  animation-duration: 2.2s;
+}
+
 @keyframes line-pulse {
   0%, 100% { stroke-opacity: 0.55; }
   50% { stroke-opacity: 1; }
@@ -2688,6 +2735,18 @@ body {
   }
   70% {
     box-shadow: 0 0 0 18px transparent, 0 0 2px rgba(0, 0, 0, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent, 0 0 2px rgba(0, 0, 0, 0.4);
+  }
+}
+/* Smaller pulse ring for mobile/tablet — same effect, less shadow fill cost */
+@keyframes onu-color-pulse-lite {
+  0% {
+    box-shadow: 0 0 0 1px var(--onu-glow), 0 0 2px rgba(0, 0, 0, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px transparent, 0 0 2px rgba(0, 0, 0, 0.4);
   }
   100% {
     box-shadow: 0 0 0 0 transparent, 0 0 2px rgba(0, 0, 0, 0.4);

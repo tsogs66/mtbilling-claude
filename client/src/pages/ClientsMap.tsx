@@ -84,9 +84,47 @@ const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
   disabled: { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
 };
 
+/**
+ * Touch tablets / phones: keep dash animation + glow look, but cut GPU cost
+ * (SVG drop-shadow filters + 60fps style thrash stall Chrome/Android).
+ */
+function detectConstrainedMap(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.matchMedia('(pointer: coarse)').matches) return true;
+    if (window.matchMedia('(hover: none)').matches && window.matchMedia('(max-width: 1024px)').matches) {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return /Android|iPad|iPhone|iPod/i.test(navigator.userAgent || '');
+}
+
+function useConstrainedMap(): boolean {
+  const [constrained, setConstrained] = useState(detectConstrainedMap);
+  useEffect(() => {
+    const update = () => setConstrained(detectConstrainedMap());
+    const mqCoarse = window.matchMedia('(pointer: coarse)');
+    const mqHover = window.matchMedia('(hover: none)');
+    const mqWidth = window.matchMedia('(max-width: 1024px)');
+    mqCoarse.addEventListener?.('change', update);
+    mqHover.addEventListener?.('change', update);
+    mqWidth.addEventListener?.('change', update);
+    window.addEventListener('resize', update);
+    return () => {
+      mqCoarse.removeEventListener?.('change', update);
+      mqHover.removeEventListener?.('change', update);
+      mqWidth.removeEventListener?.('change', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+  return constrained;
+}
+
 /** CSS class for animated client cables (dashes run NAP → ONU via JS dashOffset). */
-function clientCableClass(state: ClientState, highlighted: boolean): string {
-  const base = `flow-line-client flow-line-client-${state}`;
+function clientCableClass(state: ClientState, highlighted: boolean, lite = false): string {
+  const base = `flow-line-client flow-line-client-${state}${lite ? ' flow-line-lite' : ''}`;
   return highlighted ? `${base} is-hot` : base;
 }
 
@@ -94,22 +132,42 @@ type FlowDashEntry = {
   getEl: () => SVGPathElement | null;
   offsetRef: { current: number };
   optsRef: { current: { dashArray: string; speed: number; className: string } };
+  primedRef: { current: boolean };
 };
 
 /** One shared rAF for all animated cables (avoids one loop per fiber line). */
 const flowDashEntries = new Set<FlowDashEntry>();
 let flowDashRaf = 0;
 let flowDashLast = 0;
+/** ~30fps on tablets; full refresh rate on desktop. */
+let flowDashMinFrameMs = 0;
 
-function applyFlowDash(el: SVGPathElement, value: number, dash: string, cls: string) {
-  el.setAttribute('stroke-dasharray', dash);
-  el.setAttribute('stroke-dashoffset', String(value));
-  el.style.setProperty('stroke-dasharray', dash, 'important');
-  el.style.setProperty('stroke-dashoffset', String(value), 'important');
-  el.style.setProperty('stroke-opacity', '1', 'important');
-  for (const c of cls.split(/\s+/)) {
-    if (c) el.classList.add(c);
+function setFlowDashConstrained(constrained: boolean) {
+  flowDashMinFrameMs = constrained ? 33 : 0;
+}
+
+function applyFlowDash(
+  el: SVGPathElement,
+  value: number,
+  dash: string,
+  cls: string,
+  mode: 'full' | 'offset' = 'offset'
+) {
+  // Half-pixel quantize cuts redundant style writes when many cables share a frame.
+  const rounded = Math.round(value * 2) / 2;
+  if (mode === 'offset' && el.dataset.flowOff === String(rounded)) return;
+  el.dataset.flowOff = String(rounded);
+
+  if (mode === 'full') {
+    el.setAttribute('stroke-dasharray', dash);
+    el.style.setProperty('stroke-dasharray', dash, 'important');
+    el.style.setProperty('stroke-opacity', '1', 'important');
+    for (const c of cls.split(/\s+/)) {
+      if (c) el.classList.add(c);
+    }
   }
+  el.setAttribute('stroke-dashoffset', String(rounded));
+  el.style.setProperty('stroke-dashoffset', String(rounded), 'important');
 }
 
 function ensureFlowDashLoop() {
@@ -120,14 +178,30 @@ function ensureFlowDashLoop() {
       flowDashRaf = 0;
       return;
     }
-    const dtMs = Math.min(32, Math.max(0, now - flowDashLast));
+    if (document.visibilityState !== 'visible') {
+      // Hard-pause while tab/app is hidden (restart via visibilitychange).
+      flowDashRaf = 0;
+      return;
+    }
+    const elapsed = now - flowDashLast;
+    if (flowDashMinFrameMs > 0 && elapsed < flowDashMinFrameMs) {
+      flowDashRaf = requestAnimationFrame(tick);
+      return;
+    }
+    const dtMs = Math.min(flowDashMinFrameMs > 0 ? 48 : 32, Math.max(0, elapsed));
     flowDashLast = now;
-    if (document.visibilityState === 'visible' && dtMs > 0) {
+    if (dtMs > 0) {
       for (const entry of flowDashEntries) {
         const { dashArray: dash, speed: pxPerSec, className: cls } = entry.optsRef.current;
         entry.offsetRef.current -= (pxPerSec * dtMs) / 1000;
         const el = entry.getEl();
-        if (el) applyFlowDash(el, entry.offsetRef.current, dash, cls);
+        if (!el) continue;
+        if (!entry.primedRef.current) {
+          applyFlowDash(el, entry.offsetRef.current, dash, cls, 'full');
+          entry.primedRef.current = true;
+        } else {
+          applyFlowDash(el, entry.offsetRef.current, dash, cls, 'offset');
+        }
       }
     }
     flowDashRaf = requestAnimationFrame(tick);
@@ -143,10 +217,20 @@ function registerFlowDash(entry: FlowDashEntry) {
   };
 }
 
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && flowDashEntries.size > 0) {
+      ensureFlowDashLoop();
+    }
+  });
+}
+
 /**
  * Imperative animated cable — continuous dash flow OLT → NAP → ONU.
  * Offset decreases forever (no wrap reset) so motion never hitch/pauses.
  * Style updates do not remount the layer (avoids animation restarts on poll).
+ * On constrained (mobile/tablet) devices: keep animation, drop SVG filter glow
+ * (soft underlay carries the glow look), throttle the shared rAF to ~30fps.
  */
 function FlowPolyline({
   positions,
@@ -157,6 +241,8 @@ function FlowPolyline({
   dashArray = '12 16',
   /** Dash travel speed in CSS px per second (along the path toward the child). */
   speed = 48,
+  /** Mobile/tablet: lighter paint path (animation kept). */
+  lite = false,
 }: {
   positions: [number, number][];
   color: string;
@@ -165,12 +251,14 @@ function FlowPolyline({
   className?: string;
   dashArray?: string;
   speed?: number;
+  lite?: boolean;
 }) {
   const map = useMap();
   const posKey = JSON.stringify(positions);
   const layerRef = useRef<L.Polyline | null>(null);
   const underlayRef = useRef<L.Polyline | null>(null);
   const offsetRef = useRef(0);
+  const primedRef = useRef(false);
   const optsRef = useRef({ color, weight, opacity, className, dashArray, speed });
   optsRef.current = { color, weight, opacity, className, dashArray, speed };
 
@@ -185,10 +273,11 @@ function FlowPolyline({
     }
     const renderer = anyMap.__flowSvg;
 
+    // Soft underlay doubles as the glow stand-in when SVG filters are disabled on lite.
     const underlay = L.polyline(positions, {
       color: c0,
-      weight: Math.max(1.5, w0 - 0.5),
-      opacity: Math.min(0.35, o0 * 0.4),
+      weight: Math.max(lite ? 2.5 : 1.5, w0 + (lite ? 1.25 : -0.5)),
+      opacity: lite ? Math.min(0.45, o0 * 0.55) : Math.min(0.35, o0 * 0.4),
       interactive: false,
       className: 'flow-line-underlay',
       lineCap: 'round',
@@ -209,6 +298,7 @@ function FlowPolyline({
 
     underlayRef.current = underlay;
     layerRef.current = layer;
+    primedRef.current = false;
 
     const getEl = (): SVGPathElement | null => {
       const el =
@@ -219,9 +309,12 @@ function FlowPolyline({
     };
 
     const el0 = getEl();
-    if (el0) applyFlowDash(el0, offsetRef.current, dash0, cls0);
+    if (el0) {
+      applyFlowDash(el0, offsetRef.current, dash0, cls0, 'full');
+      primedRef.current = true;
+    }
 
-    const unregister = registerFlowDash({ getEl, offsetRef, optsRef });
+    const unregister = registerFlowDash({ getEl, offsetRef, optsRef, primedRef });
 
     return () => {
       unregister();
@@ -231,7 +324,7 @@ function FlowPolyline({
       underlayRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, posKey]);
+  }, [map, posKey, lite]);
 
   // Update paint without remounting (keeps dash motion continuous across polls).
   useEffect(() => {
@@ -249,16 +342,19 @@ function FlowPolyline({
     } as L.PathOptions);
     underlay?.setStyle({
       color,
-      weight: Math.max(1.5, weight - 0.5),
-      opacity: Math.min(0.35, opacity * 0.4),
+      weight: Math.max(lite ? 2.5 : 1.5, weight + (lite ? 1.25 : -0.5)),
+      opacity: lite ? Math.min(0.45, opacity * 0.55) : Math.min(0.35, opacity * 0.4),
     });
     // setStyle can wipe dashoffset — restore immediately so motion doesn't hitch.
     const el =
       (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
       (layer as any)._path ||
       null;
-    if (el) applyFlowDash(el as SVGPathElement, offsetRef.current, dashArray, className);
-  }, [color, weight, opacity, dashArray, className]);
+    if (el) {
+      applyFlowDash(el as SVGPathElement, offsetRef.current, dashArray, className, 'full');
+      primedRef.current = true;
+    }
+  }, [color, weight, opacity, dashArray, className, lite]);
 
   return null;
 }
@@ -405,17 +501,19 @@ function equipIcon(name: string, kind: string, active = false, online?: boolean 
  * map coordinates/zoom, so (unlike a tiled radar image) it never goes blank
  * or misaligned as the map is panned/zoomed.
  */
-function MapWeatherOverlay({ category }: { category: WeatherCategory }) {
+function MapWeatherOverlay({ category, lite = false }: { category: WeatherCategory; lite?: boolean }) {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
+  const dropCount = lite ? 28 : 70;
+  const flakeCount = lite ? 18 : 45;
   const drops = useMemo(
-    () => Array.from({ length: 70 }, () => ({ left: rand(0, 100), delay: rand(0, 1.5), duration: rand(0.7, 1.3) })),
+    () => Array.from({ length: dropCount }, () => ({ left: rand(0, 100), delay: rand(0, 1.5), duration: rand(0.7, 1.3) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [category]
+    [category, dropCount]
   );
   const flakes = useMemo(
-    () => Array.from({ length: 45 }, () => ({ left: rand(0, 100), delay: rand(0, 4), duration: rand(3.5, 6), size: rand(5, 9) })),
+    () => Array.from({ length: flakeCount }, () => ({ left: rand(0, 100), delay: rand(0, 4), duration: rand(3.5, 6), size: rand(5, 9) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [category]
+    [category, flakeCount]
   );
 
   if (category === 'rain' || category === 'storm') {
@@ -650,6 +748,10 @@ const emptyNap = (
 
 export default function ClientsMap() {
   const { current } = useRouterDevice();
+  const constrainedMap = useConstrainedMap();
+  useEffect(() => {
+    setFlowDashConstrained(constrainedMap);
+  }, [constrainedMap]);
   const [servers, setServers] = useState<ServerNode[]>([]);
   const [naps, setNaps] = useState<Nap[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -1533,7 +1635,7 @@ export default function ClientsMap() {
           </div>
         )}
 
-        <div id="map-wrap" className="map-stage overflow-hidden">
+        <div id="map-wrap" className={`map-stage overflow-hidden${constrainedMap ? ' is-constrained-map' : ''}`}>
           {drawMode && (
             <div className="map-draw-banner bg-brand-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg flex flex-wrap items-center gap-3">
               <span>
@@ -1618,6 +1720,7 @@ export default function ClientsMap() {
                   className="flow-line-backbone"
                   dashArray="12 16"
                   speed={52}
+                  lite={constrainedMap}
                 />
               );
             })}
@@ -1646,6 +1749,7 @@ export default function ClientsMap() {
                   className="flow-line-backbone"
                   dashArray="12 16"
                   speed={56}
+                  lite={constrainedMap}
                 />
               );
             })}
@@ -1677,6 +1781,7 @@ export default function ClientsMap() {
                     className="flow-line-backbone"
                     dashArray="10 14"
                     speed={54}
+                    lite={constrainedMap}
                   />
                 );
               }
@@ -1692,6 +1797,7 @@ export default function ClientsMap() {
                     className="flow-line-backbone"
                     dashArray="10 14"
                     speed={54}
+                    lite={constrainedMap}
                   />
                 );
               }
@@ -1713,9 +1819,10 @@ export default function ClientsMap() {
                   color={lineColor}
                   weight={hi ? 3.5 : state === 'online' ? 3 : 2.5}
                   opacity={(state === 'online' ? 0.98 : 0.85) * lineDim(hi)}
-                  className={clientCableClass(state, hi)}
+                  className={clientCableClass(state, hi, constrainedMap)}
                   dashArray={state === 'disabled' ? '6 16' : '12 16'}
                   speed={state === 'online' ? 64 : state === 'disabled' ? 28 : 48}
+                  lite={constrainedMap}
                 />
               );
             })}
@@ -1835,7 +1942,9 @@ export default function ClientsMap() {
             })}
           </MapContainer>
 
-          {weatherFxOn && dominantWeatherCategory && <MapWeatherOverlay category={dominantWeatherCategory} />}
+          {weatherFxOn && dominantWeatherCategory && (
+            <MapWeatherOverlay category={dominantWeatherCategory} lite={constrainedMap} />
+          )}
         </div>
       </div>
 
