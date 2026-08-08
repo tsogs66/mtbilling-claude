@@ -352,6 +352,23 @@ function napIcon(name: string, active = false) {
   });
 }
 
+/** Standalone splitter — passive optical split (one input → multiple legs) */
+function splitterIcon(name: string, active = false) {
+  const svg = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+    <path d="M3 12h6M9 12l6-5M9 12l6 5M15 7h5M15 17h5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="9" cy="12" r="1.6" fill="#fff"/>
+  </svg>`;
+  return L.divIcon({
+    className: 'map-equip-marker',
+    html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
+      <span class="map-badge map-badge-splitter" title="Splitter">${svg}</span>
+      <span class="map-equip-label">${escapeHtml(name)}</span>
+    </div>`,
+    iconSize: [110, 26],
+    iconAnchor: [13, 13],
+  });
+}
+
 /** Client ONU — CPE router glyph; pulse when online */
 function onuIcon(state: ClientState, hovered = false, selected = false) {
   const { fill, glow } = CLIENT_COLORS[state];
@@ -731,6 +748,60 @@ export default function ClientsMap() {
   const olts = useMemo(() => naps.filter((n) => n.kind === 'olt'), [naps]);
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
+
+  // Standalone splitters have no coordinates of their own, so derive a map
+  // position for each: a splitter sits on the fiber path between its origin
+  // (OLT / NAP / upstream splitter) and the NAPs it feeds, so we place it
+  // partway along that path. Resolved iteratively so splitter→splitter chains
+  // settle (a child splitter waits until its parent splitter has a position).
+  const splitterPositions = useMemo(() => {
+    const pos = new Map<number, [number, number]>();
+    const hasCoord = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+    const napChildren = new Map<number, [number, number][]>();
+    for (const n of naps) {
+      if (n.originSplitterId && hasCoord(n.lat) && hasCoord(n.lng)) {
+        const arr = napChildren.get(n.originSplitterId) || [];
+        arr.push([n.lat, n.lng]);
+        napChildren.set(n.originSplitterId, arr);
+      }
+    }
+    const parentPosOf = (s: Splitter): [number, number] | null => {
+      if (s.originId == null) return null;
+      if (s.originKind === 'splitter') return pos.get(s.originId) || null;
+      const p = napsById[s.originId];
+      return p && hasCoord(p.lat) && hasCoord(p.lng) ? [p.lat, p.lng] : null;
+    };
+    const centroid = (pts: [number, number][]): [number, number] | null => {
+      if (!pts.length) return null;
+      return [
+        pts.reduce((a, p) => a + p[0], 0) / pts.length,
+        pts.reduce((a, p) => a + p[1], 0) / pts.length,
+      ];
+    };
+
+    // Multiple passes so splitter→splitter chains resolve parent-first.
+    for (let pass = 0; pass <= splitters.length; pass++) {
+      let changed = false;
+      for (const s of splitters) {
+        if (pos.has(s.id)) continue;
+        const parent = parentPosOf(s);
+        // Parent is another splitter not positioned yet — try again next pass.
+        if (s.originKind === 'splitter' && !parent) continue;
+        const kids = centroid(napChildren.get(s.id) || []);
+        let p: [number, number] | null = null;
+        if (parent && kids) p = [(parent[0] + kids[0]) / 2, (parent[1] + kids[1]) / 2];
+        else if (parent) p = [parent[0] + 0.0009, parent[1] + 0.0009];
+        else if (kids) p = [kids[0] - 0.0009, kids[1] - 0.0009];
+        if (p) {
+          pos.set(s.id, p);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    return pos;
+  }, [naps, splitters, napsById]);
 
   const [weather, setWeather] = useState<Record<string, WeatherNow | null>>({});
   const weatherTargets = useMemo(
@@ -1579,6 +1650,54 @@ export default function ClientsMap() {
               );
             })}
 
+            {/* Splitter feeds: parent (OLT/NAP/upstream splitter) → splitter, and
+                splitter → each NAP it serves. Splitters have no coordinates, so
+                they are placed on a derived point along the path (splitterPositions).
+                Same animated backbone effect as the OLT/NAP lines. */}
+            {splitters.flatMap((s) => {
+              const sp = splitterPositions.get(s.id);
+              if (!sp) return [];
+              const parentPos: [number, number] | null =
+                s.originId == null
+                  ? null
+                  : s.originKind === 'splitter'
+                    ? splitterPositions.get(s.originId) || null
+                    : napsById[s.originId]
+                      ? [napsById[s.originId].lat, napsById[s.originId].lng]
+                      : null;
+              const lines = [];
+              if (parentPos) {
+                lines.push(
+                  <FlowPolyline
+                    key={`spl-in-${s.id}`}
+                    positions={[parentPos, sp]}
+                    color="#f59e0b"
+                    weight={2.5}
+                    opacity={0.95 * lineDim(false)}
+                    className="flow-line-backbone"
+                    dashArray="10 14"
+                    speed={54}
+                  />
+                );
+              }
+              for (const n of naps) {
+                if (n.originSplitterId !== s.id) continue;
+                lines.push(
+                  <FlowPolyline
+                    key={`spl-nap-${s.id}-${n.id}`}
+                    positions={[sp, [n.lat, n.lng]]}
+                    color="#f59e0b"
+                    weight={2.5}
+                    opacity={0.95 * lineDim(false)}
+                    className="flow-line-backbone"
+                    dashArray="10 14"
+                    speed={54}
+                  />
+                );
+              }
+              return lines;
+            })}
+
             {filteredClients.map((c) => {
               const nap = c.napId ? napsById[c.napId] : null;
               if (!nap) return null;
@@ -1667,6 +1786,26 @@ export default function ClientsMap() {
                   </Popup>
                 </Marker>
               );
+            })}
+
+            {splitters.flatMap((s) => {
+              const sp = splitterPositions.get(s.id);
+              if (!sp) return [];
+              const originName =
+                s.originId == null
+                  ? '—'
+                  : s.originKind === 'splitter'
+                    ? splittersById.get(s.originId)?.name || `#${s.originId}`
+                    : napsById[s.originId]?.name || `#${s.originId}`;
+              return [
+                <Marker key={`spl-${s.id}`} position={sp} icon={splitterIcon(s.name, false)}>
+                  <Popup>
+                    <b>{s.name}</b><br />
+                    Splitter · {s.type} {s.ratio}
+                    <br />Origin: {s.originKind} {originName}
+                  </Popup>
+                </Marker>,
+              ];
             })}
 
             {filteredClients.map((c) => {
