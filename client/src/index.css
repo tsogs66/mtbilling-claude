@@ -2222,6 +2222,13 @@ body {
   background: linear-gradient(145deg, #14b8a6 0%, #0f766e 100%);
   box-shadow: 0 2px 6px rgba(13, 148, 136, 0.45);
 }
+.map-badge-splitter {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: linear-gradient(145deg, #fbbf24 0%, #d97706 100%);
+  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.45);
+}
 .map-equip-label {
   max-width: 96px;
   overflow: hidden;
