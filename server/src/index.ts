@@ -5150,8 +5150,9 @@ app.get('/api/pppoe/billing-recheck', (req, res) => {
 app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
   const preview = previewBillingEnforcement({ service });
-  // Skip mass MikroTik schedule refresh on HTTP recheck — that path routinely
-  // exceeds Cloudflare's ~100s limit (524) before expire/restore finishes.
+  // Skip mass MikroTik schedule refresh + expiry-reminder fan-out on HTTP
+  // recheck (Cloudflare ~100s). Grace/non-payment switches never SMS/email;
+  // disable-after-grace still notifies when email/SMS are enabled.
   const runOpts = {
     service,
     forceDisable: true as const,
@@ -5163,7 +5164,7 @@ app.post('/api/pppoe/billing-recheck', async (req, res) => {
     const result = await executeBillingEnforcement(runOpts);
     return res.json({
       ok: true,
-      message: `No overdue/past-grace/restore actions. Reminders ${result.remindersSent}.`,
+      message: `No overdue/past-grace/restore actions.`,
       ...preview,
       result,
     });

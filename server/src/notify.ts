@@ -947,9 +947,11 @@ export async function executeBillingEnforcement(opts?: {
    */
   ensureSchedules?: boolean;
   /**
-   * When false, skip expiry-reminder / non-payment / disable SMS+email.
-   * Manual HTTP recheck should set this false — Semaphore/SMTP fan-out
-   * routinely exceeds Cloudflare's ~100s proxy limit (524).
+   * When false, skip pre-due expiry reminders only.
+   * Manual HTTP recheck sets this false so a mass recheck does not fan out
+   * reminder SMS/email (and risk Cloudflare ~100s timeouts).
+   * Non-payment (grace) transitions never notify subscribers.
+   * Disable-after-grace always notifies when channels are enabled.
    * Default true (background automations).
    */
   sendNotices?: boolean;
@@ -971,7 +973,8 @@ export async function executeBillingEnforcement(opts?: {
   const now = Date.now();
   const forceDisable = !!opts?.forceDisable;
   const ensureSchedules = opts?.ensureSchedules !== false;
-  const sendNotices = opts?.sendNotices !== false;
+  /** Controls expiry reminders only — not disable notices. */
+  const sendReminders = opts?.sendNotices !== false;
   const routerConcurrency = Math.max(1, Math.min(8, Number(opts?.routerConcurrency) || 3));
   const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
   const summary = {
@@ -1071,7 +1074,7 @@ export async function executeBillingEnforcement(opts?: {
       ? Math.max(1, Number(portalPrefs.due_reminder_days) || s.days_before)
       : s.days_before;
     const reminderAllowed =
-      sendNotices &&
+      sendReminders &&
       s.reminder_enabled &&
       (!portalPrefs || Number(portalPrefs.due_reminder_enabled) === 1) &&
       st === 'active' &&
@@ -1187,22 +1190,9 @@ export async function executeBillingEnforcement(opts?: {
 
       summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
 
-      if (sendNotices) {
-        const channels: ('email' | 'sms')[] = [];
-        if (s.email_enabled) channels.push('email');
-        if (s.sms_enabled) channels.push('sms');
-        if (channels.length) {
-          let payUrl = '';
-          try {
-            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-          } catch {
-            /* optional */
-          }
-          const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
-          await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
-        }
-      }
+      // No subscriber SMS/email on grace / non-payment profile switch (recheck or
+      // scheduler). Notices are only: (1) expiry reminder from Notification
+      // settings days-before, and (2) disable after the grace period below.
       return;
     }
 
@@ -1237,7 +1227,8 @@ export async function executeBillingEnforcement(opts?: {
         hoursInNonPayment: classified.hoursOverdue,
       });
 
-      if (sendNotices) {
+      // Always notify on disable-after-grace (including PPPoE Recheck expiry).
+      {
         const channels: ('email' | 'sms')[] = [];
         if (s.email_enabled) channels.push('email');
         if (s.sms_enabled) channels.push('sms');
