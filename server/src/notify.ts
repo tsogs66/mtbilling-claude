@@ -947,11 +947,11 @@ export async function executeBillingEnforcement(opts?: {
    */
   ensureSchedules?: boolean;
   /**
-   * When false, skip pre-due expiry reminders only.
-   * Manual HTTP recheck sets this false so a mass recheck does not fan out
-   * reminder SMS/email (and risk Cloudflare ~100s timeouts).
-   * Non-payment (grace) transitions never notify subscribers.
-   * Disable-after-grace always notifies when channels are enabled.
+   * When false (PPPoE Recheck expiry), skip pre-due expiry reminders so a mass
+   * recheck does not fan out reminder SMS/email.
+   * Non-payment (grace) profile switches never notify subscribers.
+   * Disable-after-grace always notifies when email/SMS are enabled (including
+   * when recheck is what disables the account).
    * Default true (background automations).
    */
   sendNotices?: boolean;
@@ -973,7 +973,7 @@ export async function executeBillingEnforcement(opts?: {
   const now = Date.now();
   const forceDisable = !!opts?.forceDisable;
   const ensureSchedules = opts?.ensureSchedules !== false;
-  /** Controls expiry reminders only — not disable notices. */
+  /** Controls expiry reminders only. */
   const sendReminders = opts?.sendNotices !== false;
   const routerConcurrency = Math.max(1, Math.min(8, Number(opts?.routerConcurrency) || 3));
   const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
@@ -1227,7 +1227,8 @@ export async function executeBillingEnforcement(opts?: {
         hoursInNonPayment: classified.hoursOverdue,
       });
 
-      // Always notify on disable-after-grace (including PPPoE Recheck expiry).
+      // Notify when disabled after grace (recheck or scheduler). No notice for
+      // the earlier non-payment profile switch during grace.
       {
         const channels: ('email' | 'sms')[] = [];
         if (s.email_enabled) channels.push('email');
