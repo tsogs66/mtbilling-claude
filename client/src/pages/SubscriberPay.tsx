@@ -644,6 +644,10 @@ export default function SubscriberPay() {
   const submitted = data.status === 'submitted' || done?.status === 'submitted';
   const expired = data.status === 'expired';
   const rejected = data.status === 'rejected';
+  // PayMongo hosted checkout stays available while proof is under review or was
+  // rejected — the API already allows it; hiding the button left PayMongo-only
+  // portals (manual GCash/Maya/Cash off) with no way to pay online.
+  const canPayOnline = !paid && !expired && paymongoEnabled;
   const company = data.company || {};
   const merchants: { id: number; name: string; photo?: string | null; address?: string | null; notes?: string | null }[] =
     data.merchants || [];
@@ -805,7 +809,7 @@ export default function SubscriberPay() {
               )}
             </section>
 
-            {!paid && !expired && !submitted && paymongoEnabled && (
+            {canPayOnline && (
               <div className="space-y-2">
                 <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                   <button
@@ -849,7 +853,12 @@ export default function SubscriberPay() {
                   )}
                   {paymongoBusy ? 'Opening PayMongo…' : 'Pay Online'}
                 </button>
-                {manualCash && !manualGcash && !manualMaya && (
+                {submitted && (
+                  <p className="text-center text-xs text-slate-500">
+                    Proof is under review — you can still pay online with PayMongo to activate immediately.
+                  </p>
+                )}
+                {manualCash && !manualGcash && !manualMaya && !submitted && (
                   <button
                     type="button"
                     className={`w-full inline-flex items-center justify-center gap-2.5 rounded-xl font-semibold text-sm px-4 py-3.5 transition ${
@@ -872,7 +881,7 @@ export default function SubscriberPay() {
                     Cash
                   </button>
                 )}
-                {(manualGcash || manualMaya) && (
+                {(manualGcash || manualMaya) && !submitted && (
                   <p className="text-center text-xs text-slate-400">Or use a method below</p>
                 )}
               </div>

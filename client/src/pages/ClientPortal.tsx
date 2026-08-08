@@ -204,6 +204,8 @@ export default function ClientPortal() {
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [serviceFilter, setServiceFilter] = useState('');
   const [payBusy, setPayBusy] = useState(false);
+  const [payOnlineBusy, setPayOnlineBusy] = useState(false);
+  const [paymongoEnabled, setPaymongoEnabled] = useState(false);
   const [payMsg, setPayMsg] = useState('');
   const [plans, setPlans] = useState<{ id: number; name: string; rateLimit: string; price: number }[]>([]);
   const [planBusy, setPlanBusy] = useState(false);
@@ -237,6 +239,12 @@ export default function ClientPortal() {
     portalFetch('/public/portal/settings')
       .then((s) => setPageSettings((prev) => ({ ...prev, ...(s || {}) })))
       .catch(() => undefined);
+    fetch(`${getApiBase()}/public/paymongo/status`)
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        setPaymongoEnabled(!!j.enabled);
+      })
+      .catch(() => setPaymongoEnabled(false));
   }, []);
 
   useEffect(() => {
@@ -400,28 +408,64 @@ export default function ClientPortal() {
     setPayMsg('');
   };
 
+  const ensurePaymentLink = async (): Promise<PaymentLink | null> => {
+    const existing: PaymentLink | null = me?.paymentLink || null;
+    if (existing?.path && (existing.status === 'pending' || existing.status === 'submitted' || existing.status === 'rejected')) {
+      return existing;
+    }
+    const data = await portalFetch('/public/portal/payment-link', {
+      method: 'POST',
+      body: '{}',
+    });
+    const link: PaymentLink | null = data.paymentLink || null;
+    setMe((prev: any) => (prev ? { ...prev, paymentLink: link } : prev));
+    return link;
+  };
+
+  const payTokenFromLink = (link: PaymentLink | null) => {
+    if (!link?.path) return '';
+    const m = String(link.path).match(/\/pay\/([^/?#]+)/i);
+    return m?.[1] || '';
+  };
+
   const openPayment = async () => {
     setPayMsg('');
-    const existing: PaymentLink | null = me?.paymentLink || null;
-    // Reuse pending/submitted links; otherwise create a subscriber-initiated payment-link entry.
-    if (existing?.path && (existing.status === 'pending' || existing.status === 'submitted')) {
-      window.location.href = existing.path;
-      return;
-    }
     setPayBusy(true);
     try {
-      const data = await portalFetch('/public/portal/payment-link', {
-        method: 'POST',
-        body: '{}',
-      });
-      const link: PaymentLink | null = data.paymentLink || null;
-      setMe((prev: any) => (prev ? { ...prev, paymentLink: link } : prev));
+      const link = await ensurePaymentLink();
       if (link?.path) window.location.href = link.path;
       else setPayMsg('Payment page is not available yet. Contact your ISP.');
     } catch (err: any) {
       setPayMsg(err.message || 'Could not open payment page');
     } finally {
       setPayBusy(false);
+    }
+  };
+
+  /** Jump straight to PayMongo hosted checkout (QR Ph / GCash / Maya web). */
+  const openPayOnline = async () => {
+    setPayMsg('');
+    setPayOnlineBusy(true);
+    try {
+      const link = await ensurePaymentLink();
+      const payToken = payTokenFromLink(link);
+      if (!payToken) throw new Error('Payment page is not available yet. Contact your ISP.');
+      const origin = window.location.origin.replace(/\/$/, '');
+      const r = await fetch(`${getApiBase()}/public/pay/${encodeURIComponent(payToken)}/paymongo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          successUrl: `${origin}/pay/${payToken}?paid=1`,
+          cancelUrl: `${origin}/pay/${payToken}?canceled=1`,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start PayMongo checkout');
+      if (!j.checkoutUrl) throw new Error('No checkout URL returned');
+      window.location.href = j.checkoutUrl;
+    } catch (err: any) {
+      setPayMsg(err.message || 'Could not open PayMongo');
+      setPayOnlineBusy(false);
     }
   };
 
@@ -861,24 +905,51 @@ export default function ClientPortal() {
                 due {c.due || '—'}
               </div>
               {canPay && (
-                <div className="mt-1.5 flex flex-nowrap items-center justify-between gap-3">
-                  <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug truncate">
-                    {paymentLink?.expiresAt && paymentLink.status === 'pending'
-                      ? `Link expires ${String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}`
-                      : '\u00a0'}
+                <div className="mt-2 space-y-2">
+                  {paymongoEnabled && paymentLink?.status !== 'paid' && (
+                    <button
+                      type="button"
+                      onClick={() => void openPayOnline()}
+                      disabled={payOnlineBusy || payBusy}
+                      className="w-full portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 min-h-[44px] text-sm font-semibold"
+                    >
+                      {payOnlineBusy ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" /> Opening PayMongo…
+                        </>
+                      ) : (
+                        <>
+                          Pay Online
+                          <ExternalLink size={15} />
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <div className="flex flex-nowrap items-center justify-between gap-3">
+                    <div className="text-xs text-portal-dim min-w-0 flex-1 leading-snug truncate">
+                      {paymentLink?.expiresAt && paymentLink.status === 'pending'
+                        ? `Link expires ${String(paymentLink.expiresAt).replace('T', ' ').slice(0, 16)}`
+                        : paymongoEnabled
+                          ? 'Or open the full payment page'
+                          : '\u00a0'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void openPayment()}
+                      disabled={payBusy || payOnlineBusy}
+                      className={`${
+                        paymongoEnabled
+                          ? 'inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/15 text-white px-3 py-2 min-h-[40px] text-sm shrink-0 whitespace-nowrap transition'
+                          : 'portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 min-h-[40px] text-sm shrink-0 whitespace-nowrap'
+                      }`}
+                    >
+                      {payBusy ? 'Opening…' : paymongoEnabled ? 'Payment page' : payCtaLabel}
+                      <ExternalLink size={15} />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={openPayment}
-                    disabled={payBusy}
-                    className="portal-cta inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 min-h-[40px] text-sm shrink-0 whitespace-nowrap"
-                  >
-                    {payBusy ? 'Opening…' : payCtaLabel}
-                    <ExternalLink size={15} />
-                  </button>
                 </div>
               )}
-              {canPay && !paymentLink && (
+              {canPay && !paymentLink && !paymongoEnabled && (
                 <p className="mt-2 text-xs text-portal-dim leading-relaxed">
                   Already paid? Send your GCash/Maya details here — your ISP will see it under Payment Links.
                 </p>
