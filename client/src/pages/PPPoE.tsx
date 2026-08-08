@@ -127,6 +127,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [showBulkProfile, setShowBulkProfile] = useState(false);
   const [bulkMtProfile, setBulkMtProfile] = useState('');
   const [bulkProfileError, setBulkProfileError] = useState('');
+  const [showBulkPay, setShowBulkPay] = useState(false);
   const [tabError, setTabError] = useState('');
   const [tabBusy, setTabBusy] = useState(false);
   const [profileEdit, setProfileEdit] = useState<any | null>(null);
@@ -745,6 +746,21 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
+  const selectedUsers = useMemo(
+    () => users.filter((u) => selected.has(u.id)),
+    [users, selected]
+  );
+
+  const openBulkPayment = () => {
+    if (!selectedUsers.length) return;
+    // Single selection: reuse the full per-user payment modal (receipt print, contact edit).
+    if (selectedUsers.length === 1) {
+      setPayFor(selectedUsers[0]);
+      return;
+    }
+    setShowBulkPay(true);
+  };
+
   const openBulkChangePlan = () => {
     if (!selected.size) return;
     const opts = plans.filter((p) => !isSystemPppName(p.name));
@@ -1066,6 +1082,22 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                 <>
                   {someSelected && (
                     <>
+                      <button
+                        type="button"
+                        className="btn-secondary text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                        onClick={openBulkPayment}
+                        disabled={bulkBusy}
+                        title={
+                          selectedUsers.length === 1
+                            ? 'Process payment for the selected client'
+                            : `Process payment for ${selectedUsers.length} selected clients`
+                        }
+                      >
+                        <span className="font-bold text-sm leading-none" aria-hidden>
+                          {currencySymbol(currency)}
+                        </span>
+                        {selectedUsers.length === 1 ? 'Process payment' : `Process payment (${selectedUsers.length})`}
+                      </button>
                       <button type="button" className="btn-secondary text-sky-700 border-sky-200 hover:bg-sky-50" onClick={openBulkChangePlan} disabled={bulkBusy}>
                         <ReceiptText size={16} /> Change plan
                       </button>
@@ -1384,6 +1416,20 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           onClose={() => setPayFor(null)}
           onPaid={(msg) => {
             setPayFor(null);
+            showToast(msg);
+            loadUsers();
+          }}
+        />
+      )}
+
+      {showBulkPay && (
+        <BulkProcessPaymentModal
+          users={selectedUsers}
+          plans={plans}
+          onClose={() => setShowBulkPay(false)}
+          onDone={(msg) => {
+            setShowBulkPay(false);
+            setSelected(new Set());
             showToast(msg);
             loadUsers();
           }}
@@ -1999,6 +2045,352 @@ function PlanFormModal({
         <FormField label="Monthly Price" required>
           <input className="input" type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="999" />
         </FormField>
+      </div>
+    </Modal>
+  );
+}
+
+type BulkPayRowResult = {
+  id: number;
+  username: string;
+  customer?: string;
+  ok: boolean;
+  error?: string;
+  total?: number;
+  previousDue?: string;
+  subscriptionDue?: string;
+};
+
+function BulkProcessPaymentModal({
+  users,
+  plans,
+  onClose,
+  onDone,
+}: {
+  users: PUser[];
+  plans: any[];
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const planOptions = Array.isArray(plans) ? plans.filter((p) => !isSystemPppName(p.name)) : [];
+  const [keepPlan, setKeepPlan] = useState(true);
+  const [plan, setPlan] = useState(planOptions[0]?.name || '');
+  const [months, setMonths] = useState(1);
+  const [nonPaymentProfile, setNonPaymentProfile] = useState('non-payments');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [discountDays, setDiscountDays] = useState(0);
+  const [sendReceipt, setSendReceipt] = useState(true);
+  const [sendSms, setSendSms] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentName, setCurrentName] = useState('');
+  const [error, setError] = useState('');
+  const [results, setResults] = useState<BulkPayRowResult[]>([]);
+
+  const priceFor = (u: PUser) => {
+    const name = keepPlan ? u.profile : plan;
+    const fromPlan = planOptions.find((p) => p.name === name)?.price;
+    return Number(fromPlan ?? u.price ?? 0) || 0;
+  };
+  const estimatedTotal = users.reduce((sum, u) => {
+    const unit = priceFor(u);
+    const discount = Math.round((unit / 30) * Math.max(0, discountDays) * 100) / 100;
+    return sum + Math.max(0, unit * months - discount);
+  }, 0);
+
+  const payAll = async () => {
+    if (!users.length) return;
+    if (!keepPlan && !plan) {
+      setError('Select a billing plan, or keep each client’s current plan.');
+      return;
+    }
+    if (
+      !confirm(
+        `Record payment for ${users.length} client(s)?\n` +
+          `${months} month(s)` +
+          (keepPlan ? ', each keeps their current plan' : `, plan → ${plan}`) +
+          `\nEstimated total: ${peso(estimatedTotal)}`
+      )
+    ) {
+      return;
+    }
+    setRunning(true);
+    setError('');
+    const alreadyOk = new Map(results.filter((r) => r.ok).map((r) => [r.id, r]));
+    const queue = users.filter((u) => !alreadyOk.has(u.id));
+    const out: BulkPayRowResult[] = [...alreadyOk.values()];
+    setResults([...out]);
+    setProgress(users.length - queue.length);
+    let okCount = out.length;
+    let paidSum = out.reduce((s, r) => s + (Number(r.total) || 0), 0);
+
+    for (let i = 0; i < queue.length; i++) {
+      const u = queue[i];
+      setCurrentName(u.customer || u.username);
+      try {
+        const r = await api.post(
+          `/pppoe/users/${u.id}/payment`,
+          {
+            months,
+            plan: keepPlan ? undefined : plan,
+            expiration_profile: nonPaymentProfile,
+            payment_date: paymentDate,
+            discount_days: discountDays,
+            send_receipt: sendReceipt,
+            send_sms: sendSms,
+          },
+          { timeout: 120000 }
+        );
+        okCount++;
+        paidSum += Number(r.data.total) || 0;
+        out.push({
+          id: u.id,
+          username: u.username,
+          customer: u.customer,
+          ok: true,
+          total: r.data.total,
+          previousDue: r.data.previousDue,
+          subscriptionDue: r.data.subscriptionDue,
+        });
+      } catch (e: any) {
+        out.push({
+          id: u.id,
+          username: u.username,
+          customer: u.customer,
+          ok: false,
+          error: e?.response?.data?.error || e?.message || 'Payment failed',
+        });
+      }
+      setResults([...out]);
+      setProgress(users.length - queue.length + i + 1);
+    }
+
+    setRunning(false);
+    setCurrentName('');
+    const failCount = out.filter((r) => !r.ok).length;
+    if (okCount === 0) {
+      setError(`No payments recorded. ${failCount} failed — see details below.`);
+      return;
+    }
+    if (failCount === 0) {
+      onDone(`Bulk payment: ${okCount} paid (${peso(paidSum)})`);
+      return;
+    }
+    setError(`${okCount} paid (${peso(paidSum)}), ${failCount} failed — see details below, then click Done.`);
+  };
+
+  const finishMsg = () => {
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.filter((r) => !r.ok).length;
+    const paidSum = results.reduce((s, r) => s + (r.ok ? Number(r.total) || 0 : 0), 0);
+    return (
+      `Bulk payment: ${okCount} paid` +
+      (okCount ? ` (${peso(paidSum)})` : '') +
+      (failCount ? `, ${failCount} failed` : '')
+    );
+  };
+
+  const hasResults = results.length > 0;
+  const hasSuccess = results.some((r) => r.ok);
+
+  return (
+    <Modal
+      title="Process payment (selected)"
+      subtitle={`${users.length} client${users.length === 1 ? '' : 's'} selected`}
+      onClose={() => {
+        if (running) return;
+        if (hasSuccess) onDone(finishMsg());
+        else onClose();
+      }}
+      maxWidth="lg"
+      footer={
+        <ModalFooter
+          onCancel={() => {
+            if (running) return;
+            if (hasSuccess) onDone(finishMsg());
+            else onClose();
+          }}
+          onConfirm={hasResults && hasSuccess && !results.some((r) => !r.ok) ? undefined : payAll}
+          confirmLabel={
+            running
+              ? `Paying ${progress}/${users.length}…`
+              : hasResults
+                ? 'Retry failed'
+                : `Process ${users.length} payment${users.length === 1 ? '' : 's'}`
+          }
+          busy={running}
+          cancelLabel={hasSuccess ? 'Done' : 'Cancel'}
+        />
+      }
+    >
+      {error && (
+        <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>
+      )}
+
+      <div className="space-y-4">
+        <div className="rounded-xl border border-slate-200 max-h-40 overflow-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500 sticky top-0">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">Client</th>
+                <th className="text-left px-3 py-2 font-medium">Plan</th>
+                <th className="text-left px-3 py-2 font-medium">Due</th>
+                <th className="text-left px-3 py-2 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => {
+                const row = results.find((r) => r.id === u.id);
+                return (
+                  <tr key={u.id} className="border-t border-slate-100">
+                    <td className="px-3 py-1.5">
+                      <div className="font-medium text-slate-800">{u.customer || u.username}</div>
+                      <div className="text-slate-400">{u.username}</div>
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-600">{keepPlan ? u.profile : plan || u.profile}</td>
+                    <td className="px-3 py-1.5 text-slate-600">{(u.subscriptionDue || '').slice(0, 10)}</td>
+                    <td className="px-3 py-1.5">
+                      {!row && running && currentName === (u.customer || u.username) && (
+                        <span className="text-brand-600">Paying…</span>
+                      )}
+                      {!row && !(running && currentName === (u.customer || u.username)) && (
+                        <span className="text-slate-400">{u.status}</span>
+                      )}
+                      {row?.ok && (
+                        <span className="text-emerald-700">
+                          Paid {peso(row.total || 0)}
+                          {row.subscriptionDue ? ` · due ${row.subscriptionDue}` : ''}
+                        </span>
+                      )}
+                      {row && !row.ok && <span className="text-rose-600">{row.error}</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {running && (
+          <div className="space-y-1">
+            <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${Math.round((progress / Math.max(1, users.length)) * 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              {progress}/{users.length}
+              {currentName ? ` · ${currentName}` : ''}
+            </p>
+          </div>
+        )}
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="w-4 h-4 accent-brand-500"
+            checked={keepPlan}
+            disabled={running}
+            onChange={(e) => setKeepPlan(e.target.checked)}
+          />
+          Keep each client’s current billing plan
+        </label>
+
+        {!keepPlan && (
+          <FormField label="Billing Plan (applied to all)">
+            <select className="input" value={plan} disabled={running} onChange={(e) => setPlan(e.target.value)}>
+              {!planOptions.length && <option value="">No billing plans</option>}
+              {planOptions.map((p) => (
+                <option key={p.id} value={p.name}>
+                  {p.name} ({peso(p.price)})
+                </option>
+              ))}
+            </select>
+          </FormField>
+        )}
+
+        <div>
+          <span className="text-sm font-medium text-slate-700 mb-2 block">Months of Extension</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 2, 3, 6, 12].map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={running}
+                onClick={() => setMonths(m)}
+                className={`px-3 py-1.5 rounded-xl text-sm font-medium border transition-colors ${months === m ? 'bg-brand-500 text-white border-brand-500 shadow-glow-sm' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <FormField label="Non-Payment Profile">
+          <select
+            className="input"
+            value={nonPaymentProfile}
+            disabled={running}
+            onChange={(e) => setNonPaymentProfile(e.target.value)}
+          >
+            {SYSTEM_EXPIRE_PROFILES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </FormField>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <FormField label="Payment Date">
+            <input
+              className="input"
+              type="date"
+              value={paymentDate}
+              disabled={running}
+              onChange={(e) => setPaymentDate(e.target.value)}
+            />
+          </FormField>
+          <FormField label="Discount for Downtime (Days)">
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={discountDays}
+              disabled={running}
+              onChange={(e) => setDiscountDays(Math.max(0, Number(e.target.value)))}
+            />
+          </FormField>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3 text-sm text-slate-700">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-brand-500"
+              checked={sendReceipt}
+              disabled={running}
+              onChange={(e) => setSendReceipt(e.target.checked)}
+            />
+            Email receipt when the client has an email
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-brand-500"
+              checked={sendSms}
+              disabled={running}
+              onChange={(e) => setSendSms(e.target.checked)}
+            />
+            SMS when the client has a phone number
+          </label>
+        </div>
+
+        <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 flex justify-between text-sm">
+          <span className="text-slate-500">Estimated total</span>
+          <span className="font-bold text-slate-900">{peso(estimatedTotal)}</span>
+        </div>
       </div>
     </Modal>
   );
