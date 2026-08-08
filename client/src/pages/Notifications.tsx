@@ -381,7 +381,11 @@ export default function Notifications() {
 
             <div className="border-t border-slate-100 pt-3" />
 
-            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disable when overdue past the grace period (from due date)">
+            <Row
+              icon={<PowerOff size={16} className="text-rose-500" />}
+              label="Auto-disable on non-payment"
+              desc="Disable when overdue past the grace period (from due date). SMS/email are sent for expiry reminders (above) and when the account is disabled — not when it first moves to the non-payment profile during grace or Recheck expiry."
+            >
               <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
             </Row>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm pl-0 sm:pl-7">
