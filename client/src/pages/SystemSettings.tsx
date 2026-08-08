@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
-  Palette, Binary, Satellite, Usb, ExternalLink, Monitor,
+  Palette, Binary, Satellite, Usb, ExternalLink, Monitor, Smartphone,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -62,6 +62,7 @@ export default function SystemSettings() {
       {tab === 'panel' && (
         <>
           <PanelSettings app={app} setA={setA} save={saveApp} />
+          <AndroidAppInstall />
           <ServerRestart flash={flash} />
         </>
       )}
@@ -211,6 +212,61 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
             </div>
           </div>
         )}
+      </div>
+    </SettingsSection>
+  );
+}
+
+/** Rolling "android-latest" GitHub release — auto-rebuilt from main on every push,
+ *  so this always matches the currently deployed panel version. */
+const ANDROID_APK_URL =
+  'https://github.com/tsogs66/mtbilling-claude/releases/download/android-latest/app-debug.apk';
+const ANDROID_RELEASE_URL =
+  'https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest';
+
+function AndroidAppInstall() {
+  return (
+    <SettingsSection icon={Smartphone} title="Android App" className="mt-5">
+      <div className="max-w-3xl">
+        <div className="rounded-2xl border border-emerald-500/35 bg-emerald-500/10 p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
+              <Smartphone size={22} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-base font-bold text-slate-900">Install the Android app</div>
+              <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                Native Android shell for this panel. The APK below is auto-built from the latest update,
+                so it always matches the version currently running here. On first launch, enter this
+                panel&apos;s URL, then sign in with your usual credentials.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <a
+                  className="btn-primary inline-flex items-center gap-2 text-sm"
+                  href={ANDROID_APK_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Download size={16} /> Download Android app (APK)
+                </a>
+                <a
+                  className="btn-secondary inline-flex items-center gap-2 text-sm"
+                  href={ANDROID_RELEASE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={16} /> Release notes
+                </a>
+              </div>
+              <ol className="mt-3 text-xs text-slate-500 space-y-1 list-decimal pl-4 leading-relaxed">
+                <li>Open this page on the Android device (or transfer <code className="text-slate-700">app-debug.apk</code> to it).</li>
+                <li>Tap the APK and allow <b>&ldquo;Install unknown apps&rdquo;</b> for your browser/files app when prompted.</li>
+                <li>It is a debug build (unsigned), so Android may show an &ldquo;app not verified&rdquo; notice — that is expected.</li>
+                <li>Launch the app, enter this panel&apos;s URL, then sign in.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
       </div>
     </SettingsSection>
   );
