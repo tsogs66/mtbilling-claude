@@ -3000,12 +3000,12 @@ export async function inspectNonPaymentCaptive(
   );
 }
 
-/** RouterOS script: classic working webproxy captive → error.html */
+/** RouterOS script: classic webproxy captive → local webproxy/error.html */
 export function buildCaptiveEnsureScriptSource(opts: {
   nonPayCidr?: string;
   proxyPort?: number;
   portalRedirectUrl?: string;
-  /** Absolute HTTP URL for Android captive sheet (must not be empty). */
+  /** Unused for local error.html path (kept for call-site compatibility). */
   errorPageRedirectUrl?: string;
   billingLanIp?: string;
   landingAddress?: string;
@@ -3022,7 +3022,6 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const landingAddress = String(opts.landingAddress || '1.1.10.1').trim() || '1.1.10.1';
-  const billingLanIp = String(opts.billingLanIp || '192.168.0.120').trim() || '192.168.0.120';
   const username = String(opts.username || '').trim();
   const u = rosScriptEscape(username);
   const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
@@ -3030,23 +3029,10 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const allowCmt = NONPAY_PROXY.allowProxyPort;
   const redirCmt = NONPAY_PROXY.redirectHttp;
 
-  // Android "Sign in to Wi‑Fi" shows data:text/html, when action=redirect has an
-  // empty redirect-to. Always set an absolute HTTP error page URL.
-  let errorRedirect = String(opts.errorPageRedirectUrl || '').trim();
-  if (!errorRedirect) {
-    errorRedirect = `http://${billingLanIp}/error.html`;
-  }
-  errorRedirect = errorRedirect.replace(/\/$/, '');
-  if (!/\/error\.html$/i.test(errorRedirect)) {
-    errorRedirect = `${errorRedirect}/error.html`;
-  }
-  // Captive WebView is flaky on HTTPS — force http:// for the interstitial.
-  errorRedirect = errorRedirect.replace(/^https:\/\//i, 'http://');
-  const errorRedirectEsc = rosScriptEscape(errorRedirect);
-
-  // Winbox-proven matchers + required redirect-to (Android captive sheet):
-  //   0) allow dst-port=8080
-  //   1) redirect !landing:80 → http://billing/error.html
+  // Local file: Files → webproxy/error.html on the router.
+  // Winbox photo used action=redirect with no Redirect To; on current RouterOS
+  // that becomes data:text/html, (blank Android sheet). action=deny with the
+  // same matchers serves webproxy/error.html from the router filesystem.
   // Do NOT call `/ip proxy set` here — wedges script jobs on this board.
   return (
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
@@ -3061,12 +3047,11 @@ export function buildCaptiveEnsureScriptSource(opts: {
         `:do {/ip proxy access remove [find comment=${allowCmt}]} on-error={};` +
         `:do {/ip proxy access remove [find comment=${redirCmt}]} on-error={};` +
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=${proxyPort} action=allow]} on-error={};` +
+        // Drop empty redirect-to rules (Android blank data:text/html,).
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=redirect]} on-error={};` +
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=deny]} on-error={};` +
-        // Empty redirect-to → Android shows blank data:text/html, — never allow that.
         `:do {/ip proxy access add src-address=${nonPayCidr} dst-port=${proxyPort} action=allow comment=${allowCmt}} on-error={};` +
-        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=${billingLanIp} action=allow comment=mtb-wp-allow-billing} on-error={};` +
-        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect redirect-to="${errorRedirectEsc}" comment=${redirCmt}} on-error={};`) +
+        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=deny comment=${redirCmt}} on-error={};`) +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
@@ -3770,13 +3755,12 @@ export async function repairNonPaymentHttpRedirect(
       }
       try {
         const landing = '1.1.10.1';
-        const to = 'http://192.168.0.120/error.html';
+        // action=deny → serve Files/webproxy/error.html on the router
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
           `=dst-address=!${landing}`,
           '=dst-port=80',
-          '=action=redirect',
-          `=redirect-to=${to}`,
+          '=action=deny',
           `=comment=${NONPAY_PROXY.redirectHttp}`,
         ]);
         proxyRedirect = true;
@@ -3989,50 +3973,20 @@ export async function configureNonPaymentWebProxy(
           String(r['dst-port'] || '') === String(proxyPort) &&
           !rosBool(r.disabled)
       );
-      const billingLanForError =
-        (billingLanIps || []).find((ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) || '192.168.0.120';
-      const errorRedirectTo = (
-        String(opts.errorPageUrl || '').trim() || `http://${billingLanForError}/error.html`
-      )
-        .replace(/^https:\/\//i, 'http://')
-        .replace(/\/$/, '');
-      const errorRedirectFinal = /\/error\.html$/i.test(errorRedirectTo)
-        ? errorRedirectTo
-        : `${errorRedirectTo}/error.html`;
-
-      const hasClassicRedirect = (existing || []).some((r) => {
-        const action = String(r.action || '').toLowerCase();
-        const src = String(r['src-address'] || '');
-        const dst = String(r['dst-address'] || '');
-        const dport = String(r['dst-port'] || '');
-        const to = String(r['redirect-to'] || '');
-        // Must have non-empty redirect-to — empty → Android data:text/html, blank sheet.
-        return (
-          action === 'redirect' &&
-          !!to &&
-          !to.startsWith('data:') &&
-          src === nonPayCidr &&
-          dport === '80' &&
-          (dst === `!${landingAddress}` || dst.startsWith('!')) &&
-          !rosBool(r.disabled)
-        );
-      });
-
-      // Drop broken empty-redirect / deny experiments that produce blank captive sheets.
+      // Local webproxy/error.html via action=deny (same matchers as Winbox photo).
+      // Never leave action=redirect with empty redirect-to (Android data:text/html,).
       for (const row of [...(existing || [])]) {
         const cmt = String(row.comment || '');
         const action = String(row.action || '').toLowerCase();
         const src = String(row['src-address'] || '');
-        const to = String(row['redirect-to'] || '');
         if (src !== nonPayCidr) continue;
         const drop =
           cmt === NONPAY_PROXY.redirectPortal ||
           cmt === NONPAY_PROXY.denyCaptive ||
           cmt === 'mtb-portal-redir' ||
-          (action === 'redirect' && (!to || to.startsWith('data:'))) ||
-          (action === 'deny' &&
-            String(row['dst-port'] || '') === '80' &&
-            (String(row['dst-address'] || '').startsWith('!') || !String(row['dst-address'] || '')));
+          cmt === NONPAY_PROXY.redirectHttp ||
+          // Broken empty redirect (blank Android captive sheet)
+          (action === 'redirect' && String(row['dst-port'] || '') === '80');
         if (!drop || !row['.id']) continue;
         try {
           await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
@@ -4063,22 +4017,34 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
-      if (!hasClassicRedirect) {
+      const hasClassicDeny = (existing || []).some((r) => {
+        const action = String(r.action || '').toLowerCase();
+        const src = String(r['src-address'] || '');
+        const dst = String(r['dst-address'] || '');
+        const dport = String(r['dst-port'] || '');
+        return (
+          action === 'deny' &&
+          src === nonPayCidr &&
+          dport === '80' &&
+          (dst === `!${landingAddress}` || dst.startsWith('!')) &&
+          !rosBool(r.disabled)
+        );
+      });
+
+      if (!hasClassicDeny) {
         try {
           await api.write('/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
             `=dst-address=!${landingAddress}`,
             '=dst-port=80',
-            '=action=redirect',
-            `=redirect-to=${errorRedirectFinal}`,
+            '=action=deny',
             `=comment=${NONPAY_PROXY.redirectHttp}`,
           ]);
           existing.push({
-            action: 'redirect',
+            action: 'deny',
             'src-address': nonPayCidr,
             'dst-address': `!${landingAddress}`,
             'dst-port': '80',
-            'redirect-to': errorRedirectFinal,
             comment: NONPAY_PROXY.redirectHttp,
           });
         } catch {
@@ -4171,17 +4137,15 @@ export async function configureNonPaymentWebProxy(
         existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
       }
 
-      // Classic catch-all already ensured above (action=redirect → error.html).
-      // Do not add deny+redirect-to portal — that replaced the working Winbox layout.
+      // Classic catch-all: action=deny → Files/webproxy/error.html on the router.
       const proxyDeny =
-        hasClassicRedirect ||
+        hasClassicDeny ||
         (existing || []).some(
           (r) =>
-            String(r.action || '').toLowerCase() === 'redirect' &&
-            !!String(r['redirect-to'] || '') &&
-            !String(r['redirect-to'] || '').startsWith('data:') &&
+            String(r.action || '').toLowerCase() === 'deny' &&
             String(r['src-address'] || '') === nonPayCidr &&
             String(r['dst-port'] || '') === '80' &&
+            String(r['dst-address'] || '').startsWith('!') &&
             !rosBool(r.disabled)
         );
 

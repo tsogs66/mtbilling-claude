@@ -986,8 +986,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         nonPayCidr: b.nonPayCidr,
         proxyPort: b.proxyPort,
         portalRedirectUrl: `${publicBase}/portal`,
-        // Android captive sheet needs a real HTTP URL — empty redirect-to → data:text/html,
-        errorPageRedirectUrl: `http://${lanIp || '192.168.0.120'}/error.html`,
+        // Local MikroTik Files/webproxy/error.html via action=deny (not external URL).
         username: kickUser || undefined,
         billingLanIp: lanIp || '192.168.0.120',
         landingAddress: b.landingAddress,
@@ -998,7 +997,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         proxyEnabled: true,
         natHttpRedirect: true,
         proxyRedirect: true,
-        portalRedirectTo: `http://${lanIp || '192.168.0.120'}/error.html`,
+        portalRedirectTo: 'webproxy/error.html',
         kicked: viaScript.kicked ?? null,
         viaScript: viaScript.ran,
         scheduledAt: viaScript.scheduledAt || null,
