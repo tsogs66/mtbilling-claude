@@ -1716,6 +1716,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             <p>
               Grace is counted from each account’s <b>due date</b>. Within grace → switch PPP profile to non-payment (comment unchanged);
               past grace → disable only; due extended while on non-payment → restore plan profile. MikroTik schedulers handle grace/disable offline.
+              Recheck does <b>not</b> send expiry-reminder or non-payment SMS/email — subscribers are notified only from Notification settings
+              (days-before reminder) and when an account is disabled after grace.
             </p>
             {!!recheckPreview.toRestore?.length && (
               <div>
