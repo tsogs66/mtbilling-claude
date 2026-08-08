@@ -8,13 +8,15 @@
 #
 # Guest / VM (inside the container):
 #   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash
-#   sudo bash /opt/mt-billing/scripts/fetch-update-from-github.sh
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --run
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --enable-timer
+#   sudo bash /opt/mt-billing/scripts/fetch-update-from-github.sh --run
 #
 # Proxmox host (copy into LXC):
-#   sudo bash scripts/fetch-update-from-github.sh
-#   CTID=101 sudo bash scripts/fetch-update-from-github.sh
+#   sudo bash scripts/fetch-update-from-github.sh --run
+#   CTID=101 sudo bash scripts/fetch-update-from-github.sh --run
 #
-# Options:
+# Options (when piping via curl, use: sudo bash -s -- <flags>):
 #   --run          run mt-billing-update.sh after download
 #   --reinstall    run mt-billing-reinstall.sh after download (big update / factory reset)
 #   --enable-timer install systemd timer units and enable auto-update

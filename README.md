@@ -192,14 +192,17 @@ journalctl -u mt-billing-auto-update.service -n 50
 **Copy update scripts only** (no full app pull yet):
 
 ```bash
-# One-liner inside the LXC
+# One-liner inside the LXC (copy scripts only)
 curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash
+
+# One-liner inside the LXC (copy scripts + run update) — note: bash -s --
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --run
 
 # Proxmox host → copy into container, then run update
 sudo bash scripts/fetch-update-from-github.sh --run
 
-# Copy + enable 10-minute auto-update timer
-sudo bash scripts/fetch-update-from-github.sh --enable-timer
+# Copy + enable 10-minute auto-update timer (inside LXC)
+curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --enable-timer
 ```
 
 **Manual — from Proxmox host:**
