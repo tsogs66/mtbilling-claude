@@ -332,10 +332,49 @@ function timingSafeEqualStr(a: string, b: string) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-/** Verify PayMongo webhook signature (paymongo-signature header). */
-export function verifyPaymongoSignature(rawBody: string, signatureHeader: string | undefined): boolean {
-  const wh = String(row().paymongo_webhook_secret || '').trim();
-  if (!wh) return true; // allow if secret not set (dev); prefer setting it in production
+/**
+ * Verify PayMongo webhook signature (paymongo-signature header).
+ *
+ * Fails CLOSED. This endpoint is public and unauthenticated, and a "paid" event
+ * activates a subscriber for free via markPaymentLinkPaid() — so the signature
+ * is the only thing separating a real payment from a forged one. Previously an
+ * unset webhook secret returned true ("allow in dev"), which meant any install
+ * that had not pasted the webhook secret would accept a hand-crafted POST as
+ * proof of payment. A subscriber can read their own pay-link token straight out
+ * of the URL they were sent, so that was self-service free internet.
+ *
+ * Returns a reason so the caller can log/report exactly why a webhook bounced —
+ * a silently-rejected webhook is very hard to debug from the PayMongo side.
+ */
+export function verifyPaymongoWebhook(
+  rawBody: string,
+  signatureHeader: string | undefined
+): { ok: boolean; reason?: string } {
+  const r = row();
+  if (Number(r.paymongo_enabled) !== 1) {
+    return { ok: false, reason: 'PayMongo is disabled on this panel' };
+  }
+  const wh = String(r.paymongo_webhook_secret || '').trim();
+  if (!wh) {
+    return {
+      ok: false,
+      reason:
+        'PayMongo webhook secret is not configured — set it in Settings → PayMongo (webhook signing secret from the PayMongo dashboard) before webhooks can be trusted',
+    };
+  }
+  return verifyPaymongoSignature(rawBody, signatureHeader, wh)
+    ? { ok: true }
+    : { ok: false, reason: 'signature mismatch' };
+}
+
+/** Raw HMAC check. Callers should prefer verifyPaymongoWebhook (config + signature). */
+export function verifyPaymongoSignature(
+  rawBody: string,
+  signatureHeader: string | undefined,
+  webhookSecret?: string
+): boolean {
+  const wh = String(webhookSecret ?? row().paymongo_webhook_secret ?? '').trim();
+  if (!wh) return false;
   if (!signatureHeader) return false;
   // Format: t=timestamp,te=test_sig,li=live_sig
   const parts = Object.fromEntries(
