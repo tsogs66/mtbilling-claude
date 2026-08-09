@@ -217,10 +217,11 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
   );
 }
 
-/** Rolling "android-latest" GitHub release — auto-rebuilt from main on every push,
- *  so this always matches the currently deployed panel version. */
-const ANDROID_APK_URL =
-  'https://github.com/tsogs66/mtbilling-claude/releases/download/android-latest/app-debug.apk';
+/** Same-origin download proxied by the panel (see GET /api/android/app.apk).
+ *  Streaming through the panel avoids GitHub's cross-host signed-CDN redirect,
+ *  which on restricted ISP/appliance networks left the APK stalling near 100%. */
+const ANDROID_APK_URL = '/api/android/app.apk';
+/** Rolling "android-latest" release page (auto-rebuilt from main on every push). */
 const ANDROID_RELEASE_URL =
   'https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest';
 
@@ -244,8 +245,7 @@ function AndroidAppInstall() {
                 <a
                   className="btn-primary inline-flex items-center gap-2 text-sm"
                   href={ANDROID_APK_URL}
-                  target="_blank"
-                  rel="noreferrer"
+                  download="mt-billing.apk"
                 >
                   <Download size={16} /> Download Android app (APK)
                 </a>

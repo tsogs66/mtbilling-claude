@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import http from 'http';
+import { Readable } from 'node:stream';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -790,6 +791,54 @@ app.post('/api/sync/push', express.json({ limit: '80mb' }), syncAuth, (req, res)
     res.json({ ok: true, ...result });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Push failed' });
+  }
+});
+
+/**
+ * Public: stream the panel's Android APK through this origin.
+ *
+ * The GitHub release link 302-redirects to a short-lived signed URL on a
+ * *different* host (release-assets.githubusercontent.com). Devices that can
+ * reach the panel but have a flaky/filtered path to that CDN (common on ISP
+ * LANs / behind the Cloudflare tunnel) download most of the file and then stall
+ * without finishing. Proxying it here gives the device a clean same-origin
+ * attachment with a correct Content-Length, so the browser knows exactly when
+ * the download is complete and saves it as an installable APK.
+ *
+ * Public (registered before requireAuth) because a plain <a> download cannot
+ * send the staff JWT; it only re-serves an already-public GitHub release asset.
+ */
+const ANDROID_APK_URL =
+  process.env.MT_ANDROID_APK_URL ||
+  'https://github.com/tsogs66/mtbilling-claude/releases/download/android-latest/app-debug.apk';
+
+app.get('/api/android/app.apk', async (req, res) => {
+  try {
+    const upstream = await fetch(ANDROID_APK_URL, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'MT-Billing-Panel' },
+    });
+    if (!upstream.ok || !upstream.body) {
+      // Let the client still try the direct GitHub link.
+      return res.redirect(302, ANDROID_APK_URL);
+    }
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="mt-billing.apk"');
+    const len = upstream.headers.get('content-length');
+    if (len) res.setHeader('Content-Length', len);
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'HEAD') {
+      try { await upstream.body.cancel(); } catch { /* ignore */ }
+      return res.end();
+    }
+    const nodeStream = Readable.fromWeb(upstream.body as any);
+    nodeStream.on('error', () => {
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+    nodeStream.pipe(res);
+  } catch {
+    if (!res.headersSent) res.redirect(302, ANDROID_APK_URL);
   }
 });
 
