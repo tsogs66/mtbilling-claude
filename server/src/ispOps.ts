@@ -28,6 +28,7 @@ import {
   sendPortalActivationNotice,
 } from './notify.js';
 import { initPortalExtras, pushPortalActivity, registerPortalExtraRoutes } from './portalExtras.js';
+import { loginRateLimitCheck, loginRateLimitFail, loginRateLimitSuccess } from './loginRateLimit.js';
 
 const PLAN_CYCLE_DAYS = 30;
 
@@ -1398,10 +1399,23 @@ publicPortalRouter.post('/public/portal/login', (req, res) => {
   if (!account || !password) {
     return res.status(400).json({ error: 'Account number and password required' });
   }
+  // Same throttle the staff login uses. This matters more here, not less: the
+  // default portal password is the subscriber's own phone number (see
+  // ensurePortalCredentials), which is not a secret, and account numbers are
+  // sequential. Without a limit, both are cheaply guessable at scale.
+  const ip = String(req.ip || '');
+  const limited = loginRateLimitCheck(ip, account);
+  if (!limited.ok) {
+    return res
+      .status(429)
+      .json({ error: `Too many failed attempts. Try again in ${limited.retryAfterSec}s.` });
+  }
   const user = findPortalUserByAccount(account);
   if (!user?.portal_pin_hash || !portalPasswordMatches(password, user.portal_pin_hash)) {
+    loginRateLimitFail(ip, account);
     return res.status(401).json({ error: 'Invalid account or password' });
   }
+  loginRateLimitSuccess(ip, account);
   const mustChangePassword = Number(user.portal_must_change_password) === 1;
   const settings = portalSettingsRow();
   const token = crypto.randomBytes(32).toString('hex');

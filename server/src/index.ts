@@ -23,7 +23,7 @@ import {
   updatePaymongoSettings,
   createPaymongoCheckout,
   handlePaymongoWebhook,
-  verifyPaymongoSignature,
+  verifyPaymongoWebhook,
   getBackupAutoSettings,
   updateBackupAutoSettings,
   getFairUseThrottleSettings,
@@ -698,8 +698,20 @@ app.post('/api/public/paymongo/webhook', async (req, res) => {
         ? (req as any).rawBody
         : JSON.stringify(req.body || {});
     const sig = String(req.headers['paymongo-signature'] || '');
-    if (!verifyPaymongoSignature(raw, sig)) {
-      return res.status(400).json({ error: 'Invalid signature' });
+    const verified = verifyPaymongoWebhook(raw, sig);
+    if (!verified.ok) {
+      // Log it — a bounced webhook is otherwise invisible from this side, and
+      // "secret not configured" is an admin action, not a PayMongo problem.
+      try {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'paymongo',
+          `Webhook rejected: ${verified.reason || 'invalid signature'}`
+        );
+      } catch {
+        /* never let logging break the response */
+      }
+      return res.status(400).json({ error: verified.reason || 'Invalid signature' });
     }
     const result = await handlePaymongoWebhook(req.body);
     res.json(result);
