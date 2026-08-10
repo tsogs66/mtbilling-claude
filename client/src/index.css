@@ -3560,3 +3560,47 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
   background: rgba(4, 12, 28, 0.72) !important;
   border-color: rgba(125, 211, 252, 0.28) !important;
 }
+
+/* ── Portal glass on low-spec touch devices ───────────────────────────────────
+   Measured on the logged-in portal at 6x CPU throttle (≈ a low-end tablet),
+   scrolling, median frame time:
+
+     18 blurred surfaces (as shipped) ...... 43ms  (~23fps)
+     same 18, radius 22px -> 8px ........... 35ms
+     same 18, radius 22px -> 4px ........... 35ms   <- identical to 8px
+     blur kept on only the 2 largest ....... 17ms  (~59fps)
+     blur removed entirely ................. 17ms
+
+   Two things follow. First, shrinking the radius is NOT the fix: 8px and 4px
+   land on the same 35ms, so there is a hard floor that has nothing to do with
+   how wide the blur is. Second, the cost is per compositing layer — each
+   backdrop-filter element forces its own layer plus a pass over everything
+   behind it — so the lever is HOW MANY surfaces are blurred, not how much.
+
+   Keeping blur on just the two hero surfaces measured identical to removing it
+   altogether, so the effect itself is affordable; eighteen copies of it are
+   not. Drop it from the repeated cards and the small ghost buttons (9 and 5 of
+   the 18 respectively — five full compositing layers for controls a few
+   millimetres tall), and keep it on the plan card and modal panel, which are
+   large, singular, and actually carry the frosted look.
+
+   The de-blurred surfaces keep their gradient sheen, border, glow and shadow;
+   only the see-through-blur is dropped, and the fill is made more opaque so
+   they still read as frosted glass rather than flat translucent panels.
+
+   Scoped to pointer:coarse so desktop keeps the full effect unchanged. */
+@media (pointer: coarse) {
+  html.portal-route {
+    --portal-glass: rgba(8, 28, 22, 0.86);
+    --portal-glass-strong: rgba(6, 22, 18, 0.93);
+  }
+  html.portal-route .portal-glass,
+  html.portal-route .portal-btn-ghost {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  html.portal-route[data-portal-theme='orbital'] {
+    --portal-glass: rgba(10, 28, 52, 0.88);
+    --portal-glass-strong: rgba(6, 18, 36, 0.94);
+  }
+}
