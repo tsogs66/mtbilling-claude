@@ -110,8 +110,6 @@ body {
   .map-client-panel {
     width: min(300px, calc(100% - 16px));
     left: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
-    max-height: 55%;
   }
 }
 
@@ -2720,6 +2718,55 @@ body {
   width: min(340px, calc(100% - 24px));
   max-height: 70%;
   overflow-y: auto;
+}
+
+/* Phones and tablets, both orientations.
+   Anchored to the bottom, this panel was getting clipped or hidden behind
+   browser chrome / the home indicator — worst in landscape, where the viewport
+   is short and a 55%-tall panel plus bottom inset leaves nothing visible.
+   Centering it vertically on the left keeps the whole card on screen at any
+   height, and stays clear of the top-left weather chip and the fullscreen
+   button at ~1/6 from the top.
+
+   `pointer: coarse` carries the weight here, not the width. Tablets in
+   landscape are WIDER than the usual 1024px "tablet" breakpoint — iPad Air is
+   1180x820, iPad Pro 1366x1024 — so a width-only query silently skips the exact
+   orientation the panel was most broken in (measured: at 1180x820 the rule
+   never applied). Touch-capability matches phones and tablets at any size and
+   leaves mouse-driven desktops on the bottom-left layout. */
+@media (max-width: 1024px), (pointer: coarse) {
+  .map-client-panel {
+    top: 50%;
+    bottom: auto;
+    /* `!important` is load-bearing here, not sloppiness. This card also carries
+       .animate-fade-in-up, whose keyframes end on `transform: translateY(0)`
+       with fill-mode forwards, and animation declarations outrank normal author
+       declarations in the cascade — so a plain `transform` here is silently
+       dropped and the card sits pinned at the 50% line (measured: top edge
+       exactly at the stage top, 123px above centre, overlapping the fullscreen
+       button). Important author declarations DO outrank animations, so this is
+       the one way to centre it without also dropping the fade-in.
+       Auto margins are not an alternative: they need a definite height, and
+       `height: fit-content` resolves as auto for absolute positioning, which
+       collapses both margins to 0 and re-pins the card to the top. */
+    transform: translateY(-50%) !important;
+    max-height: min(70%, 24rem);
+  }
+}
+
+/* In fullscreen the exit button moves to the left edge at ~1/6 from the top, so
+   it shares the left column with this panel. Centring against the full stage
+   height would put the card's top edge underneath the button on short landscape
+   screens (e.g. 844x390: button ~65-95px, centred panel would start at ~74px).
+   Centre within the region *below* the button instead — still reads as
+   centre-left, and can never cover the control that gets you back out. */
+:fullscreen .map-client-panel,
+:-webkit-full-screen .map-client-panel {
+  /* Centre of the region below the button = midpoint between its bottom edge
+     and the stage bottom. Same !important reason as above. */
+  top: calc(58.3333% + 1.375rem);
+  bottom: auto;
+  transform: translateY(-50%) !important;
 }
 
 .map-draw-banner {
