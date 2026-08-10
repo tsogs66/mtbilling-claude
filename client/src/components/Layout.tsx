@@ -110,10 +110,12 @@ export default function Layout({
           <main
             className={
               fullBleed
-                ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''} ${
+                    nativeShell ? 'native-shell-main native-shell-main-bleed' : ''
+                  }`
                 : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''} ${
                     nativeShell
-                      ? 'pb-[calc(3.75rem+env(safe-area-inset-bottom))] sm:pb-[calc(3.75rem+env(safe-area-inset-bottom))]'
+                      ? 'native-shell-main'
                       : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
                   }`
             }
