@@ -2111,6 +2111,15 @@ body {
 .toast-dock {
   bottom: max(1.5rem, calc(var(--bottom-nav-h, 0px) + 0.75rem), env(safe-area-inset-bottom));
 }
+
+/* Modals are centred and capped at 92dvh, which on a short landscape tablet put
+   their bottom edge ~13px into the nav's strip (measured on /pppoe and
+   /job-orders at 1180x820). They render above the nav so nothing was
+   unreachable, but shrink the cap by the nav height so the dialog never sits
+   over the menu at all. Two classes to outrank the Tailwind max-h utility. */
+.native-app .theme-modal {
+  max-height: calc(min(92dvh, 90vh) - var(--bottom-nav-h));
+}
 .map-toolbar {
   flex-shrink: 0;
 }
