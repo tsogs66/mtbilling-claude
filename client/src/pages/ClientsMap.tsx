@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2, Sparkles } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Minimize2, Plus, Server, X, Route, MapPin, Undo2, Sparkles } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
@@ -771,6 +771,12 @@ export default function ClientsMap() {
   const [busy, setBusy] = useState(false);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Client | null>(null);
+  // Track real fullscreen state. The button used to call requestFullscreen()
+  // unconditionally, so once you were already fullscreen there was no way back
+  // out from inside the page — it looked like "exit fullscreen is broken".
+  // Listen to the browser event rather than assuming, so pressing Esc (or the
+  // OS/browser chrome) keeps the button label in sync.
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [routeKind, setRouteKind] = useState<RouteKind>('olt-nap');
   const [routeFrom, setRouteFrom] = useState<number | ''>('');
   const [routeTo, setRouteTo] = useState<number | ''>('');
@@ -786,6 +792,13 @@ export default function ClientsMap() {
   useEffect(() => {
     api.get('/tech-tools/splitters').then((r) => setSplitterRows(r.data || []));
     loadSplitters();
+  }, []);
+
+  useEffect(() => {
+    const sync = () => setIsFullscreen(!!document.fullscreenElement);
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
   const napChainById = useMemo(() => new Map(naps.map((n) => [n.id, n as ChainNapLike])), [naps]);
@@ -1674,10 +1687,30 @@ export default function ClientsMap() {
 
           <button
             type="button"
-            onClick={() => document.getElementById('map-wrap')?.requestFullscreen?.()}
-            className="absolute top-3 right-3 z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm"
+            onClick={() => {
+              if (document.fullscreenElement) {
+                void document.exitFullscreen?.();
+              } else {
+                void document.getElementById('map-wrap')?.requestFullscreen?.();
+              }
+            }}
+            // While fullscreen, top-right collides with the browser's own
+            // "exit fullscreen" toast / notch / status bar on phones and
+            // tablets, which swallows the tap. Move it down the left edge
+            // (~1/6 from the top) where nothing overlays it.
+            className={`absolute z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm ${
+              isFullscreen ? 'left-3 top-[16.6667%]' : 'top-3 right-3'
+            }`}
           >
-            <Maximize2 size={13} /> Fullscreen
+            {isFullscreen ? (
+              <>
+                <Minimize2 size={13} /> Exit fullscreen
+              </>
+            ) : (
+              <>
+                <Maximize2 size={13} /> Fullscreen
+              </>
+            )}
           </button>
 
           {weatherFxOn && dominantWeatherCategory && (
