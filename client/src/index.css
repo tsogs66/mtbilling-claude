@@ -24,6 +24,10 @@
   --bottom-nav-fg: #64748b;
   --bottom-nav-active-fg: #c2410c;
   --bottom-nav-sheet-bg: #ffffff;
+  /* Height reserved for the fixed bottom nav. Zero on the web (no nav is
+     rendered); the real height only in the native app shell. Anything that has
+     to sit above the nav should subtract this rather than hard-code a value. */
+  --bottom-nav-h: 0px;
   --topbar-bg: rgba(255, 255, 255, 0.88);
   --topbar-border: rgba(226, 232, 240, 0.7);
   --topbar-fg: #0f172a;
@@ -88,6 +92,12 @@ body {
 .native-app.keyboard-open .theme-topbar {
   position: relative;
 }
+/* The bottom nav only exists in the native shell — give it a real height there
+   so every "stay above the nav" calculation resolves correctly. Matches
+   BottomNav's min-h-[52px] items plus its border and safe-area padding. */
+.native-app {
+  --bottom-nav-h: calc(3.5rem + env(safe-area-inset-bottom));
+}
 @media (max-width: 639px) {
   .data-table {
     min-width: 480px;
@@ -104,7 +114,7 @@ body {
     gap: 0.75rem;
   }
   .map-page-shell {
-    height: calc(100dvh - 3.5rem);
+    height: calc(100dvh - 3.5rem - var(--bottom-nav-h, 0px));
     min-height: 280px;
   }
   .map-client-panel {
@@ -2060,8 +2070,46 @@ body {
 .map-page-shell {
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - 4rem);
+  /* --bottom-nav-h is 0 in the browser and the real nav height in the app, so
+     this one expression is correct on both. */
+  height: calc(100dvh - 4rem - var(--bottom-nav-h, 0px));
   min-height: 420px;
+}
+
+/* ── Native app (Android/iOS shell): keep content clear of the bottom nav ──
+   The bottom nav is `fixed bottom-0` and ~3.5rem tall, so <main> needs matching
+   bottom padding. This deliberately lives in CSS rather than as a Tailwind
+   `pb-[...]` utility on <main>.
+
+   Why: <main> also carries `p-3 sm:p-6 lg:p-8`. The `p-*` shorthand and a
+   `pb-*` utility have identical specificity, so source order decides — and
+   Tailwind emits media blocks in ascending order, putting `lg:p-8`
+   (min-width:1024px) AFTER a `sm:pb-[...]` (min-width:640px). At >=1024px the
+   shorthand therefore won and reset padding-bottom to 2rem. That is exactly a
+   tablet in landscape (1180x820), which is why the panel measured fine in
+   portrait but had content sitting up to 22px under the nav in landscape
+   (nav 54px - 32px padding = 22px; observed overlaps were 0-21px on
+   /outage-monitor, /notifications, /logs and /cloudflare).
+
+   A plain class defined after the utilities layer sidesteps the ordering race
+   entirely and cannot be clobbered by adding another `p-*` breakpoint later. */
+/* Qualified with .native-app (set on <html>) purely for specificity: Tailwind's
+   utilities layer is emitted after this stylesheet, so a bare .native-shell-main
+   would still lose to `lg:p-8` on source order — verified in the built CSS.
+   Two classes (0,2,0) beats one (0,1,0) regardless of order. */
+.native-app .native-shell-main {
+  padding-bottom: calc(var(--bottom-nav-h) + 0.5rem);
+}
+
+/* Full-bleed pages (Topology) opt out of <main>'s padding, so the nav used to
+   sit on top of the last ~54px of the map. Pad the shell itself instead. */
+.native-app .native-shell-main-bleed {
+  padding-bottom: var(--bottom-nav-h);
+}
+
+/* Toasts sit above the nav rather than on top of it. */
+.toast-dock {
+  bottom: max(1.5rem, calc(var(--bottom-nav-h, 0px) + 0.75rem), env(safe-area-inset-bottom));
 }
 .map-toolbar {
   flex-shrink: 0;
