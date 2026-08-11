@@ -71,46 +71,56 @@ export default function BottomNav() {
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto overscroll-contain px-2 py-3 sidebar-scroll">
-          {sections.map((section) => (
-            <div key={section.title} className="mb-3">
-              <div className="theme-sidebar-section px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest">
-                {section.title}
+          {/* App-drawer layout: a 4-up icon grid rather than a vertical list, so
+              more of the menu is reachable without scrolling. Capped and centred
+              because the sheet spans the full width — on a tablet, four
+              full-width columns would otherwise be ~290px per tile. */}
+          <div className="mx-auto w-full max-w-xl">
+            {sections.map((section) => (
+              <div key={section.title} className="mb-4">
+                <div className="theme-sidebar-section px-2 py-1.5 text-[10px] font-bold uppercase tracking-widest">
+                  {section.title}
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {section.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        end={item.end}
+                        onClick={() => setMoreOpen(false)}
+                        className={({ isActive }) =>
+                          [
+                            'theme-sidebar-link group relative flex flex-col items-center gap-1.5 px-1 py-2.5 rounded-xl transition-all duration-200 text-center',
+                            isActive ? 'is-active font-medium' : '',
+                          ].join(' ')
+                        }
+                      >
+                        {({ isActive }) => (
+                          <>
+                            <span
+                              className={[
+                                'theme-sidebar-link-icon flex items-center justify-center w-11 h-11 rounded-xl transition-all duration-200',
+                                isActive ? 'is-active' : '',
+                              ].join(' ')}
+                            >
+                              <Icon size={20} strokeWidth={isActive ? 2.25 : 2} />
+                            </span>
+                            {/* Two lines max — labels like "Outage Monitor" and
+                                "Application Updater" do not fit on one. */}
+                            <span className="text-[11px] leading-tight line-clamp-2 w-full break-words">
+                              {item.label}
+                            </span>
+                          </>
+                        )}
+                      </NavLink>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="space-y-0.5">
-                {section.items.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      end={item.end}
-                      onClick={() => setMoreOpen(false)}
-                      className={({ isActive }) =>
-                        [
-                          'theme-sidebar-link group relative flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl mx-1 transition-all duration-200',
-                          isActive ? 'is-active font-medium' : '',
-                        ].join(' ')
-                      }
-                    >
-                      {({ isActive }) => (
-                        <>
-                          <span
-                            className={[
-                              'theme-sidebar-link-icon flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200',
-                              isActive ? 'is-active' : '',
-                            ].join(' ')}
-                          >
-                            <Icon size={17} strokeWidth={isActive ? 2.25 : 2} />
-                          </span>
-                          <span className="truncate">{item.label}</span>
-                        </>
-                      )}
-                    </NavLink>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </nav>
         <div className="shrink-0 pb-[env(safe-area-inset-bottom)]" />
       </div>
