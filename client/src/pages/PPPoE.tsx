@@ -15,6 +15,19 @@ import ReceiptPrintModal from '../components/ReceiptPrintModal';
 import LiveTrafficDetailSheet from '../components/LiveTrafficDetailSheet';
 import { openReceiptForPrint } from '../lib/receiptPrint';
 
+/** Server-side progress for a running expiry-protocol run. */
+type RecheckJob = {
+  running: boolean;
+  done: number;
+  total: number;
+  current?: string;
+  message?: string;
+  error?: string;
+  startedAt?: string;
+  preview?: any;
+  result?: any;
+};
+
 interface PUser {
   id: number;
   username: string;
@@ -151,6 +164,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     autodisableEnabled: boolean;
   } | null>(null);
   const [recheckResult, setRecheckResult] = useState<any | null>(null);
+  const [recheckJob, setRecheckJob] = useState<RecheckJob | null>(null);
   const [activeTraffic, setActiveTraffic] = useState<{
     username: string;
     customer?: string;
@@ -460,23 +474,41 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
+  /**
+   * The run happens server-side as a background job — one account can cost a
+   * router round-trip, so a big batch used to outlive both the browser's own
+   * timeout and Cloudflare's, leaving this button spinning with nothing to show
+   * for it. Start the job, then poll it so the operator sees real progress.
+   */
   const confirmBillingRecheck = async () => {
     setRecheckBusy(true);
+    setRecheckJob(null);
     try {
-      // Router profile switches can take longer than the default 20s axios timeout.
-      const r = await api.post('/pppoe/billing-recheck', { service }, { timeout: 120000 });
-      setRecheckPreview(null);
-      setRecheckResult(r.data);
-      loadUsers();
+      const start = await api.post('/pppoe/billing-recheck', { service });
+      setRecheckJob(start.data?.job || null);
+
+      const poll = async (): Promise<void> => {
+        const r = await api.get('/pppoe/billing-recheck/job');
+        const job: RecheckJob | null = r.data?.job || null;
+        setRecheckJob(job);
+        if (job?.running) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return poll();
+        }
+        setRecheckPreview(null);
+        setRecheckBusy(false);
+        if (job?.error) {
+          showToast(job.error);
+        } else if (job) {
+          setRecheckResult({ ok: true, message: job.message, preview: job.preview, result: job.result });
+        }
+        loadUsers();
+      };
+      await poll();
     } catch (e: any) {
-      const msg =
-        e?.code === 'ECONNABORTED'
-          ? 'Recheck is taking too long — refresh the list; some accounts may already be updated.'
-          : e?.response?.data?.error || 'Could not apply expiry protocols.';
-      showToast(msg);
-      loadUsers();
-    } finally {
+      showToast(e?.response?.data?.error || 'Could not apply expiry protocols.');
       setRecheckBusy(false);
+      loadUsers();
     }
   };
 
@@ -1713,6 +1745,34 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           }
         >
           <div className="space-y-4 text-sm text-slate-600">
+            {recheckBusy && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2 text-amber-900">
+                  <span className="font-semibold flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    Applying expiry protocols
+                  </span>
+                  <span className="tabular-nums text-xs font-semibold">
+                    {recheckJob ? `${recheckJob.done} / ${recheckJob.total || '?'}` : 'starting…'}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 rounded-full bg-amber-200 overflow-hidden">
+                  <div
+                    className="h-full bg-amber-600 transition-[width] duration-300"
+                    style={{
+                      width: recheckJob?.total
+                        ? `${Math.min(100, Math.round((recheckJob.done / recheckJob.total) * 100))}%`
+                        : '10%',
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-amber-800">
+                  {recheckJob?.current
+                    ? `Last: ${recheckJob.current}`
+                    : 'Each account may need a router round-trip — this keeps running on the server.'}
+                </p>
+              </div>
+            )}
             <p>
               Grace is counted from each account’s <b>due date</b>. Within grace → switch PPP profile to non-payment (comment unchanged);
               past grace → disable only; due extended while on non-payment → restore plan profile. MikroTik schedulers handle grace/disable offline.

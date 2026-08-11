@@ -957,6 +957,12 @@ export async function executeBillingEnforcement(opts?: {
   sendNotices?: boolean;
   /** Cap concurrent MikroTik syncs (expire/restore/disable). */
   routerConcurrency?: number;
+  /**
+   * Progress ticks for long runs. Called once per completed account so a
+   * background job can report "12 of 30" instead of leaving the caller staring
+   * at a spinner with no idea whether anything is happening.
+   */
+  onProgress?: (done: number, total: number, label: string) => void;
 }): Promise<{
   remindersSent: number;
   markedNonPayment: number;
@@ -1122,7 +1128,26 @@ export async function executeBillingEnforcement(opts?: {
     }
   }
 
+  let progressDone = 0;
+  const totalJobs = actionJobs.length;
+  const tick = (label: string) => {
+    progressDone++;
+    try {
+      opts?.onProgress?.(progressDone, totalJobs, label);
+    } catch {
+      /* progress reporting must never break enforcement */
+    }
+  };
+
   await mapPool(actionJobs, routerConcurrency, async (job) => {
+    try {
+      await runActionJob(job);
+    } finally {
+      tick(job.u.username);
+    }
+  });
+
+  async function runActionJob(job: ActionJob) {
     if (job.kind === 'restore') {
       const { u, restore } = job;
       db.prepare(
@@ -1249,7 +1274,7 @@ export async function executeBillingEnforcement(opts?: {
         `Disabled ${u.username} — ${classified.hoursOverdue}h past due (grace ${graceHours}h)${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
       );
     }
-  });
+  }
 
   // ---- Phase 2: optional schedule refresh for healthy actives (skip on manual HTTP recheck) ----
   if (ensureSchedules && scheduleCandidates.length) {

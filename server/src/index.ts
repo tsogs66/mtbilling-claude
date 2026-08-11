@@ -5208,35 +5208,86 @@ app.get('/api/pppoe/billing-recheck', (req, res) => {
   res.json(previewBillingEnforcement({ service }));
 });
 
-app.post('/api/pppoe/billing-recheck', async (req, res) => {
+/**
+ * Expiry-protocol runs used to execute inline on this request. That could not
+ * work: each account costs up to one router round-trip, the pool ran two wide,
+ * and nothing capped the total — so the wall time was ceil(accounts / 2) x the
+ * per-op budget, with no ceiling at all. Measured at 2m18s for 30 accounts
+ * against an unreachable board, which is past the browser's own 120s timeout
+ * and well past Cloudflare's ~100s: the request aborted while the run kept
+ * going, so the button sat on "Applying..." forever and the operator could not
+ * tell whether anything had happened.
+ *
+ * It now runs as a background job. The POST returns as soon as the job starts
+ * and the client polls for progress, which removes the deadline entirely
+ * however many accounts there are or however slow the router is.
+ */
+type BillingRecheckJob = {
+  running: boolean;
+  service?: string;
+  startedAt: string;
+  finishedAt?: string;
+  done: number;
+  total: number;
+  current?: string;
+  message?: string;
+  error?: string;
+  preview?: ReturnType<typeof previewBillingEnforcement>;
+  result?: Awaited<ReturnType<typeof executeBillingEnforcement>>;
+};
+let billingRecheckJob: BillingRecheckJob | null = null;
+
+app.post('/api/pppoe/billing-recheck', (req, res) => {
   const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
-  const preview = previewBillingEnforcement({ service });
-  // Skip mass MikroTik schedule refresh + expiry-reminder fan-out on HTTP
-  // recheck (Cloudflare ~100s). Grace/non-payment switches never SMS/email;
-  // disable-after-grace still notifies when email/SMS are enabled.
-  const runOpts = {
-    service,
-    forceDisable: true as const,
-    ensureSchedules: false as const,
-    sendNotices: false as const,
-    routerConcurrency: 2 as const,
-  };
-  if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
-    const result = await executeBillingEnforcement(runOpts);
-    return res.json({
-      ok: true,
-      message: `No overdue/past-grace/restore actions.`,
-      ...preview,
-      result,
-    });
+  if (billingRecheckJob?.running) {
+    return res.status(409).json({ error: 'An expiry-protocol run is already in progress', job: billingRecheckJob });
   }
-  const result = await executeBillingEnforcement(runOpts);
-  res.json({
-    ok: true,
-    message: `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; router errors ${result.routerErrors}.`,
+  const preview = previewBillingEnforcement({ service });
+  const job: BillingRecheckJob = {
+    running: true,
+    service,
+    startedAt: new Date().toISOString(),
+    done: 0,
+    total: preview.toExpire.length + preview.toDisable.length + preview.toRestore.length,
     preview,
-    result,
-  });
+  };
+  billingRecheckJob = job;
+
+  // Skip mass MikroTik schedule refresh + expiry-reminder fan-out on a manual
+  // recheck. Grace/non-payment switches never SMS/email; disable-after-grace
+  // still notifies when email/SMS are enabled.
+  void executeBillingEnforcement({
+    service,
+    forceDisable: true,
+    ensureSchedules: false,
+    sendNotices: false,
+    // Was 2. These are independent TCP connections to the same board, and the
+    // old value made the run needlessly serial; the job is off the request
+    // path now, but a faster run is still a better run.
+    routerConcurrency: 6,
+    onProgress: (done, total, label) => {
+      job.done = done;
+      job.total = Math.max(total, job.total);
+      job.current = label;
+    },
+  })
+    .then((result) => {
+      job.result = result;
+      job.message = `Non-payment ${result.markedNonPayment}; restored ${result.restored}; disabled ${result.disabled}; router errors ${result.routerErrors}.`;
+    })
+    .catch((e: any) => {
+      job.error = e?.message || 'Expiry protocol run failed';
+    })
+    .finally(() => {
+      job.running = false;
+      job.finishedAt = new Date().toISOString();
+    });
+
+  res.status(202).json({ ok: true, started: true, job });
+});
+
+app.get('/api/pppoe/billing-recheck/job', (_req, res) => {
+  res.json({ job: billingRecheckJob });
 });
 
 // IPoE DHCP lease overdue / past-grace recheck (block on MikroTik after grace).

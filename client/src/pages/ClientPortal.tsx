@@ -23,6 +23,7 @@ import {
   PortalActivityBody,
   PortalPaymentHistoryBody,
   PortalAddonsPanel,
+  PortalRequestTabs,
 } from '../components/portal/PortalExtraPanels';
 
 const TOKEN_KEY = 'mt_portal_token';
@@ -980,6 +981,10 @@ export default function ClientPortal() {
               {payMsg && <p className="mt-2 text-sm text-rose-300 font-medium">{payMsg}</p>}
             </div>
           )}
+
+          {/* Directly under Balance due: both requests are what a subscriber
+              reaches for at that exact moment. Collapsed until tapped. */}
+          <PortalRequestTabs status={c.status} refreshKey={extrasRefresh} />
         </header>
       </div>
 
