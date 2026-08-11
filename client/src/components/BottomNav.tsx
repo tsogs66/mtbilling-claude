@@ -71,17 +71,21 @@ export default function BottomNav() {
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto overscroll-contain px-2 py-3 sidebar-scroll">
-          {/* App-drawer layout: a 4-up icon grid rather than a vertical list, so
-              more of the menu is reachable without scrolling. Capped and centred
-              because the sheet spans the full width — on a tablet, four
-              full-width columns would otherwise be ~290px per tile. */}
-          <div className="mx-auto w-full max-w-xl">
+          {/* App-drawer layout: an icon grid rather than a vertical list, so more
+              of the menu is reachable without scrolling. The column count is
+              deliberately not fixed — `auto-fill` packs in as many tracks as the
+              current width allows, so rotating the device reflows the grid
+              instead of leaving a phone-shaped column count on a landscape
+              tablet. The track floor is what sets the count: 5.25rem keeps a
+              390px phone at 4 across, and the wider floor from `sm` up stops a
+              tablet from splintering into a dozen cramped columns. */}
+          <div className="w-full">
             {sections.map((section) => (
               <div key={section.title} className="mb-4">
                 <div className="theme-sidebar-section px-2 py-1.5 text-[10px] font-bold uppercase tracking-widest">
                   {section.title}
                 </div>
-                <div className="grid grid-cols-4 gap-1">
+                <div className="grid gap-1 grid-cols-[repeat(auto-fill,minmax(5.25rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))]">
                   {section.items.map((item) => {
                     const Icon = item.icon;
                     return (

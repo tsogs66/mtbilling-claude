@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Minimize2, Plus, Server, X, Route, MapPin, Undo2, Sparkles } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Minimize2, Plus, Server, X, Route, MapPin, Undo2, Sparkles, Wrench, Trash2, ChevronDown } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
@@ -777,6 +777,10 @@ export default function ClientsMap() {
   // Listen to the browser event rather than assuming, so pressing Esc (or the
   // OS/browser chrome) keeps the button label in sync.
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Map tools live in a collapsed dock on the right edge so they take no space
+  // from the map until asked for. Being inside #map-wrap, it is also reachable
+  // in fullscreen, where the page toolbar is not rendered at all.
+  const [toolDockOpen, setToolDockOpen] = useState(false);
   const [routeKind, setRouteKind] = useState<RouteKind>('olt-nap');
   const [routeFrom, setRouteFrom] = useState<number | ''>('');
   const [routeTo, setRouteTo] = useState<number | ''>('');
@@ -1167,7 +1171,13 @@ export default function ClientsMap() {
     setRouteTo(toId);
     setDrawPoints(existing?.points?.slice(1, -1) || []);
     setDrawMode(true);
-    setTopoOpen(true);
+    // Deliberately does NOT open the Topology Config panel. It used to, and on a
+    // phone that panel is 46vh of forms stacked above the map — the map got
+    // squeezed into a sliver under a tall dark band, right at the moment you
+    // need to see it most. Save / Undo / Delete live in the floating tool dock
+    // on the map itself instead.
+    setTopoOpen(false);
+    setToolDockOpen(true);
     setSelected(null);
   };
 
@@ -1221,6 +1231,9 @@ export default function ClientsMap() {
     const existing = findConnector(connectors, routeKind, fromId, toId);
     setDrawPoints(existing?.points?.slice(1, -1) || []);
     setDrawMode(true);
+    // The config panel hides itself while drawing, so surface the dock that now
+    // carries Save / Undo / Delete rather than leaving the tools nowhere.
+    setToolDockOpen(true);
   };
 
   const undoDrawPoint = () => {
@@ -1317,7 +1330,10 @@ export default function ClientsMap() {
           </div>
         </div>
 
-        {topoOpen && (
+        {/* Collapsed while drawing: this panel is up to 46vh of forms sitting
+            above the map, and you cannot place waypoints on a map you cannot
+            see. The drawing controls move to the on-map tool dock instead. */}
+        {topoOpen && !drawMode && (
           <div className="map-toolbar bg-slate-50/90 border-b border-slate-200 px-3 py-3 max-h-[46vh] overflow-y-auto shrink-0">
             <div className="card p-3 mb-3">
               <div className="flex items-center gap-2 mb-2">
@@ -1423,6 +1439,9 @@ export default function ClientsMap() {
               </TopoPanel>
               <TopoPanel
                 title="NAP Configuration"
+                collapsible
+                defaultOpen={false}
+                summary={`${napNodes.length}`}
                 action={
                   <button
                     type="button"
@@ -1471,6 +1490,9 @@ export default function ClientsMap() {
               </TopoPanel>
               <TopoPanel
                 title="Splitter Configuration"
+                collapsible
+                defaultOpen={false}
+                summary={`${splitters.length}`}
                 action={
                   <button
                     type="button"
@@ -1652,32 +1674,12 @@ export default function ClientsMap() {
         )}
 
         <div id="map-wrap" className={`map-stage overflow-hidden${constrainedMap ? ' is-constrained-map' : ''}`}>
-          {drawMode && (
-            <div className="map-draw-banner bg-brand-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg flex flex-wrap items-center gap-3">
-              <span>
-                Editing cable path — click map to add points ({drawPoints.length} waypoint
-                {drawPoints.length !== 1 ? 's' : ''})
-              </span>
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 underline disabled:opacity-50"
-                onClick={undoDrawPoint}
-                disabled={drawPoints.length === 0}
-              >
-                <Undo2 size={12} /> Undo last
-              </button>
-              <button
-                type="button"
-                className="underline"
-                onClick={() => {
-                  setDrawMode(false);
-                  setDrawPoints([]);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
+          {/* The centre-top "editing cable path" banner used to live here. It
+              duplicated the waypoint count and the Undo / Cancel buttons that
+              the tool dock now carries, and on a phone it was wide enough to sit
+              on top of the Fullscreen button. The dock opens automatically when
+              drawing starts, and its collapsed toggle shows an "Editing" badge,
+              so nothing is lost. */}
 
           {selected && (
             <ClientPanel
@@ -1697,12 +1699,12 @@ export default function ClientsMap() {
                 void document.getElementById('map-wrap')?.requestFullscreen?.();
               }
             }}
-            // While fullscreen, top-right collides with the browser's own
-            // "exit fullscreen" toast / notch / status bar on phones and
-            // tablets, which swallows the tap. Move it down the left edge
-            // (~1/6 from the top) where nothing overlays it.
-            className={`absolute z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm ${
-              isFullscreen ? 'left-3 top-[16.6667%]' : 'top-3 right-3'
+            // While fullscreen, the very top of the screen collides with the
+            // browser's own "exit fullscreen" toast / the notch / the status bar
+            // on phones and tablets, which swallows the tap. Drop it to ~1/6
+            // from the top, staying on the right edge with the other map tools.
+            className={`absolute z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm right-3 ${
+              isFullscreen ? 'top-[16.6667%]' : 'top-3'
             }`}
           >
             {isFullscreen ? (
@@ -1715,6 +1717,100 @@ export default function ClientsMap() {
               </>
             )}
           </button>
+
+          {/* Map tools, collapsed behind one button on the right edge. Kept
+              inside #map-wrap so it is still there in fullscreen, where the
+              page-level toolbar above the map is off-screen entirely. */}
+          <div className="map-tool-dock">
+            {toolDockOpen && (
+              <div className="map-tool-dock-panel card shadow-xl border border-slate-200 p-2 animate-fade-in">
+                <div className="flex items-center justify-between gap-2 px-1 pb-1.5 mb-1.5 border-b border-slate-100">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Map tools
+                  </span>
+                  <button
+                    type="button"
+                    className="p-0.5 rounded text-slate-400 hover:bg-slate-100"
+                    aria-label="Close map tools"
+                    onClick={() => setToolDockOpen(false)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                {drawMode ? (
+                  <div className="space-y-1">
+                    <p className="px-1 pb-1 text-[11px] text-brand-700">
+                      Tap the map to add waypoints ({drawPoints.length})
+                    </p>
+                    <MapToolButton icon={<Route size={14} />} onClick={saveRoute}>
+                      Save route
+                    </MapToolButton>
+                    <MapToolButton
+                      icon={<Undo2 size={14} />}
+                      onClick={undoDrawPoint}
+                      disabled={drawPoints.length === 0}
+                    >
+                      Undo last
+                    </MapToolButton>
+                    <MapToolButton icon={<Trash2 size={14} />} tone="danger" onClick={deleteRoute}>
+                      Delete saved
+                    </MapToolButton>
+                    <MapToolButton
+                      icon={<X size={14} />}
+                      onClick={() => {
+                        setDrawMode(false);
+                        setDrawPoints([]);
+                      }}
+                    >
+                      Cancel
+                    </MapToolButton>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <MapToolButton
+                      icon={<SlidersHorizontal size={14} />}
+                      active={topoOpen}
+                      onClick={() => {
+                        // Fullscreen hides the page toolbar, so opening the
+                        // config panel from in here would show nothing.
+                        if (document.fullscreenElement) void document.exitFullscreen?.();
+                        setTopoOpen((v) => !v);
+                        setToolDockOpen(false);
+                      }}
+                    >
+                      Topology config
+                    </MapToolButton>
+                    <MapToolButton
+                      icon={<Sparkles size={14} />}
+                      active={weatherFxOn}
+                      onClick={() => setWeatherFxOn((v) => !v)}
+                    >
+                      Weather FX
+                    </MapToolButton>
+                    <p className="px-1 pt-1 text-[11px] text-slate-400 leading-snug">
+                      Pick a client, then <b>Edit Cable Route</b> to draw a path.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!toolDockOpen && (
+              <button
+                type="button"
+                className={`map-tool-dock-toggle bg-white/95 border rounded-lg px-2.5 py-1.5 text-xs hover:bg-white flex items-center justify-center gap-1.5 shadow-sm ${
+                  drawMode ? 'border-brand-300 text-brand-700' : 'border-slate-200 text-slate-600'
+                }`}
+                aria-label="Open map tools"
+                aria-expanded={false}
+                onClick={() => setToolDockOpen(true)}
+              >
+                <Wrench size={15} />
+                {drawMode && <span className="font-semibold">Editing</span>}
+              </button>
+            )}
+          </div>
 
           {weatherFxOn && dominantWeatherCategory && (
             <div className="absolute top-3 left-3 z-[500] bg-slate-900/85 border border-white/20 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center gap-1.5 shadow-sm">
@@ -2424,14 +2520,89 @@ function ClientPanel({
   );
 }
 
-function TopoPanel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+function MapToolButton({
+  icon,
+  children,
+  onClick,
+  disabled,
+  active,
+  tone,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  tone?: 'danger';
+}) {
+  const base =
+    'w-full flex items-center gap-2 text-xs px-2 py-2 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+  const skin =
+    tone === 'danger'
+      ? 'border-rose-200 text-rose-600 hover:bg-rose-50'
+      : active
+        ? 'border-brand-300 bg-brand-50 text-brand-700'
+        : 'border-slate-200 text-slate-700 hover:bg-slate-50';
+  return (
+    <button type="button" className={`${base} ${skin}`} onClick={onClick} disabled={disabled}>
+      {icon}
+      <span className="truncate">{children}</span>
+    </button>
+  );
+}
+
+function TopoPanel({
+  title,
+  action,
+  children,
+  collapsible,
+  defaultOpen = true,
+  summary,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  /** Render the body behind a disclosure toggle. Used for the list-shaped
+   *  panels (NAPs, Splitters), which otherwise push the whole config panel —
+   *  and therefore the map — down by several hundred pixels. */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  /** Shown next to the title when collapsed, e.g. "12 configured". */
+  summary?: string;
+}) {
+  const [open, setOpen] = useState(collapsible ? defaultOpen : true);
+  const bodyId = `topo-panel-${title.replace(/\s+/g, '-').toLowerCase()}`;
   return (
     <div className="card p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Server size={14} className="text-brand-500" /> {title}</h3>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        {collapsible ? (
+          <button
+            type="button"
+            className="flex items-center gap-2 min-w-0 text-left"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <ChevronDown
+              size={14}
+              className={`text-slate-400 shrink-0 transition-transform duration-200 ${open ? '' : '-rotate-90'}`}
+            />
+            <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2 min-w-0">
+              <Server size={14} className="text-brand-500 shrink-0" />
+              <span className="truncate">{title}</span>
+            </h3>
+            {summary && <span className="text-[11px] text-slate-400 shrink-0">{summary}</span>}
+          </button>
+        ) : (
+          <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <Server size={14} className="text-brand-500" /> {title}
+          </h3>
+        )}
         {action}
       </div>
-      {children}
+      <div id={bodyId} hidden={!open}>
+        {children}
+      </div>
     </div>
   );
 }

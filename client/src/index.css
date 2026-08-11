@@ -2821,28 +2821,42 @@ body {
   }
 }
 
-/* In fullscreen the exit button moves to the left edge at ~1/6 from the top, so
-   it shares the left column with this panel. Centring against the full stage
-   height would put the card's top edge underneath the button on short landscape
-   screens (e.g. 844x390: button ~65-95px, centred panel would start at ~74px).
-   Centre within the region *below* the button instead — still reads as
-   centre-left, and can never cover the control that gets you back out. */
-:fullscreen .map-client-panel,
-:-webkit-full-screen .map-client-panel {
-  /* Centre of the region below the button = midpoint between its bottom edge
-     and the stage bottom. Same !important reason as above. */
-  top: calc(58.3333% + 1.375rem);
-  bottom: auto;
-  transform: translateY(-50%) !important;
+/* In fullscreen this card used to be nudged below the exit button, which sat on
+   the left edge at ~1/6 from the top and would otherwise have covered it. The
+   exit button now lives on the right edge with the rest of the map tools, so
+   the left column is clear and plain centring applies in fullscreen too — on
+   touch via the rule above, on desktop via the bottom-left default. */
+
+/* Floating map tool dock — right edge, inside #map-wrap so it survives
+   fullscreen (the fullscreen element is the map stage, not the document). */
+.map-tool-dock {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 600;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  /* Percentage resolves against the map stage, which has a definite height, so
+     the dock can never grow past it. The scroll lives here rather than on the
+     panel: a landscape phone leaves the stage only ~180px tall, and a viewport-
+     relative cap on the child would happily overflow that. */
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.map-tool-dock-panel {
+  width: 12.5rem;
+}
+@media (pointer: coarse) {
+  /* Give the collapsed dock a thumb-sized hit area on touch. */
+  .map-tool-dock-toggle {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
 }
 
-.map-draw-banner {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 600;
-}
 @keyframes onu-color-pulse {
   0% {
     box-shadow: 0 0 0 1px var(--onu-glow), 0 0 2px rgba(0, 0, 0, 0.4);
