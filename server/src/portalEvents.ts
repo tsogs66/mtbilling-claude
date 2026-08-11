@@ -14,6 +14,7 @@ export type PortalLiveEvent = {
     | 'portal_activity'
     | 'addon_request'
     | 'reconnect_request'
+    | 'extension_request'
     | 'contact_updated'
     | 'referral'
     | 'payment';

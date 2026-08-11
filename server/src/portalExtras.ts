@@ -22,6 +22,48 @@ function columnExists(table: string, col: string): boolean {
   }
 }
 
+/** How far ahead of the due date the extension request opens. */
+const EXTENSION_WINDOW_DAYS = 7;
+/** Ceiling on a single request, so nobody asks for a free month. */
+const EXTENSION_MAX_DAYS = 14;
+
+function daysUntil(due?: string | null): number | null {
+  if (!due) return null;
+  const t = Date.parse(`${String(due).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  return Math.round((t - today) / 86400000);
+}
+
+function addDaysIso(due: string | null | undefined, days: number): string {
+  // An already-expired account extends from today, not from its stale due date,
+  // otherwise "3 days" on a line that lapsed a fortnight ago grants nothing.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const baseIso = due && String(due).slice(0, 10) > todayIso ? String(due).slice(0, 10) : todayIso;
+  const t = Date.parse(`${baseIso}T00:00:00Z`);
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+
+/** Eligible when the line has lapsed, or the due date is within the window. */
+function extensionEligibility(sess: any): {
+  eligible: boolean;
+  daysUntilDue: number | null;
+  due: string | null;
+  reasonCode: 'lapsed' | 'due-soon' | 'not-yet';
+} {
+  const st = String(sess?.status || '').toLowerCase();
+  const lapsed =
+    st.includes('non') || st === 'disabled' || st === 'expired' || st === 'suspended';
+  const d = daysUntil(sess?.subscription_due);
+  const dueSoon = d != null && d <= EXTENSION_WINDOW_DAYS;
+  return {
+    eligible: lapsed || dueSoon,
+    daysUntilDue: d,
+    due: sess?.subscription_due || null,
+    reasonCode: lapsed ? 'lapsed' : dueSoon ? 'due-soon' : 'not-yet',
+  };
+}
+
 function portalUserFromToken(token: string): any | null {
   if (!token) return null;
   const row = db
@@ -187,6 +229,24 @@ export function initPortalExtras() {
     CREATE TABLE IF NOT EXISTS portal_reconnect_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pppoe_user_id INTEGER NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT,
+      reviewed_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    /* Distinct from a reconnect request: a reconnect restores a cut-off line
+       while the balance stands, an extension moves the due date itself. Open to
+       subscribers who are already expired AND to those merely approaching the
+       due date, which is why eligibility cannot reuse the reconnect rule. */
+    CREATE TABLE IF NOT EXISTS portal_extension_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER NOT NULL,
+      days_requested INTEGER NOT NULL DEFAULT 3,
+      granted_days INTEGER,
+      previous_due TEXT,
+      new_due TEXT,
       reason TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       review_note TEXT,
@@ -726,6 +786,71 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
     res.json({ request: row || null });
   });
 
+  // ── Service extension ─────────────────────────────────────────────────────
+  publicPortalRouter.get('/public/portal/extension-request', (req, res) => {
+    const sess = requirePortal(req, res);
+    if (!sess) return;
+    const el = extensionEligibility(sess);
+    const row = db
+      .prepare(
+        `SELECT id, days_requested AS daysRequested, granted_days AS grantedDays,
+                previous_due AS previousDue, new_due AS newDue, reason, status,
+                review_note AS reviewNote, created_at AS createdAt
+         FROM portal_extension_requests
+         WHERE pppoe_user_id = ?
+         ORDER BY id DESC LIMIT 1`
+      )
+      .get(sess.uid);
+    res.json({ request: row || null, ...el, maxDays: EXTENSION_MAX_DAYS });
+  });
+
+  publicPortalRouter.post('/public/portal/extension-request', (req, res) => {
+    const sess = requirePortal(req, res);
+    if (!sess) return;
+    const el = extensionEligibility(sess);
+    if (!el.eligible) {
+      return res.status(400).json({
+        error: `Extensions open ${EXTENSION_WINDOW_DAYS} days before your due date, or any time after it has passed`,
+      });
+    }
+    const pending = db
+      .prepare(
+        `SELECT id FROM portal_extension_requests
+         WHERE pppoe_user_id = ? AND status = 'pending'`
+      )
+      .get(sess.uid);
+    if (pending) return res.status(409).json({ error: 'You already have a pending extension request' });
+    const days = Math.min(
+      EXTENSION_MAX_DAYS,
+      Math.max(1, Math.floor(Number(req.body?.days) || 3))
+    );
+    const reason = String(req.body?.reason || '').trim() || null;
+    const info = db
+      .prepare(
+        `INSERT INTO portal_extension_requests (pppoe_user_id, days_requested, previous_due, reason, status)
+         VALUES (?, ?, ?, ?, 'pending')`
+      )
+      .run(sess.uid, days, sess.subscription_due || null, reason);
+    notifyStaff({
+      type: 'ticket',
+      title: 'Service extension request',
+      body: `${subscriberLabel(sess.uid)} asked for ${days} more day${days === 1 ? '' : 's'}${reason ? `: ${reason}` : ''}`,
+      entityType: 'portal_extension_request',
+      entityId: Number(info.lastInsertRowid),
+      pppoeUserId: sess.uid,
+      status: 'pending',
+    });
+    pushPortalActivity({
+      pppoeUserId: sess.uid,
+      type: 'extension_request',
+      title: 'Extension requested',
+      body: `${days} day${days === 1 ? '' : 's'} — awaiting ISP review.`,
+      entityType: 'portal_extension_request',
+      entityId: Number(info.lastInsertRowid),
+    });
+    res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
+  });
+
   // ── Ticket thread ─────────────────────────────────────────────────────────
   publicPortalRouter.get('/public/portal/tickets/:id/messages', (req, res) => {
     const sess = requirePortal(req, res);
@@ -1160,6 +1285,106 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
       entityId: id,
     });
     res.json({ ok: true });
+  });
+
+  ispOpsRouter.get('/portal-requests/extensions', (_req, res) => {
+    res.json({
+      items: db
+        .prepare(
+          `SELECT r.id, r.days_requested AS daysRequested, r.reason, r.status,
+                  r.created_at AS createdAt, r.pppoe_user_id AS pppoeUserId,
+                  u.customer_name AS customerName, u.account_number AS accountNumber,
+                  u.status AS accountStatus, u.subscription_due AS subscriptionDue
+           FROM portal_extension_requests r
+           LEFT JOIN pppoe_users u ON u.id = r.pppoe_user_id
+           WHERE r.status = 'pending' ORDER BY r.id DESC LIMIT 100`
+        )
+        .all(),
+    });
+  });
+
+  ispOpsRouter.post('/portal-requests/extensions/:id/decide', (req, res) => {
+    void (async () => {
+      const id = Number(req.params.id);
+      const accept = String(req.body?.decision || '') === 'accept';
+      const row = db.prepare('SELECT * FROM portal_extension_requests WHERE id = ?').get(id) as any;
+      if (!row || row.status !== 'pending') return res.status(404).json({ error: 'Request not found' });
+      const reviewNote = String(req.body?.note || '').trim() || null;
+
+      if (!accept) {
+        db.prepare(
+          `UPDATE portal_extension_requests
+           SET status = 'rejected', review_note = ?, reviewed_at = datetime('now') WHERE id = ?`
+        ).run(reviewNote, id);
+        pushPortalActivity({
+          pppoeUserId: row.pppoe_user_id,
+          type: 'extension_request',
+          title: 'Extension declined',
+          body: reviewNote || 'Your extension request was not approved.',
+          entityType: 'portal_extension_request',
+          entityId: id,
+        });
+        return res.json({ ok: true });
+      }
+
+      // Staff may grant fewer days than asked for.
+      const granted = Math.min(
+        EXTENSION_MAX_DAYS,
+        Math.max(1, Math.floor(Number(req.body?.days) || Number(row.days_requested) || 1))
+      );
+      const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(row.pppoe_user_id) as any;
+      if (!user) return res.status(404).json({ error: 'Subscriber not found' });
+
+      const previousDue = user.subscription_due || null;
+      const newDue = addDaysIso(previousDue, granted);
+      // Clearing nonpayment_since matters: the overdue clock in notify.ts reads
+      // it, so leaving it set would re-disable the line the extension just
+      // restored.
+      db.prepare(
+        `UPDATE pppoe_users
+         SET subscription_due = ?, status = 'Active', nonpayment_since = NULL, reminder_sent = NULL
+         WHERE id = ?`
+      ).run(newDue, row.pppoe_user_id);
+      db.prepare(
+        `UPDATE portal_extension_requests
+         SET status = 'accepted', review_note = ?, granted_days = ?, previous_due = ?, new_due = ?,
+             reviewed_at = datetime('now')
+         WHERE id = ?`
+      ).run(reviewNote, granted, previousDue, newDue, id);
+
+      // Put the line back on its normal profile and re-arm the router-side
+      // grace/disable schedule against the NEW due date. Best-effort: the DB is
+      // already the source of truth, and a router that is unreachable right now
+      // gets picked up by the sync queue.
+      const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(row.pppoe_user_id) as any;
+      // Imported lazily: billing.ts already imports pushPortalActivity from this
+      // module, and a static import back would make the cycle load-order
+      // sensitive for no benefit — this only runs inside a request.
+      try {
+        const billing = await import('./billing.js');
+        await billing.syncUserToRouter(updated, 'restore');
+        await billing.scheduleRouterExpiry(updated);
+      } catch {
+        try {
+          const billing = await import('./billing.js');
+          billing.enqueueRouterSync(updated?.router_id, row.pppoe_user_id, 'portal-extension-granted');
+        } catch {
+          /* best-effort */
+        }
+      }
+
+      pushPortalActivity({
+        pppoeUserId: row.pppoe_user_id,
+        type: 'extension_request',
+        title: 'Extension approved',
+        body: `${granted} day${granted === 1 ? '' : 's'} added — new due date ${newDue}.${reviewNote ? ` ${reviewNote}` : ''}`,
+        entityType: 'portal_extension_request',
+        entityId: id,
+      });
+      res.json({ ok: true, grantedDays: granted, previousDue, newDue });
+    })().catch((e: any) => {
+      res.status(500).json({ error: e?.message || 'Could not apply extension' });
+    });
   });
 
   ispOpsRouter.get('/portal-requests/referrals', (_req, res) => {
