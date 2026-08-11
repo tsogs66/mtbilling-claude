@@ -1261,7 +1261,10 @@ export default function ClientsMap() {
     <Layout title="Topology" fullBleed>
       <div className="map-page-shell">
         <div className="map-toolbar bg-white border-b border-slate-200 px-3 py-2.5 flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-4 flex-wrap text-sm text-slate-500">
+          {/* Phones: keep the stats on one horizontally-scrollable line. Wrapping
+              them cost ~3 rows at 390px wide, and every row here is a row the
+              map does not get — the toolbar measured 201px of an 844px screen. */}
+          <div className="flex items-center gap-3 sm:gap-4 flex-nowrap sm:flex-wrap overflow-x-auto sm:overflow-visible whitespace-nowrap max-w-full text-sm text-slate-500">
             <span>Servers: <b className="text-slate-700">{stats.servers ?? '—'}</b></span>
             <span>OLTs: <b className="text-slate-700">{stats.olts ?? '—'}</b></span>
             <span>NAPs: <b className="text-slate-700">{stats.naps ?? '—'}</b></span>
@@ -1305,7 +1308,7 @@ export default function ClientsMap() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search name, username, account#, address..."
-                className="text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 w-64 sm:w-80 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                className="text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 w-40 sm:w-64 lg:w-80 focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
