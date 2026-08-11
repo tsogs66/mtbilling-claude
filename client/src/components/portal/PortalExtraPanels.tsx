@@ -11,6 +11,8 @@ import {
   Share2,
   ShieldAlert,
   ChevronRight,
+  ChevronDown,
+  CalendarPlus,
   X,
   Loader2,
   CheckCircle2,
@@ -56,7 +58,8 @@ function Section({
   );
 }
 
-export function PortalActivityPanel({ refreshKey }: { refreshKey?: number }) {
+/** Body only — the tabbed Billing container supplies the heading. */
+export function PortalActivityBody({ refreshKey }: { refreshKey?: number }) {
   const [items, setItems] = useState<any[]>([]);
   const [unread, setUnread] = useState(0);
 
@@ -74,23 +77,22 @@ export function PortalActivityPanel({ refreshKey }: { refreshKey?: number }) {
   }, [refreshKey]);
 
   return (
-    <Section
-      title="Activity"
-      icon={Bell}
-      hint={unread ? `${unread} unread update${unread === 1 ? '' : 's'}` : 'Payments, tickets, outages, and plan updates.'}
-    >
-      <div className="flex justify-end mb-2">
+    <>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <p className="text-sm text-portal-muted">
+          {unread ? `${unread} unread update${unread === 1 ? '' : 's'}` : 'Payments, tickets, outages, and plan updates.'}
+        </p>
         {unread > 0 && (
           <button
             type="button"
-            className="text-xs font-semibold text-orange-300 hover:text-orange-200"
+            className="text-xs font-semibold text-orange-300 hover:text-orange-200 shrink-0"
             onClick={() => void portalFetch('/public/portal/activity/read', { method: 'POST', body: '{}' }).then(load)}
           >
             Mark all read
           </button>
         )}
       </div>
-      <ul className="space-y-2 max-h-64 overflow-y-auto">
+      <ul className="space-y-2 max-h-80 overflow-y-auto">
         {items.map((it) => (
           <li
             key={it.id}
@@ -107,7 +109,7 @@ export function PortalActivityPanel({ refreshKey }: { refreshKey?: number }) {
         ))}
         {!items.length && <li className="text-sm text-portal-dim py-2">No activity yet.</li>}
       </ul>
-    </Section>
+    </>
   );
 }
 
@@ -136,71 +138,117 @@ export function PortalOutageNoticesPanel({ refreshKey }: { refreshKey?: number }
   );
 }
 
-export function PortalConnectionPanel({ refreshKey }: { refreshKey?: number }) {
+function fmtRate(bps: number): string {
+  const b = Number(bps) || 0;
+  if (b >= 1_000_000) return `${(b / 1_000_000).toFixed(1)} Mbps`;
+  if (b >= 1_000) return `${Math.round(b / 1_000)} kbps`;
+  return `${Math.round(b)} bps`;
+}
+
+/**
+ * Live line vitals, rendered as a strip inside the portal header card rather
+ * than as its own section further down the page — an "am I online?" answer is
+ * the first thing a subscriber opens the portal for, so it belongs above the
+ * fold next to their name.
+ */
+export function PortalConnectionStrip({ refreshKey }: { refreshKey?: number }) {
   const [conn, setConn] = useState<any>(null);
   useEffect(() => {
     void portalFetch('/public/portal/connection')
       .then(setConn)
       .catch(() => setConn(null));
   }, [refreshKey]);
-  const kbps = (bps: number) => Math.round((Number(bps) || 0) / 125) / 10;
+
+  if (!conn) return null;
+  const online = !!conn.online;
+
+  // Speeds are only meaningful while a session is up; showing "0 bps" on an
+  // offline line reads as a fault rather than an absence.
+  const cells: { label: string; value: string; mono?: boolean }[] = [];
+  if (conn.address) cells.push({ label: 'IP address', value: String(conn.address), mono: true });
+  if (conn.uptime) cells.push({ label: 'Uptime', value: String(conn.uptime) });
+  if (online) {
+    cells.push({ label: 'Download', value: fmtRate(conn.downloadBps) });
+    cells.push({ label: 'Upload', value: fmtRate(conn.uploadBps) });
+  }
+
   return (
-    <Section title="Connection" icon={Wifi} hint="Live session from your modem (when the router reports it).">
-      {!conn && <p className="text-sm text-portal-dim">Loading…</p>}
-      {conn && (
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-portal-muted">Status</span>
-            <span className={conn.online ? 'text-emerald-300 font-semibold' : 'text-rose-300 font-semibold'}>
-              {conn.online ? 'Online' : 'Offline'}
-            </span>
-          </div>
-          {conn.address && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-portal-muted">IP</span>
-              <span className="font-mono text-white text-xs">{conn.address}</span>
+    <div className="mt-4 rounded-2xl border border-white/12 bg-black/25 px-3.5 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className={`relative flex h-2.5 w-2.5 shrink-0 rounded-full ${
+              online ? 'bg-emerald-400' : 'bg-rose-400'
+            }`}
+          >
+            {online && (
+              <span className="absolute inset-0 rounded-full bg-emerald-400 animate-ping opacity-70" />
+            )}
+          </span>
+          <span className="text-[11px] uppercase tracking-[0.14em] font-semibold text-portal-muted leading-none">
+            Connection
+          </span>
+        </div>
+        <span
+          className={`text-sm font-bold shrink-0 ${online ? 'text-emerald-300' : 'text-rose-300'}`}
+        >
+          {online ? 'Online' : 'Offline'}
+        </span>
+      </div>
+
+      {/* Two up on a phone, one row once there is width for it. */}
+      {cells.length > 0 && (
+        <dl className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2.5">
+          {cells.map((cell) => (
+            <div key={cell.label} className="min-w-0">
+              <dt className="text-[10px] uppercase tracking-wider text-portal-dim leading-none">
+                {cell.label}
+              </dt>
+              <dd
+                className={`mt-1 text-sm font-semibold text-white truncate ${
+                  cell.mono ? 'font-mono text-xs' : 'tabular-nums'
+                }`}
+              >
+                {cell.value}
+              </dd>
             </div>
-          )}
-          {conn.uptime && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-portal-muted">Uptime</span>
-              <span className="text-white">{conn.uptime}</span>
-            </div>
-          )}
-          {conn.online && (
-            <div className="flex items-center justify-between gap-2 text-xs text-portal-dim">
-              <span>↓ {kbps(conn.downloadBps)} KB/s</span>
-              <span>↑ {kbps(conn.uploadBps)} KB/s</span>
-            </div>
-          )}
-          {conn.nap && (
-            <div className="text-xs text-portal-dim pt-1 border-t border-white/10">
-              NAP: <span className="text-portal-muted font-medium">{conn.nap.name}</span>
-              {conn.nap.code ? ` (${conn.nap.code})` : ''}
-            </div>
-          )}
+          ))}
+        </dl>
+      )}
+
+      {conn.nap && (
+        <div className="mt-2.5 pt-2.5 border-t border-white/10 text-[11px] text-portal-dim">
+          NAP <span className="text-portal-muted font-medium">{conn.nap.name}</span>
+          {conn.nap.code ? ` (${conn.nap.code})` : ''}
         </div>
       )}
-    </Section>
+    </div>
   );
 }
 
 export function PortalDeviceHelperPanel() {
-  const [active, setActive] = useState(HUAWEI_ONT_GUIDES[0].id);
-  const guide = HUAWEI_ONT_GUIDES.find((g) => g.id === active) || HUAWEI_ONT_GUIDES[0];
+  // Starts unset on purpose: showing one model's steps by default reads as
+  // "these are your steps", and a subscriber with a different ONT follows them
+  // anyway. Nothing is shown until they pick their own.
+  const [active, setActive] = useState<string | null>(null);
+  const guide = HUAWEI_ONT_GUIDES.find((g) => g.id === active) || null;
   return (
     <Section
       title="Device helper"
       icon={Router}
       hint="Reconnect steps for Huawei ONTs used on our network."
     >
+      <p className="text-xs text-portal-dim mb-2">
+        Pick the model printed on the sticker underneath your modem.
+      </p>
       <div className="flex flex-wrap gap-1.5 mb-3">
         {HUAWEI_ONT_GUIDES.map((g) => (
           <button
             key={g.id}
             type="button"
-            onClick={() => setActive(g.id)}
-            className={`text-xs px-2.5 py-1.5 rounded-lg border transition ${
+            onClick={() => setActive((cur) => (cur === g.id ? null : g.id))}
+            aria-pressed={active === g.id}
+            className={`text-xs px-2.5 py-2 min-h-[36px] rounded-lg border transition ${
               active === g.id
                 ? 'bg-orange-500/25 border-orange-400/45 text-orange-100 font-semibold'
                 : 'border-white/12 text-portal-muted hover:text-white'
@@ -210,6 +258,12 @@ export function PortalDeviceHelperPanel() {
           </button>
         ))}
       </div>
+      {!guide ? (
+        <p className="text-sm text-portal-dim">
+          Select your router model above to see its reconnect and Wi‑Fi steps.
+        </p>
+      ) : (
+      <>
       <div className="text-sm font-semibold text-white">{guide.model}</div>
       <p className="text-xs text-portal-muted mt-0.5 mb-2">{guide.blurb}</p>
       <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-300/80 mb-1.5">
@@ -250,6 +304,8 @@ export function PortalDeviceHelperPanel() {
             </ul>
           )}
         </>
+      )}
+      </>
       )}
     </Section>
   );
@@ -447,9 +503,16 @@ export function PortalContactPanel({
   );
 }
 
-export function PortalPaymentHistoryPanel() {
+/** How many payments show before the list has to be expanded. */
+const PAYMENT_HISTORY_PREVIEW = 5;
+
+/**
+ * Body only — no <Section> wrapper, because this renders inside the portal's
+ * tabbed Billing container which supplies its own heading.
+ */
+export function PortalPaymentHistoryBody() {
   const [rows, setRows] = useState<any[]>([]);
-  const [receipt, setReceipt] = useState<any>(null);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     void portalFetch('/public/portal/payments')
       .then((d) => {
@@ -477,19 +540,13 @@ export function PortalPaymentHistoryPanel() {
       .catch(() => {});
   }, []);
 
-  const openReceipt = async (txId: number) => {
-    try {
-      const d = await portalFetch(`/public/portal/receipts/${txId}`);
-      setReceipt(d.receipt);
-    } catch {
-      setReceipt(null);
-    }
-  };
+  const visible = expanded ? rows : rows.slice(0, PAYMENT_HISTORY_PREVIEW);
+  const hidden = rows.length - visible.length;
 
   return (
-    <Section title="Payment history" icon={History} hint="Approved payments and downloadable receipts.">
+    <>
       <ul className="space-y-2">
-        {rows.map((r) => (
+        {visible.map((r) => (
           <li key={r.key} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 px-3 py-2">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-white tabular-nums">{peso(r.amount)}</div>
@@ -499,37 +556,28 @@ export function PortalPaymentHistoryPanel() {
                 {r.method ? ` · ${r.method}` : ''}
               </div>
             </div>
-            {r.transactionId ? (
-              <button
-                type="button"
-                className="text-xs font-semibold text-orange-300 shrink-0"
-                onClick={() => void openReceipt(Number(r.transactionId))}
-              >
-                Receipt
-              </button>
-            ) : null}
           </li>
         ))}
         {!rows.length && <li className="text-sm text-portal-dim">No payments yet.</li>}
       </ul>
-      {receipt && (
-        <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <button type="button" className="absolute inset-0 bg-black/70" onClick={() => setReceipt(null)} aria-label="Close" />
-          <div className="portal-modal-panel relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5">
-            <div className="flex items-start justify-between gap-2 mb-3">
-              <h3 className="font-bold text-white">Payment receipt</h3>
-              <button type="button" onClick={() => setReceipt(null)} className="p-1 text-portal-dim">
-                <X size={18} />
-              </button>
-            </div>
-            <pre className="text-xs text-portal-muted whitespace-pre-wrap break-words max-h-80 overflow-y-auto">
-              {JSON.stringify(receipt, null, 2)}
-            </pre>
-            <p className="text-[11px] text-portal-dim mt-2">Acknowledgement of payment — not a BIR official receipt.</p>
-          </div>
-        </div>
+      {rows.length > PAYMENT_HISTORY_PREVIEW && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="portal-btn-ghost mt-2 w-full inline-flex items-center justify-center gap-1.5 rounded-lg py-2.5 min-h-[44px] text-sm font-semibold text-portal-muted hover:text-white"
+        >
+          {expanded ? 'Show less' : `Show all ${rows.length} payments`}
+          <ChevronDown
+            size={15}
+            className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+          />
+        </button>
       )}
-    </Section>
+      {hidden > 0 && !expanded && (
+        <p className="text-[11px] text-portal-dim mt-1 text-center">{hidden} more not shown</p>
+      )}
+    </>
   );
 }
 
@@ -636,6 +684,139 @@ export function PortalReconnectPanel({ status }: { status?: string | null }) {
           <button type="button" className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm" onClick={() => void submit()}>
             Request reconnect
           </button>
+        </>
+      )}
+      {msg && <p className="text-xs text-portal-muted mt-2">{msg}</p>}
+    </Section>
+  );
+}
+
+/**
+ * Ask the ISP for more days before the line is cut, or to bring a lapsed line
+ * back. Eligibility is decided server-side (lapsed, or inside the pre-due
+ * window) and echoed here, so the panel simply hides itself when it does not
+ * apply rather than duplicating the rule.
+ */
+export function PortalExtensionPanel({ refreshKey }: { refreshKey?: number }) {
+  const [state, setState] = useState<{
+    request: any;
+    eligible: boolean;
+    daysUntilDue: number | null;
+    due: string | null;
+    maxDays: number;
+  } | null>(null);
+  const [days, setDays] = useState(3);
+  const [reason, setReason] = useState('');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    void portalFetch('/public/portal/extension-request')
+      .then((d) => setState(d))
+      .catch(() => setState(null));
+  };
+  useEffect(load, [refreshKey]);
+
+  const pending = state?.request?.status === 'pending';
+  if (!state) return null;
+  if (!state.eligible && !pending) return null;
+
+  const submit = async () => {
+    setMsg('');
+    setBusy(true);
+    try {
+      await portalFetch('/public/portal/extension-request', {
+        method: 'POST',
+        body: JSON.stringify({ days, reason }),
+      });
+      setMsg('Request sent — your ISP will review it.');
+      load();
+    } catch (e: any) {
+      setMsg(e.message || 'Could not send request');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const d = state.daysUntilDue;
+  const window =
+    d == null
+      ? 'Your account is due for renewal.'
+      : d < 0
+        ? `Your service lapsed ${Math.abs(d)} day${Math.abs(d) === 1 ? '' : 's'} ago.`
+        : d === 0
+          ? 'Your service is due today.'
+          : `Your service is due in ${d} day${d === 1 ? '' : 's'}.`;
+
+  const last = state.request;
+
+  return (
+    <Section
+      title="Extend my service"
+      icon={CalendarPlus}
+      hint="Need a few more days before you can pay? Ask your ISP to move your due date."
+    >
+      <p className="text-sm text-portal-muted mb-3">
+        {window}
+        {state.due ? <span className="text-portal-dim"> Due date {String(state.due).slice(0, 10)}.</span> : null}
+      </p>
+
+      {pending ? (
+        <div className="rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
+          Pending review — you asked for <b>{last.daysRequested} day{last.daysRequested === 1 ? '' : 's'}</b>
+          {last.reason ? `: ${last.reason}` : ''}.
+        </div>
+      ) : (
+        <>
+          {last?.status === 'accepted' && (
+            <div className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2.5 text-sm text-emerald-100">
+              Last request approved — {last.grantedDays} day{last.grantedDays === 1 ? '' : 's'} added
+              {last.newDue ? `, new due date ${String(last.newDue).slice(0, 10)}` : ''}.
+            </div>
+          )}
+          {last?.status === 'rejected' && (
+            <div className="mb-3 rounded-xl border border-rose-400/30 bg-rose-500/15 px-3 py-2.5 text-sm text-rose-100">
+              Last request was declined{last.reviewNote ? `: ${last.reviewNote}` : ''}.
+            </div>
+          )}
+          <label className="block text-xs text-portal-dim mb-2">
+            How many extra days?
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {[3, 5, 7, 14]
+                .filter((n) => n <= (state.maxDays || 14))
+                .map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setDays(n)}
+                    className={`text-sm px-3 py-2 min-h-[40px] rounded-lg border transition ${
+                      days === n
+                        ? 'bg-orange-500/25 border-orange-400/45 text-orange-100 font-semibold'
+                        : 'border-white/12 text-portal-muted hover:text-white'
+                    }`}
+                  >
+                    {n} days
+                  </button>
+                ))}
+            </div>
+          </label>
+          <textarea
+            className="portal-field w-full px-3 py-2.5 mt-1"
+            placeholder="Reason (optional) — e.g. salary comes in on Friday"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <button
+            type="button"
+            className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void submit()}
+          >
+            {busy ? 'Sending…' : `Request ${days} more days`}
+          </button>
+          <p className="text-[11px] text-portal-dim mt-2 leading-relaxed">
+            An extension moves your due date — it does not clear your balance.
+          </p>
         </>
       )}
       {msg && <p className="text-xs text-portal-muted mt-2">{msg}</p>}
@@ -925,15 +1106,16 @@ export function PortalExtrasStack({
   refreshKey?: number;
   onReloadMe?: () => void;
 }) {
+  // Activity, payment history and the statement now live in the tabbed Billing
+  // container that ClientPortal renders directly under Change plan, and the
+  // connection panel was folded into the header card — so none of the three
+  // appear here any more.
   return (
     <>
       <PortalOutageNoticesPanel refreshKey={refreshKey} />
-      <PortalActivityPanel refreshKey={refreshKey} />
-      <PortalConnectionPanel refreshKey={refreshKey} />
-      <PortalVisitsPanel openJobs={me?.openJobs} />
+      <PortalExtensionPanel refreshKey={refreshKey} />
       <PortalReconnectPanel status={me?.customer?.status} />
-      <PortalPaymentHistoryPanel />
-      <PortalAddonsPanel />
+      <PortalVisitsPanel openJobs={me?.openJobs} />
       <PortalRemindersPanel />
       <PortalContactPanel
         contact={me?.customer?.contact}

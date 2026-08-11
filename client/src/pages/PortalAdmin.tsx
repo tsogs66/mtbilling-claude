@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Globe2, KeyRound, Pencil, Plus, Save, Search, Settings2, Users, ExternalLink, Zap, Check, X,
-  Binary, Satellite, Wallet,
+  Binary, Satellite, Wallet, CalendarClock,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, FormField, Modal, ModalFooter, PageHeader, StatusBadge, Toolbar } from '../components/ui';
@@ -77,8 +77,11 @@ const PORTAL_THEMES: { key: PortalThemeId; label: string; hint: string; Icon: ty
 function PortalRequestsPanel() {
   const [addons, setAddons] = useState<any[]>([]);
   const [reconnects, setReconnects] = useState<any[]>([]);
+  const [extensions, setExtensions] = useState<any[]>([]);
   const [referrals, setReferrals] = useState<any[]>([]);
   const [msg, setMsg] = useState('');
+  /** Staff may grant fewer days than asked; keyed by request id. */
+  const [grantDays, setGrantDays] = useState<Record<number, number>>({});
 
   const load = () => {
     void api.get('/portal-requests/addons').then((r) => setAddons(r.data.items || [])).catch(() => setAddons([]));
@@ -86,6 +89,10 @@ function PortalRequestsPanel() {
       .get('/portal-requests/reconnects')
       .then((r) => setReconnects(r.data.items || []))
       .catch(() => setReconnects([]));
+    void api
+      .get('/portal-requests/extensions')
+      .then((r) => setExtensions(r.data.items || []))
+      .catch(() => setExtensions([]));
     void api
       .get('/portal-requests/referrals')
       .then((r) => setReferrals(r.data.items || []))
@@ -104,6 +111,15 @@ function PortalRequestsPanel() {
   const decideReconnect = async (id: number, decision: 'accept' | 'reject') => {
     await api.post(`/portal-requests/reconnects/${id}/decide`, { decision });
     setMsg(`Reconnect ${decision}ed`);
+    load();
+  };
+  const decideExtension = async (id: number, decision: 'accept' | 'reject', days?: number) => {
+    const r = await api.post(`/portal-requests/extensions/${id}/decide`, { decision, days });
+    setMsg(
+      decision === 'accept'
+        ? `Extension granted — ${r.data?.grantedDays} day(s), new due ${r.data?.newDue}`
+        : 'Extension rejected'
+    );
     load();
   };
 
@@ -174,6 +190,65 @@ function PortalRequestsPanel() {
             <li className="py-6 text-center text-slate-400 text-sm">No pending reconnects.</li>
           )}
         </ul>
+      </Card>
+      <Card title="Service extension requests" icon={CalendarClock}>
+        <ul className="divide-y divide-slate-100">
+          {extensions.map((e) => {
+            const days = grantDays[e.id] ?? e.daysRequested ?? 3;
+            return (
+              <li key={e.id} className="py-2.5 flex flex-wrap items-center gap-2 justify-between">
+                <div className="text-sm">
+                  <div className="font-medium text-slate-800">
+                    {e.customerName || 'Subscriber'}{' '}
+                    <span className="font-mono text-xs text-slate-400">{e.accountNumber}</span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Asked for {e.daysRequested} day{e.daysRequested === 1 ? '' : 's'} · status{' '}
+                    {e.accountStatus || '—'} · due {e.subscriptionDue || '—'}
+                    {e.reason ? ` · ${e.reason}` : ''}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-slate-500 flex items-center gap-1">
+                    Grant
+                    <input
+                      type="number"
+                      min={1}
+                      max={14}
+                      className="input w-16 text-xs py-1"
+                      value={days}
+                      onChange={(ev) =>
+                        setGrantDays((g) => ({ ...g, [e.id]: Number(ev.target.value) || 1 }))
+                      }
+                    />
+                    d
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    onClick={() => void decideExtension(e.id, 'accept', days)}
+                  >
+                    <Check size={14} /> Accept
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={() => void decideExtension(e.id, 'reject')}
+                  >
+                    <X size={14} /> Reject
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+          {!extensions.length && (
+            <li className="py-6 text-center text-slate-400 text-sm">No pending extensions.</li>
+          )}
+        </ul>
+        <p className="text-xs text-slate-400 pt-2 border-t border-slate-100">
+          Accepting moves the subscriber&rsquo;s due date forward, sets the account back to Active,
+          and re-arms the router grace/disable schedule against the new date.
+        </p>
       </Card>
       <Card title="Referral leads" icon={Users}>
         <ul className="divide-y divide-slate-100">

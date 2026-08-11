@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
   Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
-  Eye, Printer, Loader2,
+  Eye, Printer, Loader2, History, Bell,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -19,6 +19,10 @@ import {
   PortalExtrasStack,
   PortalPlanCancelButton,
   PortalTicketThread,
+  PortalConnectionStrip,
+  PortalActivityBody,
+  PortalPaymentHistoryBody,
+  PortalAddonsPanel,
 } from '../components/portal/PortalExtraPanels';
 
 const TOKEN_KEY = 'mt_portal_token';
@@ -151,6 +155,14 @@ type PortalSettings = {
   theme?: PortalThemeId;
 };
 
+type BillingTabId = 'statement' | 'payments' | 'activity';
+
+const BILLING_TABS: { id: BillingTabId; label: string; icon: typeof FileText }[] = [
+  { id: 'statement', label: 'Statement', icon: FileText },
+  { id: 'payments', label: 'Payments', icon: History },
+  { id: 'activity', label: 'Activity', icon: Bell },
+];
+
 type OutageServiceOpt = {
   slug: string;
   name: string;
@@ -224,6 +236,7 @@ export default function ClientPortal() {
   const [forgotOk, setForgotOk] = useState(false);
   const [ticketThreadId, setTicketThreadId] = useState<number | null>(null);
   const [extrasRefresh, setExtrasRefresh] = useState(0);
+  const [billingTab, setBillingTab] = useState<BillingTabId>('statement');
   const portalTheme: PortalThemeId =
     (me?.settings?.theme || pageSettings.theme) === 'orbital' ? 'orbital' : 'matrix';
   const { installed, showInstallButton, iosHint, dismissIosHint, install } = usePortalInstall(portalTheme);
@@ -728,6 +741,12 @@ export default function ClientPortal() {
   const showInvoices = s.showInvoices !== false;
   const showTickets = s.showTickets !== false;
   const showCompany = s.showCompany !== false;
+  const billingTabs = BILLING_TABS.filter((t) => t.id !== 'statement' || showInvoices);
+  // The ISP can turn the statement off in portal settings, which would strand
+  // the default tab on an empty panel.
+  const activeBillingTab = billingTabs.some((t) => t.id === billingTab)
+    ? billingTab
+    : billingTabs[0].id;
   const paymentLink: PaymentLink | null = me.paymentLink || null;
   const balance = Number(me.balance) || 0;
   const company = me.company || {};
@@ -876,6 +895,10 @@ export default function ClientPortal() {
                 </button>
               </div>
             )}
+
+            {/* Line vitals sit here rather than in their own section further
+                down: "am I online?" is the question the portal gets opened for. */}
+            <PortalConnectionStrip refreshKey={extrasRefresh} />
 
             {s.welcomeText && (
               <p className="mt-4 text-sm text-portal-muted leading-relaxed border-l-2 border-orange-400/70 pl-3">
@@ -1038,11 +1061,52 @@ export default function ClientPortal() {
           </section>
         )}
 
-        {showInvoices && (
-          <section className="portal-glass portal-section">
-            <h2 className="font-semibold text-white flex items-center gap-2 mb-3 text-base">
-              <FileText size={16} className="text-orange-400" /> Statement of account
-            </h2>
+        {/* Requested position: directly under Change plan. */}
+        <PortalAddonsPanel />
+
+        {/* Statement / Payments / Activity share one container — three separate
+            full-height sections made the page a long scroll of lists that a
+            subscriber rarely needs at the same time. */}
+        <section className="portal-glass portal-section">
+          <div
+            role="tablist"
+            aria-label="Billing"
+            className="flex items-center gap-1 p-1 rounded-xl bg-black/25 border border-white/10 mb-4 overflow-x-auto"
+          >
+            {billingTabs.map((t) => {
+              const Icon = t.icon;
+              const active = activeBillingTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  id={`billing-tab-${t.id}`}
+                  aria-selected={active}
+                  aria-controls={`billing-panel-${t.id}`}
+                  onClick={() => setBillingTab(t.id)}
+                  className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 min-h-[42px] text-sm font-semibold whitespace-nowrap transition ${
+                    active
+                      ? 'bg-orange-500/25 text-orange-100 ring-1 ring-orange-400/40'
+                      : 'text-portal-muted hover:text-white'
+                  }`}
+                >
+                  <Icon size={15} className="shrink-0" />
+                  <span className="truncate">{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div
+            role="tabpanel"
+            id={`billing-panel-${activeBillingTab}`}
+            aria-labelledby={`billing-tab-${activeBillingTab}`}
+          >
+            {activeBillingTab === 'activity' && <PortalActivityBody refreshKey={extrasRefresh} />}
+            {activeBillingTab === 'payments' && <PortalPaymentHistoryBody />}
+            {activeBillingTab === 'statement' && showInvoices && (
+          <>
             <div className="sm:hidden space-y-2.5">
               {(me.invoices || [])
                 .filter((inv: any) => String(inv.status || '') !== 'void')
@@ -1147,8 +1211,10 @@ export default function ClientPortal() {
                 </tbody>
               </table>
             </div>
-          </section>
-        )}
+          </>
+            )}
+          </div>
+        </section>
 
         {showTickets && (
           <section className="portal-glass portal-section">
