@@ -39,11 +39,36 @@ export async function withRouter<T>(
   // be allowed to take the panel down; connect()/fn() rejecting is how callers
   // actually observe the failure.
   api.on('error', () => {});
-  await api.connect();
+  // connect() used to sit outside the budget below, so only the *callback* was
+  // bounded. On an unreachable board the connect phase is exactly where the
+  // time goes (SYN retries), and node-routeros' own `timeout` does not reliably
+  // cap it — leaving each call free to run well past timeoutSec. Bound it
+  // explicitly, or a mass run (see executeBillingEnforcement) inherits the
+  // overrun once per account.
+  const budgetMs = Math.max(3_000, timeoutSec * 1000);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try {
+        api.close();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error(`router-connect-timeout after ${timeoutSec}s`));
+    }, budgetMs);
+    api.connect().then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
   try {
     // Hard budget for the whole callback — node-routeros per-command timeout does
     // not reliably abort stuck /system or /tool/fetch writes.
-    const budgetMs = Math.max(3_000, timeoutSec * 1000);
     return await new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         try {

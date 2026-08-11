@@ -639,107 +639,107 @@ export function PortalAddonsPanel() {
   );
 }
 
-export function PortalReconnectPanel({ status }: { status?: string | null }) {
-  const [req, setReq] = useState<any>(null);
-  const [reason, setReason] = useState('');
-  const [msg, setMsg] = useState('');
-  const st = String(status || '').toLowerCase();
-  const eligible = st.includes('non') || st === 'disabled' || st === 'expired' || st === 'suspended';
-  useEffect(() => {
+/**
+ * Temporary reconnect and Extend my service, sharing one tab strip that sits
+ * directly under Balance due — both are what a subscriber reaches for at the
+ * same moment (money is due and the line is at risk), and both used to sit far
+ * down the page past everything else.
+ *
+ * Nothing is expanded until a tab is tapped, and tapping the open tab closes it
+ * again. Staying collapsed is what lets the strip live in the header at all.
+ *
+ * Both fetches live here rather than inside the bodies, because the strip has
+ * to know which tabs are even offerable before it decides to render.
+ */
+export function PortalRequestTabs({
+  status,
+  refreshKey,
+}: {
+  status?: string | null;
+  refreshKey?: number;
+}) {
+  const [recon, setRecon] = useState<any>(null);
+  const [ext, setExt] = useState<any>(null);
+  const [open, setOpen] = useState<'reconnect' | 'extension' | null>(null);
+
+  const [reconReason, setReconReason] = useState('');
+  const [reconMsg, setReconMsg] = useState('');
+  const [reconBusy, setReconBusy] = useState(false);
+
+  const [extDays, setExtDays] = useState(3);
+  const [extReason, setExtReason] = useState('');
+  const [extMsg, setExtMsg] = useState('');
+  const [extBusy, setExtBusy] = useState(false);
+
+  const loadRecon = () =>
     void portalFetch('/public/portal/reconnect-request')
-      .then((d) => setReq(d.request))
-      .catch(() => {});
-  }, []);
-  if (!eligible && !(req && req.status === 'pending')) return null;
-  const submit = async () => {
-    setMsg('');
+      .then((d) => setRecon(d.request ?? null))
+      .catch(() => setRecon(null));
+  const loadExt = () =>
+    void portalFetch('/public/portal/extension-request')
+      .then((d) => setExt(d))
+      .catch(() => setExt(null));
+
+  useEffect(() => {
+    loadRecon();
+    loadExt();
+  }, [refreshKey]);
+
+  const st = String(status || '').toLowerCase();
+  const lapsed = st.includes('non') || st === 'disabled' || st === 'expired' || st === 'suspended';
+  const reconPending = recon?.status === 'pending';
+  const extPending = ext?.request?.status === 'pending';
+
+  const tabs: {
+    id: 'reconnect' | 'extension';
+    label: string;
+    icon: typeof ShieldAlert;
+    pending?: boolean;
+  }[] = [];
+  if (lapsed || reconPending) {
+    tabs.push({ id: 'reconnect', label: 'Reconnect', icon: ShieldAlert, pending: reconPending });
+  }
+  if (ext?.eligible || extPending) {
+    tabs.push({ id: 'extension', label: 'Extend service', icon: CalendarPlus, pending: extPending });
+  }
+  if (!tabs.length) return null;
+
+  const submitRecon = async () => {
+    setReconMsg('');
+    setReconBusy(true);
     try {
       await portalFetch('/public/portal/reconnect-request', {
         method: 'POST',
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason: reconReason }),
       });
-      setMsg('Request sent.');
-      const d = await portalFetch('/public/portal/reconnect-request');
-      setReq(d.request);
+      setReconMsg('Request sent.');
+      loadRecon();
     } catch (e: any) {
-      setMsg(e.message || 'Failed');
+      setReconMsg(e.message || 'Failed');
+    } finally {
+      setReconBusy(false);
     }
   };
-  return (
-    <Section
-      title="Temporary reconnect"
-      icon={ShieldAlert}
-      hint="Ask for short-term restore while you settle your balance."
-    >
-      {req?.status === 'pending' ? (
-        <p className="text-sm text-amber-100">Pending review{req.reason ? `: ${req.reason}` : ''}.</p>
-      ) : (
-        <>
-          <textarea
-            className="portal-field w-full px-3 py-2.5"
-            placeholder="Reason (optional)"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <button type="button" className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm" onClick={() => void submit()}>
-            Request reconnect
-          </button>
-        </>
-      )}
-      {msg && <p className="text-xs text-portal-muted mt-2">{msg}</p>}
-    </Section>
-  );
-}
 
-/**
- * Ask the ISP for more days before the line is cut, or to bring a lapsed line
- * back. Eligibility is decided server-side (lapsed, or inside the pre-due
- * window) and echoed here, so the panel simply hides itself when it does not
- * apply rather than duplicating the rule.
- */
-export function PortalExtensionPanel({ refreshKey }: { refreshKey?: number }) {
-  const [state, setState] = useState<{
-    request: any;
-    eligible: boolean;
-    daysUntilDue: number | null;
-    due: string | null;
-    maxDays: number;
-  } | null>(null);
-  const [days, setDays] = useState(3);
-  const [reason, setReason] = useState('');
-  const [msg, setMsg] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const load = () => {
-    void portalFetch('/public/portal/extension-request')
-      .then((d) => setState(d))
-      .catch(() => setState(null));
-  };
-  useEffect(load, [refreshKey]);
-
-  const pending = state?.request?.status === 'pending';
-  if (!state) return null;
-  if (!state.eligible && !pending) return null;
-
-  const submit = async () => {
-    setMsg('');
-    setBusy(true);
+  const submitExt = async () => {
+    setExtMsg('');
+    setExtBusy(true);
     try {
       await portalFetch('/public/portal/extension-request', {
         method: 'POST',
-        body: JSON.stringify({ days, reason }),
+        body: JSON.stringify({ days: extDays, reason: extReason }),
       });
-      setMsg('Request sent — your ISP will review it.');
-      load();
+      setExtMsg('Request sent — your ISP will review it.');
+      loadExt();
     } catch (e: any) {
-      setMsg(e.message || 'Could not send request');
+      setExtMsg(e.message || 'Could not send request');
     } finally {
-      setBusy(false);
+      setExtBusy(false);
     }
   };
 
-  const d = state.daysUntilDue;
-  const window =
+  const d = ext?.daysUntilDue;
+  const dueLine =
     d == null
       ? 'Your account is due for renewal.'
       : d < 0
@@ -747,80 +747,156 @@ export function PortalExtensionPanel({ refreshKey }: { refreshKey?: number }) {
         : d === 0
           ? 'Your service is due today.'
           : `Your service is due in ${d} day${d === 1 ? '' : 's'}.`;
-
-  const last = state.request;
+  const last = ext?.request;
 
   return (
-    <Section
-      title="Extend my service"
-      icon={CalendarPlus}
-      hint="Need a few more days before you can pay? Ask your ISP to move your due date."
-    >
-      <p className="text-sm text-portal-muted mb-3">
-        {window}
-        {state.due ? <span className="text-portal-dim"> Due date {String(state.due).slice(0, 10)}.</span> : null}
-      </p>
+    <div className="mt-3 sm:mt-4 portal-glass rounded-2xl p-3">
+      <div role="tablist" aria-label="Service requests" className="flex items-center gap-1.5">
+        {tabs.map((t) => {
+          const Icon = t.icon;
+          const active = open === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-expanded={active}
+              aria-controls={`request-panel-${t.id}`}
+              onClick={() => setOpen(active ? null : t.id)}
+              className={`flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2.5 min-h-[44px] text-xs sm:text-sm font-semibold transition ${
+                active
+                  ? 'bg-orange-500/25 text-orange-100 ring-1 ring-orange-400/40'
+                  : 'bg-white/[0.04] text-portal-muted hover:text-white ring-1 ring-white/10'
+              }`}
+            >
+              <Icon size={15} className="shrink-0" />
+              <span className="truncate">{t.label}</span>
+              {t.pending && (
+                <span
+                  className="shrink-0 h-1.5 w-1.5 rounded-full bg-amber-300"
+                  title="Pending review"
+                  aria-label="Pending review"
+                />
+              )}
+              <ChevronDown
+                size={14}
+                className={`shrink-0 transition-transform duration-200 ${active ? 'rotate-180' : ''}`}
+              />
+            </button>
+          );
+        })}
+      </div>
 
-      {pending ? (
-        <div className="rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
-          Pending review — you asked for <b>{last.daysRequested} day{last.daysRequested === 1 ? '' : 's'}</b>
-          {last.reason ? `: ${last.reason}` : ''}.
-        </div>
-      ) : (
-        <>
-          {last?.status === 'accepted' && (
-            <div className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2.5 text-sm text-emerald-100">
-              Last request approved — {last.grantedDays} day{last.grantedDays === 1 ? '' : 's'} added
-              {last.newDue ? `, new due date ${String(last.newDue).slice(0, 10)}` : ''}.
-            </div>
-          )}
-          {last?.status === 'rejected' && (
-            <div className="mb-3 rounded-xl border border-rose-400/30 bg-rose-500/15 px-3 py-2.5 text-sm text-rose-100">
-              Last request was declined{last.reviewNote ? `: ${last.reviewNote}` : ''}.
-            </div>
-          )}
-          <label className="block text-xs text-portal-dim mb-2">
-            How many extra days?
-            <div className="flex flex-wrap gap-1.5 mt-1.5">
-              {[3, 5, 7, 14]
-                .filter((n) => n <= (state.maxDays || 14))
-                .map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setDays(n)}
-                    className={`text-sm px-3 py-2 min-h-[40px] rounded-lg border transition ${
-                      days === n
-                        ? 'bg-orange-500/25 border-orange-400/45 text-orange-100 font-semibold'
-                        : 'border-white/12 text-portal-muted hover:text-white'
-                    }`}
-                  >
-                    {n} days
-                  </button>
-                ))}
-            </div>
-          </label>
-          <textarea
-            className="portal-field w-full px-3 py-2.5 mt-1"
-            placeholder="Reason (optional) — e.g. salary comes in on Friday"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <button
-            type="button"
-            className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm disabled:opacity-50"
-            disabled={busy}
-            onClick={() => void submit()}
-          >
-            {busy ? 'Sending…' : `Request ${days} more days`}
-          </button>
-          <p className="text-[11px] text-portal-dim mt-2 leading-relaxed">
-            An extension moves your due date — it does not clear your balance.
+      {open === 'reconnect' && (
+        <div id="request-panel-reconnect" role="tabpanel" className="mt-3 pt-3 border-t border-white/10">
+          <p className="text-sm font-semibold text-white mb-1">Temporary reconnect</p>
+          <p className="text-sm text-portal-muted mb-2 leading-relaxed">
+            Ask for a short-term restore while you settle your balance.
           </p>
-        </>
+          {reconPending ? (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
+              Pending review{recon.reason ? `: ${recon.reason}` : ''}.
+            </div>
+          ) : (
+            <>
+              <textarea
+                className="portal-field w-full px-3 py-2.5"
+                placeholder="Reason (optional)"
+                value={reconReason}
+                onChange={(e) => setReconReason(e.target.value)}
+              />
+              <button
+                type="button"
+                className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm disabled:opacity-50"
+                disabled={reconBusy}
+                onClick={() => void submitRecon()}
+              >
+                {reconBusy ? 'Sending…' : 'Request reconnect'}
+              </button>
+            </>
+          )}
+          {reconMsg && <p className="text-xs text-portal-muted mt-2">{reconMsg}</p>}
+        </div>
       )}
-      {msg && <p className="text-xs text-portal-muted mt-2">{msg}</p>}
-    </Section>
+
+      {open === 'extension' && (
+        <div id="request-panel-extension" role="tabpanel" className="mt-3 pt-3 border-t border-white/10">
+          <p className="text-sm font-semibold text-white mb-1">Extend my service</p>
+          <p className="text-sm text-portal-muted mb-2 leading-relaxed">
+            Need a few more days before you can pay? Ask your ISP to move your due date.
+          </p>
+          <p className="text-sm text-portal-muted mb-3">
+            {dueLine}
+            {ext?.due ? (
+              <span className="text-portal-dim"> Due date {String(ext.due).slice(0, 10)}.</span>
+            ) : null}
+          </p>
+          {extPending ? (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
+              Pending review — you asked for{' '}
+              <b>
+                {last.daysRequested} day{last.daysRequested === 1 ? '' : 's'}
+              </b>
+              {last.reason ? `: ${last.reason}` : ''}.
+            </div>
+          ) : (
+            <>
+              {last?.status === 'accepted' && (
+                <div className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2.5 text-sm text-emerald-100">
+                  Last request approved — {last.grantedDays} day{last.grantedDays === 1 ? '' : 's'} added
+                  {last.newDue ? `, new due date ${String(last.newDue).slice(0, 10)}` : ''}.
+                </div>
+              )}
+              {last?.status === 'rejected' && (
+                <div className="mb-3 rounded-xl border border-rose-400/30 bg-rose-500/15 px-3 py-2.5 text-sm text-rose-100">
+                  Last request was declined{last.reviewNote ? `: ${last.reviewNote}` : ''}.
+                </div>
+              )}
+              <label className="block text-xs text-portal-dim mb-2">
+                How many extra days?
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {[3, 5, 7, 14]
+                    .filter((n) => n <= (ext?.maxDays || 14))
+                    .map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setExtDays(n)}
+                        className={`text-sm px-3 py-2 min-h-[40px] rounded-lg border transition ${
+                          extDays === n
+                            ? 'bg-orange-500/25 border-orange-400/45 text-orange-100 font-semibold'
+                            : 'border-white/12 text-portal-muted hover:text-white'
+                        }`}
+                      >
+                        {n} days
+                      </button>
+                    ))}
+                </div>
+              </label>
+              <textarea
+                className="portal-field w-full px-3 py-2.5 mt-1"
+                placeholder="Reason (optional) — e.g. salary comes in on Friday"
+                value={extReason}
+                onChange={(e) => setExtReason(e.target.value)}
+              />
+              <button
+                type="button"
+                className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm disabled:opacity-50"
+                disabled={extBusy}
+                onClick={() => void submitExt()}
+              >
+                {extBusy ? 'Sending…' : `Request ${extDays} more days`}
+              </button>
+              <p className="text-[11px] text-portal-dim mt-2 leading-relaxed">
+                An extension moves your due date — it does not clear your balance.
+              </p>
+            </>
+          )}
+          {extMsg && <p className="text-xs text-portal-muted mt-2">{extMsg}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1113,8 +1189,8 @@ export function PortalExtrasStack({
   return (
     <>
       <PortalOutageNoticesPanel refreshKey={refreshKey} />
-      <PortalExtensionPanel refreshKey={refreshKey} />
-      <PortalReconnectPanel status={me?.customer?.status} />
+      {/* Reconnect and extension moved into PortalRequestTabs, which the portal
+          header renders directly under Balance due. */}
       <PortalVisitsPanel openJobs={me?.openJobs} />
       <PortalRemindersPanel />
       <PortalContactPanel
