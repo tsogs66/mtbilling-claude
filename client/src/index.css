@@ -113,10 +113,10 @@ body {
     align-items: flex-start;
     gap: 0.75rem;
   }
-  .map-page-shell {
-    height: calc(100dvh - 3.5rem - var(--bottom-nav-h, 0px));
-    min-height: 280px;
-  }
+  /* No .map-page-shell height override here any more: it never actually applied
+     (this block sits ~1900 lines before the base rule, and at equal specificity
+     the later rule wins), and the shell now flexes to fill <main> on every
+     breakpoint, so there is nothing left to override. */
   .map-client-panel {
     width: min(300px, calc(100% - 16px));
     left: 8px;
@@ -2067,13 +2067,23 @@ body {
   font-family: 'Inter', system-ui, sans-serif;
 }
 
+/* Fill whatever <main> actually gives us instead of re-deriving the height from
+   100dvh. The old `height: calc(100dvh - 4rem - var(--bottom-nav-h))` hard-coded
+   a guess at the topbar height and had to be re-guessed per breakpoint, and the
+   `min-height: 420px` floor could exceed the space available: measured on a
+   844x390 phone in the app shell, <main> offered 326px but the shell was forced
+   to 420px, overflowing 94px past the bottom of the screen — the map got
+   clipped and pushed under the nav.
+
+   <main> (and the full-bleed wrapper inside it) are already `flex-1 flex-col
+   min-h-0`, and <main> already subtracts the bottom nav via
+   .native-shell-main-bleed, so flexing to fill is exactly right on every
+   viewport and cannot overflow. No breakpoint-specific height needed. */
 .map-page-shell {
   display: flex;
   flex-direction: column;
-  /* --bottom-nav-h is 0 in the browser and the real nav height in the app, so
-     this one expression is correct on both. */
-  height: calc(100dvh - 4rem - var(--bottom-nav-h, 0px));
-  min-height: 420px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ── Native app (Android/iOS shell): keep content clear of the bottom nav ──
