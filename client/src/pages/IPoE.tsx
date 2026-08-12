@@ -12,6 +12,19 @@ import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair } from '../lib/traffic';
 
+/** Server-side progress for a running IPoE expiry-protocol run. */
+type IpoeRecheckJob = {
+  running: boolean;
+  done: number;
+  total: number;
+  current?: string;
+  message?: string;
+  error?: string;
+  startedAt?: string;
+  preview?: any;
+  result?: any;
+};
+
 const TABS = [
   { key: 'users', label: 'Users', icon: Users },
   { key: 'offline', label: 'Offline', icon: WifiOff },
@@ -50,6 +63,7 @@ export default function IPoE() {
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [recheckPreview, setRecheckPreview] = useState<any | null>(null);
   const [recheckResult, setRecheckResult] = useState<any | null>(null);
+  const [recheckJob, setRecheckJob] = useState<IpoeRecheckJob | null>(null);
   const { current } = useRouterDevice();
 
   const showToast = (msg: string) => {
@@ -213,17 +227,40 @@ export default function IPoE() {
     }
   };
 
+  /**
+   * Runs server-side as a background job — blocking a past-grace lease is a
+   * router round-trip each, so a large batch used to outlive the browser's own
+   * timeout with the button still spinning. Start it, then poll for progress.
+   */
   const confirmBillingRecheck = async () => {
     setRecheckBusy(true);
+    setRecheckJob(null);
     try {
-      const r = await api.post('/ipoe/billing-recheck', { routerId: current?.id });
-      setRecheckPreview(null);
-      setRecheckResult(r.data);
-      loadLeases();
+      const start = await api.post('/ipoe/billing-recheck', { routerId: current?.id });
+      setRecheckJob(start.data?.job || null);
+
+      const poll = async (): Promise<void> => {
+        const r = await api.get('/ipoe/billing-recheck/job');
+        const job: IpoeRecheckJob | null = r.data?.job || null;
+        setRecheckJob(job);
+        if (job?.running) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return poll();
+        }
+        setRecheckPreview(null);
+        setRecheckBusy(false);
+        if (job?.error) {
+          showToast(job.error);
+        } else if (job) {
+          setRecheckResult({ ok: true, message: job.message, preview: job.preview, result: job.result });
+        }
+        loadLeases();
+      };
+      await poll();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Could not apply expiry protocols');
-    } finally {
       setRecheckBusy(false);
+      loadLeases();
     }
   };
 
@@ -725,6 +762,34 @@ export default function IPoE() {
           }
         >
           <div className="space-y-4 text-sm text-slate-600">
+            {recheckBusy && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2 text-amber-900">
+                  <span className="font-semibold flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    Applying expiry protocols
+                  </span>
+                  <span className="tabular-nums text-xs font-semibold">
+                    {recheckJob ? `${recheckJob.done} / ${recheckJob.total || '?'}` : 'starting…'}
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 rounded-full bg-amber-200 overflow-hidden">
+                  <div
+                    className="h-full bg-amber-600 transition-[width] duration-300"
+                    style={{
+                      width: recheckJob?.total
+                        ? `${Math.min(100, Math.round((recheckJob.done / recheckJob.total) * 100))}%`
+                        : '10%',
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-amber-800">
+                  {recheckJob?.current
+                    ? `Last: ${recheckJob.current}`
+                    : 'Blocking a lease is a router round-trip — this keeps running on the server.'}
+                </p>
+              </div>
+            )}
             <p>Found overdue leases. Confirm to mark non-payment and block leases past the grace period on MikroTik.</p>
             {!!recheckPreview.toExpire?.length && (
               <div>

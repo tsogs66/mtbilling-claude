@@ -3701,7 +3701,14 @@ async function previewIpoeBillingEnforcement(routerId: number | null) {
   return loadIpoeLeaseBillingState(routerId);
 }
 
-async function executeIpoeBillingEnforcement(routerId: number | null) {
+async function executeIpoeBillingEnforcement(
+  routerId: number | null,
+  opts?: {
+    onProgress?: (done: number, total: number, label: string) => void;
+    /** Cap concurrent lease-block writes. */
+    concurrency?: number;
+  }
+) {
   const preview = await loadIpoeLeaseBillingState(routerId);
   const router = getRouterById(routerId);
   let markedNonPayment = 0;
@@ -3710,32 +3717,58 @@ async function executeIpoeBillingEnforcement(routerId: number | null) {
   const expired: IpoeBillingCandidate[] = [];
   const disabledLeases: IpoeBillingCandidate[] = [];
 
+  const total = preview.toExpire.length + preview.toDisable.length;
+  let done = 0;
+  const tick = (label: string) => {
+    done++;
+    try {
+      opts?.onProgress?.(done, total, label);
+    } catch {
+      /* progress reporting must never break enforcement */
+    }
+  };
+
   for (const c of preview.toExpire) {
     db.prepare(
       `UPDATE ipoe_lease_meta SET payment_status = 'Non-payment' WHERE mac = ?`
     ).run(c.mac);
     markedNonPayment++;
     expired.push({ ...c, payment: 'Non-payment' });
+    tick(c.name || c.mac);
   }
 
-  for (const c of preview.toDisable) {
-    db.prepare(
-      `UPDATE ipoe_lease_meta SET payment_status = 'Disabled' WHERE mac = ?`
-    ).run(c.mac);
-    if (router?.host && router?.api_user && c.leaseId) {
-      try {
-        await setDhcpLeaseBlocked(router, c.leaseId, true);
-        blocked++;
-        disabledLeases.push({ ...c, payment: 'Disabled', blocked: true });
-      } catch {
-        routerErrors++;
+  // The block loop used to run strictly one lease at a time, each a fresh
+  // router round-trip, so the wall time grew without bound with the number of
+  // past-grace leases — the same shape of problem the PPPoE recheck had.
+  const limit = Math.max(1, Math.min(8, Number(opts?.concurrency) || 6));
+  const queue = [...preview.toDisable];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, Math.max(1, queue.length)) }, async () => {
+      while (true) {
+        const i = next++;
+        if (i >= queue.length) return;
+        const c = queue[i];
+        db.prepare(
+          `UPDATE ipoe_lease_meta SET payment_status = 'Disabled' WHERE mac = ?`
+        ).run(c.mac);
+        if (router?.host && router?.api_user && c.leaseId) {
+          try {
+            await setDhcpLeaseBlocked(router, c.leaseId, true);
+            blocked++;
+            disabledLeases.push({ ...c, payment: 'Disabled', blocked: true });
+          } catch {
+            routerErrors++;
+          }
+        } else {
+          // No live lease id — still mark disabled in panel meta
+          blocked++;
+          disabledLeases.push({ ...c, payment: 'Disabled' });
+        }
+        tick(c.name || c.mac);
       }
-    } else {
-      // No live lease id — still mark disabled in panel meta
-      blocked++;
-      disabledLeases.push({ ...c, payment: 'Disabled' });
-    }
-  }
+    })
+  );
 
   if (markedNonPayment || blocked) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -5296,24 +5329,69 @@ app.get('/api/ipoe/billing-recheck', async (req, res) => {
   res.json(await previewIpoeBillingEnforcement(routerId));
 });
 
+/** Same background-job treatment as the PPPoE recheck above, for the same
+ *  reason: blocking a past-grace lease is a router round-trip per lease, so a
+ *  big batch outlived the browser's timeout and Cloudflare's while the run kept
+ *  going, leaving the button spinning with nothing to show. */
+type IpoeRecheckJob = {
+  running: boolean;
+  routerId: number | null;
+  startedAt: string;
+  finishedAt?: string;
+  done: number;
+  total: number;
+  current?: string;
+  message?: string;
+  error?: string;
+  preview?: Awaited<ReturnType<typeof previewIpoeBillingEnforcement>>;
+  result?: Awaited<ReturnType<typeof executeIpoeBillingEnforcement>>;
+};
+let ipoeRecheckJob: IpoeRecheckJob | null = null;
+
 app.post('/api/ipoe/billing-recheck', async (req, res) => {
   const routerId = Number(req.body?.routerId || req.query.routerId || 0) || null;
-  const preview = await previewIpoeBillingEnforcement(routerId);
-  if (!preview.toExpire.length && !preview.toDisable.length) {
-    return res.json({
-      ok: true,
-      message: 'No overdue or past-grace IPoE leases found.',
-      ...preview,
-      result: null,
-    });
+  if (ipoeRecheckJob?.running) {
+    return res
+      .status(409)
+      .json({ error: 'An IPoE expiry-protocol run is already in progress', job: ipoeRecheckJob });
   }
-  const result = await executeIpoeBillingEnforcement(routerId);
-  res.json({
-    ok: true,
-    message: `Marked ${result.markedNonPayment} lease(s) non-payment; blocked ${result.blocked} past grace.`,
+  const preview = await previewIpoeBillingEnforcement(routerId);
+  const job: IpoeRecheckJob = {
+    running: true,
+    routerId,
+    startedAt: new Date().toISOString(),
+    done: 0,
+    total: preview.toExpire.length + preview.toDisable.length,
     preview,
-    result,
-  });
+  };
+  ipoeRecheckJob = job;
+
+  void executeIpoeBillingEnforcement(routerId, {
+    onProgress: (done, total, label) => {
+      job.done = done;
+      job.total = Math.max(total, job.total);
+      job.current = label;
+    },
+  })
+    .then((result) => {
+      job.result = result;
+      job.message = `Marked ${result.markedNonPayment} lease(s) non-payment; blocked ${result.blocked} past grace.${
+        result.routerErrors ? ` Router errors ${result.routerErrors}.` : ''
+      }`;
+    })
+    .catch((e: any) => {
+      job.error = e?.message || 'IPoE expiry protocol run failed';
+    })
+    .finally(() => {
+      job.running = false;
+      job.finishedAt = new Date().toISOString();
+    });
+
+  res.status(202).json({ ok: true, started: true, job });
+});
+
+app.get('/api/ipoe/billing-recheck/job', (_req, res) => {
+  res.json({ job: ipoeRecheckJob });
 });
 
 app.use('/api', settingsRouter);
