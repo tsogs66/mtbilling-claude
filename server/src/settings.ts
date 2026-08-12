@@ -961,6 +961,11 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   }
   const errorPageUrl =
     String(b.errorPageUrl || '').trim() || `${publicBase}/error.html`;
+  // Opt-in captive redirect. Blank keeps action=deny (proven working); set it
+  // to the proxy's own page — http://<landing-or-router-ip>:8080/error.html —
+  // and every provisioning path plus the 5-minute watchdog writes redirect
+  // instead, so a hand-set rule is no longer reverted on the next tick.
+  const captiveRedirectUrl = String(b.captiveRedirectUrl || '').trim();
   const lanIp = detectLanIpv4();
   // Detected or caller-supplied only. This list is a firewall allowlist punched
   // through the non-payment lockdown, and it used to carry one deployment's
@@ -1000,6 +1005,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         billingLanIp: lanIp || undefined,
         landingAddress: b.landingAddress,
         captiveApiPort: b.captiveApiPort,
+        captiveRedirectUrl: captiveRedirectUrl || undefined,
       });
       repair = {
         ok: true as const,
@@ -1024,6 +1030,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
           // deployment's LAN address.
           billingLanIp: lanIp || undefined,
           landingAddress: b.landingAddress,
+          captiveRedirectUrl: captiveRedirectUrl || undefined,
         });
       } catch {
         /* ignore */
@@ -1034,6 +1041,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         nonPayAddressList: b.nonPayAddressList,
         portalRedirectUrl: `${publicBase}/portal`,
         username: kickUser || undefined,
+        captiveRedirectUrl: captiveRedirectUrl || undefined,
       });
       (repair as any).scriptError = scriptErr?.message || String(scriptErr);
     }
@@ -1058,6 +1066,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         full = await configureNonPaymentWebProxy(conn, {
           nonPayCidr: b.nonPayCidr,
           landingAddress: b.landingAddress,
+          captiveRedirectUrl: captiveRedirectUrl || undefined,
           billingHost,
           allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts : undefined,
           errorPageUrl: b.fetchErrorHtml === false ? undefined : errorPageUrl,
@@ -1086,6 +1095,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
 
     res.json({
       ok: true,
+      captiveRedirectUrl: captiveRedirectUrl || null,
       repair,
       full,
       fullError,
