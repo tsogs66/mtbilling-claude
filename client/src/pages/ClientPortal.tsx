@@ -15,6 +15,7 @@ import { useCompany } from '../context/CompanyContext';
 import { usePortalInstall, type PortalThemeId } from '../lib/portalInstall';
 import { subscribePortalLive } from '../lib/portalLive';
 import { openInvoicePrint } from '../lib/invoicePrint';
+import { formatRateLimit } from '../lib/rateLimit';
 import {
   PortalExtrasStack,
   PortalPlanCancelButton,
@@ -1037,8 +1038,15 @@ export default function ClientPortal() {
                           {p.name}
                         </div>
                         {p.rateLimit && (
-                          <div className="mt-1 inline-flex items-center gap-1 text-xs text-portal-dim">
-                            <Gauge size={12} /> {p.rateLimit}
+                          <div
+                            className="mt-1 inline-flex items-start gap-1 text-xs text-portal-dim"
+                            title={p.rateLimit}
+                          >
+                            <Gauge size={12} className="shrink-0 mt-0.5" />
+                            {/* Formatted, not raw: a MikroTik rate-limit carries
+                                the whole burst spec, and printing it verbatim
+                                made the sustained rate look like the plan speed. */}
+                            <span className="leading-snug">{formatRateLimit(p.rateLimit)}</span>
                           </div>
                         )}
                       </div>

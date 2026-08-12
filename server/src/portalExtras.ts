@@ -409,7 +409,14 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
     const sess = requirePortal(req, res);
     if (!sess) return;
     try {
-      const detail = await getSubscriberUsageDetail(sess.username, { days: 7, hours: 6 });
+      // liveFast:false — the portal asks once per page load, so there is no
+      // previous poll to diff against and fast mode would report 0/0 on a line
+      // that is actively passing traffic.
+      const detail = await getSubscriberUsageDetail(sess.username, {
+        days: 7,
+        hours: 6,
+        liveFast: false,
+      });
       const nap = sess.nap_id
         ? (db.prepare(`SELECT id, name, code, status FROM naps WHERE id = ?`).get(sess.nap_id) as any)
         : null;

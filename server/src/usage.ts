@@ -556,7 +556,16 @@ export function getUserTrafficSamples(username: string, hours = 6) {
  */
 export async function getSubscriberUsageDetail(
   username: string,
-  opts?: { days?: number; hours?: number }
+  opts?: {
+    days?: number;
+    hours?: number;
+    /**
+     * Leave true for pollers that call repeatedly (they build the counter
+     * baseline fast mode needs). Set false for a single request that has to
+     * return a real rate on its own — see the note at the call site below.
+     */
+    liveFast?: boolean;
+  }
 ) {
   const user = String(username || '').trim();
   if (!user) throw new Error('username required');
@@ -608,7 +617,16 @@ export async function getSubscriberUsageDetail(
         live.address = session.address && session.address !== '-' ? session.address : null;
         live.uptime = session.uptime || null;
         try {
-          const traffic = await fetchPppActiveTraffic(router, [session.name]);
+          // `fast` mode derives bps from the delta against a *previous* poll of
+          // this router, which only exists if something polled it in the last
+          // 12s. A one-shot caller (the subscriber portal opening a page) has no
+          // such baseline, so fast mode returned 0/0 on a line that was very
+          // much passing traffic. Callers that poll on a timer keep fast mode;
+          // one-shot callers ask for the accurate dual-sample path, which costs
+          // ~900ms but actually measures something.
+          const traffic = await fetchPppActiveTraffic(router, [session.name], {
+            fast: opts?.liveFast !== false,
+          });
           const t = traffic[session.name] || traffic[Object.keys(traffic)[0]];
           if (t) {
             live.downloadBps = t.download || 0;
