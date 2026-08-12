@@ -2440,6 +2440,20 @@ export async function fetchSystemSchedulers(conn: RouterConn): Promise<
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
 const NONPAY_HTTPS_LIST = 'nonpay-https-allow';
 const NONPAY_POOL_NAME = 'non-payment';
+/**
+ * Virtual landing address for the non-payment captive rules. It is never
+ * assigned to the router — it exists purely as a NAT match target, which means
+ * that whenever those NAT rules are missing (see the place-before bug fixed in
+ * #191) any traffic aimed at it is routed normally and leaves the network.
+ *
+ * So it must be an address that can never belong to anyone. The previous
+ * default, 1.1.10.1, is live public space (APNIC 1.1.0.0/16) — a router with
+ * incomplete rules sent subscriber traffic to a stranger's host, and a probe
+ * from the router got a real TCP reset back from the internet. 192.0.2.0/24 is
+ * TEST-NET-1 (RFC 5737), reserved for documentation and guaranteed unroutable.
+ */
+export const DEFAULT_LANDING_ADDRESS = '192.0.2.1';
+
 const NONPAY_NAT = {
   httpRedirect: 'MT-Billing nonpay HTTP redirect',
   httpRedirectCidr: 'MT-Billing nonpay HTTP redirect CIDR',
@@ -2692,7 +2706,7 @@ export async function ensureNonPaymentCaptiveProfile(
 }> {
   const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
-  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim();
   const rateLimit = String(opts.rateLimit || '2M/2M').trim();
   const poolRanges = cidrToPoolRanges(nonPayCidr) || '172.15.10.2-172.15.10.254';
   const cidrPrefix = nonPayCidr.split('/')[0].split('.').slice(0, 3).join('.');
@@ -2802,7 +2816,7 @@ export async function inspectNonPaymentCaptive(
   } = {}
 ): Promise<Record<string, unknown>> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
-  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
   const profileName = String(opts.profileName || 'non-payments').trim() || 'non-payments';
@@ -3075,7 +3089,7 @@ export function buildCaptiveEnsureScriptSource(opts: {
 }): string {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
-  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim() || '1.1.10.1';
+  const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim() || DEFAULT_LANDING_ADDRESS;
   const username = String(opts.username || '').trim();
   const u = rosScriptEscape(username);
   const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
@@ -3148,7 +3162,7 @@ export async function repairNonPaymentNatRedirect(
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
-  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim();
   const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
   const billingLanIp = String(opts.billingLanIp || '').trim();
 
@@ -3366,6 +3380,16 @@ export async function ensureCaptiveWatchSystemScript(
     proxyPort?: number;
     portalRedirectUrl?: string;
     interval?: string;
+    /**
+     * LAN address of this billing host, used as the dst-nat target for
+     * landing:<captiveApiPort>. Previously hard-coded to one deployment's
+     * 192.168.0.120, which silently pointed the rule at the wrong machine —
+     * or at nothing — on every other install. Left undefined the script skips
+     * that rule, which is the honest outcome: no rule beats a rule aimed at a
+     * host that is not the panel.
+     */
+    billingLanIp?: string;
+    landingAddress?: string;
   } = {}
 ): Promise<{ script: string; scheduler: string; interval: string }> {
   const interval = opts.interval || '00:05:00';
@@ -3373,11 +3397,7 @@ export async function ensureCaptiveWatchSystemScript(
     nonPayCidr: opts.nonPayCidr,
     proxyPort: opts.proxyPort,
     portalRedirectUrl: opts.portalRedirectUrl,
-    errorPageRedirectUrl: opts.portalRedirectUrl
-      ? String(opts.portalRedirectUrl).replace(/\/portal\/?$/i, '/error.html').replace(/^https:/i, 'http:')
-      : undefined,
-    billingLanIp: '192.168.0.120',
-    landingAddress: '1.1.10.1',
+    landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
     skipProxyCommands: false,
   });
   await withRouter(
@@ -3461,9 +3481,10 @@ export async function repairNonPaymentHttpRedirectViaScript(
   const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
     .trim()
     .replace(/\/$/, '');
-  const billingLanIp = String(opts.billingLanIp || '192.168.0.120').trim() || '192.168.0.120';
+  const billingLanIp = String(opts.billingLanIp || '').trim();
   const errorPageRedirectUrl =
-    String(opts.errorPageRedirectUrl || '').trim() || `http://${billingLanIp}/error.html`;
+    String(opts.errorPageRedirectUrl || '').trim() ||
+    (billingLanIp ? `http://${billingLanIp}/error.html` : '');
   const username = String(opts.username || '').trim();
 
   // 0) NAT via API first (does not touch /ip/proxy — survives wedged proxy).
@@ -3480,7 +3501,6 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nat = await repairNonPaymentNatRedirect(conn, {
       nonPayCidr,
       proxyPort,
-      billingLanIp: opts.billingLanIp,
       landingAddress: opts.landingAddress,
       captiveApiPort: opts.captiveApiPort,
     });
@@ -3529,7 +3549,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
     portalRedirectUrl: portal,
     errorPageRedirectUrl,
     billingLanIp,
-    landingAddress: opts.landingAddress || '1.1.10.1',
+    landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
     username: username || undefined,
     removeSchedulerName: CAPTIVE_FIX_ONCE,
     skipProxyCommands: false,
@@ -3540,7 +3560,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
     portalRedirectUrl: portal,
     errorPageRedirectUrl,
     billingLanIp,
-    landingAddress: opts.landingAddress || '1.1.10.1',
+    landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
     skipProxyCommands: false,
   });
 
@@ -3815,7 +3835,7 @@ export async function repairNonPaymentHttpRedirect(
         /* may already exist */
       }
       try {
-        const landing = '1.1.10.1';
+        const landing = DEFAULT_LANDING_ADDRESS;
         // action=deny → serve Files/webproxy/error.html on the router
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
@@ -3965,7 +3985,7 @@ export async function configureNonPaymentWebProxy(
   routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
-  const landingAddress = String(opts.landingAddress || '1.1.10.1').trim();
+  const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
   const nonPayAddressList = String(opts.nonPayAddressList || 'non-payment').trim() || 'non-payment';
@@ -4757,10 +4777,6 @@ export async function configureNonPaymentWebProxy(
           portalRedirectUrl:
             String(opts.portalRedirectUrl || '').trim() ||
             (billingHost ? `https://${billingHost}/portal` : 'https://panorth.tsogs.cloud/portal'),
-          errorPageRedirectUrl:
-            String(opts.errorPageUrl || '').trim() ||
-            (billingLanIps[0] ? `http://${billingLanIps[0]}/error.html` : 'http://192.168.0.120/error.html'),
-          billingLanIp: billingLanIps[0] || '192.168.0.120',
           skipProxyCommands: false,
           landingAddress,
         });

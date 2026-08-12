@@ -13,6 +13,7 @@ import {
   withRouter,
   scheduleExpiryOnRouter,
   cancelExpiryScheduleOnRouter,
+  DEFAULT_LANDING_ADDRESS,
 } from './mikrotik.js';
 import { getSettings as getNotifySettings } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
@@ -801,7 +802,7 @@ export async function syncUserToRouter(
             ensureNonPaymentCaptiveProfile(api, {
               profileName: expire,
               nonPayCidr: '172.15.10.0/24',
-              landingAddress: '1.1.10.1',
+              landingAddress: DEFAULT_LANDING_ADDRESS,
               rateLimit: '2M/2M',
             }),
           { timeoutSec: 15 }
