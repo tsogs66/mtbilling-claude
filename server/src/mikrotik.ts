@@ -2561,7 +2561,7 @@ export async function restrictSubscriberRouterLogin(
         const proxyAllowId =
           (filters || []).find((r) => String(r.comment || '') === NONPAY_FW.proxyInput)?.['.id'] || '';
         try {
-          await api.write('/ip/firewall/filter/add', [
+          await writePlaceBeforeSafe(api, '/ip/firewall/filter/add', [
             '=chain=input',
             '=action=drop',
             '=protocol=tcp',
@@ -2634,6 +2634,35 @@ function isWorkingNonPayHttpRedirect(
   const srcList = String(n['src-address-list'] || '');
   const srcAddr = String(n['src-address'] || '');
   return srcList === opts.nonPayAddressList || srcAddr === opts.nonPayCidr;
+}
+
+/**
+ * `api.write` that survives a `place-before` pointing at nothing.
+ *
+ * `place-before=0` is how we pin a rule to the top of a RouterOS list, but on an
+ * EMPTY list there is no item 0 to place before and RouterOS rejects the whole
+ * add: "item referred by 'place-before' does not exist (11)". A router whose NAT
+ * table had been cleared therefore ended up half-configured for the captive
+ * portal — the proxy access rules landed, the HTTP->proxy redirect silently did
+ * not, and every proxy rule sat at hits=0 because nothing was ever redirected
+ * into the proxy.
+ *
+ * Retrying without the flag is always safe: on an empty list, appending *is*
+ * first. A stale explicit id degrades to append rather than aborting the whole
+ * repair. Any other failure still propagates from the retry.
+ */
+async function writePlaceBeforeSafe(
+  api: RouterOSAPI,
+  menu: string,
+  args: string[]
+): Promise<unknown> {
+  try {
+    return await api.write(menu, args);
+  } catch (e) {
+    const stripped = args.filter((a) => !a.startsWith('=place-before='));
+    if (stripped.length === args.length) throw e;
+    return await api.write(menu, stripped);
+  }
 }
 
 /**
@@ -3063,7 +3092,14 @@ export function buildCaptiveEnsureScriptSource(opts: {
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-http-to-9080]} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
-    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir place-before=0} on-error={};` +
+    // Two attempts on purpose. `place-before=0` fails outright on an EMPTY NAT
+    // table ("item referred by 'place-before' does not exist"), and because the
+    // whole script swallows errors with on-error={}, that failure was invisible:
+    // the proxy rules below still landed, so the router looked configured while
+    // nothing was ever redirected into the proxy. Fall back to a plain add —
+    // on an empty table, appending is first anyway.
+    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir place-before=0} on-error={` +
+    `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir} on-error={}};` +
     (skipProxy
       ? ''
       : `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
@@ -3182,7 +3218,7 @@ export async function repairNonPaymentNatRedirect(
         await removeByComment('mtb-cidr-redir');
         await removeByComment(NONPAY_NAT.httpRedirectCidr);
         await raceApi(
-          api.write('/ip/firewall/nat/add', [
+          writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
             '=chain=dstnat',
             '=action=redirect',
             `=to-ports=${proxyPort}`,
@@ -3219,7 +3255,7 @@ export async function repairNonPaymentNatRedirect(
           );
           if (!hasProxyIn) {
             await raceApi(
-              api.write('/ip/firewall/filter/add', [
+              writePlaceBeforeSafe(api, '/ip/firewall/filter/add', [
                 '=chain=input',
                 '=action=accept',
                 '=protocol=tcp',
@@ -3720,7 +3756,7 @@ export async function repairNonPaymentHttpRedirect(
           String(n['src-address'] || '') === nonPayCidr
       );
       if (!hasList) {
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=redirect',
           `=to-ports=${proxyPort}`,
@@ -3732,7 +3768,7 @@ export async function repairNonPaymentHttpRedirect(
         ]);
       }
       if (!hasCidrNat) {
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=redirect',
           `=to-ports=${proxyPort}`,
@@ -3768,7 +3804,7 @@ export async function repairNonPaymentHttpRedirect(
 
       let proxyRedirect = false;
       try {
-        await api.write('/ip/proxy/access/add', [
+        await writePlaceBeforeSafe(api, '/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
           `=dst-port=${proxyPort}`,
           '=action=allow',
@@ -4024,7 +4060,7 @@ export async function configureNonPaymentWebProxy(
 
       if (!hasAllow8080) {
         try {
-          await api.write('/ip/proxy/access/add', [
+          await writePlaceBeforeSafe(api, '/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
             `=dst-port=${proxyPort}`,
             '=action=allow',
@@ -4329,7 +4365,7 @@ export async function configureNonPaymentWebProxy(
 
       let natHttpRedirect = hasListRedirect || hasCidrRedirect;
       if (!hasListRedirect) {
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=redirect',
           `=to-ports=${proxyPort}`,
@@ -4343,7 +4379,7 @@ export async function configureNonPaymentWebProxy(
       }
       // Direct CIDR match — works even if address-list entry was deleted.
       if (!hasCidrRedirect) {
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=redirect',
           `=to-ports=${proxyPort}`,
@@ -4372,7 +4408,7 @@ export async function configureNonPaymentWebProxy(
 
       let natHttpsAllow = hasNatComment(NONPAY_NAT.httpsAllow);
       if (!natHttpsAllow) {
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=accept',
           '=protocol=tcp',
@@ -4390,7 +4426,7 @@ export async function configureNonPaymentWebProxy(
         if (hasNatComment(comment)) return;
         const adguardId =
           (nats || []).find((n) => /adguard/i.test(String(n.comment || '')))?.['.id'] || '';
-        await api.write('/ip/firewall/nat/add', [
+        await writePlaceBeforeSafe(api, '/ip/firewall/nat/add', [
           '=chain=dstnat',
           '=action=accept',
           `=protocol=${proto}`,
@@ -4500,7 +4536,7 @@ export async function configureNonPaymentWebProxy(
 
         // Redirected HTTP lands on the router's proxy — allow input.
         if (!hasComment(NONPAY_FW.proxyInput)) {
-          await api.write('/ip/firewall/filter/add', [
+          await writePlaceBeforeSafe(api, '/ip/firewall/filter/add', [
             '=chain=input',
             '=action=accept',
             '=protocol=tcp',
