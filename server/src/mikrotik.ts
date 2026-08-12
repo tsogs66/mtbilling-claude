@@ -98,6 +98,49 @@ export async function withRouter<T>(
   }
 }
 
+/**
+ * RouterOS names the redirect target differently across web-proxy generations:
+ * v6 used `redirect-to`, RouterOS 7 (confirmed on 7.20.2) uses `action-data`.
+ * Writing the wrong one is rejected outright — "expected end of command" —
+ * and inside the captive watch script, where every statement is wrapped in
+ * `on-error={}`, that rejection is silent and leaves the router with no captive
+ * rule at all.
+ *
+ * RouterOS also stores the target WITHOUT a scheme (`1.1.10.1:8080/error.html`),
+ * so strip http:// or https:// from whatever the operator configured.
+ */
+function proxyRedirectTarget(url: string): string {
+  return String(url || '').trim().replace(/^https?:\/\//i, '');
+}
+
+/** Property names to try, newest RouterOS first. */
+const PROXY_REDIRECT_PROPS = ['action-data', 'redirect-to'] as const;
+
+/**
+ * `/ip proxy access add` that survives the property rename. Tries action-data
+ * (RouterOS 7), falls back to redirect-to (v6). Any other failure propagates
+ * from the last attempt.
+ */
+async function addProxyRedirectRule(
+  api: RouterOSAPI,
+  baseArgs: string[],
+  target: string
+): Promise<unknown> {
+  let lastErr: unknown;
+  for (const prop of PROXY_REDIRECT_PROPS) {
+    try {
+      return await api.write('/ip/proxy/access/add', [
+        ...baseArgs,
+        '=action=redirect',
+        `=${prop}=${target}`,
+      ]);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
 function rosTrapMessage(e: unknown): string {
   const any = e as any;
   const msg =
@@ -2941,7 +2984,7 @@ export async function inspectNonPaymentCaptive(
           !rosBool(r.disabled) &&
           (String(r.comment || '') === 'mtb-portal-redir' ||
             String(r.comment || '') === NONPAY_PROXY.redirectPortal) &&
-          String(r['redirect-to'] || '').length > 0
+          String(r['redirect-to'] || r['action-data'] || '').length > 0
       );
       const classicErrorHtml = (access || []).find((r) => {
         const action = String(r.action || '').toLowerCase();
@@ -2976,11 +3019,13 @@ export async function inspectNonPaymentCaptive(
             src: r['src-address'],
             dstHost: r['dst-host'],
             dstAddress: r['dst-address'],
-            redirectTo: r['redirect-to'] || '',
+            redirectTo: r['redirect-to'] || r['action-data'] || '',
             comment: r.comment,
             disabled: rosBool(r.disabled),
           })),
-        portalRedirectTo: portalRedirect ? String(portalRedirect['redirect-to'] || '') : null,
+        portalRedirectTo: portalRedirect
+          ? String(portalRedirect['redirect-to'] || portalRedirect['action-data'] || '')
+          : null,
         classicErrorHtmlRule: classicErrorHtml
           ? {
               action: classicErrorHtml.action,
@@ -3142,7 +3187,8 @@ export function buildCaptiveEnsureScriptSource(opts: {
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=deny]} on-error={};` +
         `:do {/ip proxy access add src-address=${nonPayCidr} dst-port=${proxyPort} action=allow comment=${allowCmt}} on-error={};` +
         (captiveRedirectUrl
-          ? `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect redirect-to="${rosScriptEscape(captiveRedirectUrl)}" comment=${redirCmt}} on-error={};`
+          ? `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect action-data="${rosScriptEscape(proxyRedirectTarget(captiveRedirectUrl))}" comment=${redirCmt}} on-error={` +
+            `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect redirect-to="${rosScriptEscape(proxyRedirectTarget(captiveRedirectUrl))}" comment=${redirCmt}} on-error={}};`
           : `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=deny comment=${redirCmt}} on-error={};`)) +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
@@ -3840,7 +3886,7 @@ export async function repairNonPaymentHttpRedirect(
           (action === 'deny' &&
             !String(row['dst-host'] || '') &&
             !String(row['dst-port'] || '') &&
-            (!String(row['dst-address'] || '') || String(row['redirect-to'] || '')));
+            (!String(row['dst-address'] || '') || String(row['redirect-to'] || row['action-data'] || '')));
         if (!drop || !row['.id']) continue;
         try {
           await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
@@ -3867,15 +3913,17 @@ export async function repairNonPaymentHttpRedirect(
         // captiveRedirectUrl swaps that for a 302 to the proxy's own copy of the
         // page (…:8080/error.html) — same file, same router, but a redirect is
         // the signal OS captive-portal detection is actually built around.
-        await api.write('/ip/proxy/access/add', [
+        const captiveBase = [
           `=src-address=${nonPayCidr}`,
           `=dst-address=!${landing}`,
           '=dst-port=80',
-          ...(captiveRedirectUrl
-            ? ['=action=redirect', `=redirect-to=${captiveRedirectUrl}`]
-            : ['=action=deny']),
           `=comment=${NONPAY_PROXY.redirectHttp}`,
-        ]);
+        ];
+        if (captiveRedirectUrl) {
+          await addProxyRedirectRule(api, captiveBase, proxyRedirectTarget(captiveRedirectUrl));
+        } else {
+          await api.write('/ip/proxy/access/add', [...captiveBase, '=action=deny']);
+        }
         proxyRedirect = true;
       } catch {
         proxyRedirect = false;
@@ -4151,15 +4199,17 @@ export async function configureNonPaymentWebProxy(
 
       if (!hasClassicDeny) {
         try {
-          await api.write('/ip/proxy/access/add', [
+          const captiveBase = [
             `=src-address=${nonPayCidr}`,
             `=dst-address=!${landingAddress}`,
             '=dst-port=80',
-            ...(captiveRedirectUrl
-              ? ['=action=redirect', `=redirect-to=${captiveRedirectUrl}`]
-              : ['=action=deny']),
             `=comment=${NONPAY_PROXY.redirectHttp}`,
-          ]);
+          ];
+          if (captiveRedirectUrl) {
+            await addProxyRedirectRule(api, captiveBase, proxyRedirectTarget(captiveRedirectUrl));
+          } else {
+            await api.write('/ip/proxy/access/add', [...captiveBase, '=action=deny']);
+          }
           existing.push({
             action: captiveRedirectUrl ? 'redirect' : 'deny',
             'src-address': nonPayCidr,
