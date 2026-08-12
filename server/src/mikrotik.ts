@@ -2482,6 +2482,34 @@ export async function fetchSystemSchedulers(conn: RouterConn): Promise<
 
 const WEBPROXY_RULE_COMMENT = 'MT-Billing nonpay captive';
 const NONPAY_HTTPS_LIST = 'nonpay-https-allow';
+
+/**
+ * Payment hosts opened through the non-payment lockdown.
+ *
+ * PayMongo alone is not enough. The actual flow is: portal -> PayMongo issues a
+ * QR Ph code -> the subscriber pays it *from the GCash or Maya app*. That app
+ * is running on the same throttled connection, so if its hosts are blocked the
+ * QR is unscannable and the subscriber cannot pay — the walled garden would be
+ * shutting the door on its own collections.
+ *
+ * Caveat worth knowing: RouterOS resolves these FQDNs to fixed addresses, while
+ * the wallet apps also reach CDN and Alipay+ infrastructure under names not
+ * listed here. The websites and the core API work; an app release that adds a
+ * new backend host can still stall. Extend per-router with the `allowHosts`
+ * option (POST /routers/:id/nonpayment-webproxy) rather than editing this list.
+ */
+const NONPAY_PAYMENT_HOSTS = [
+  'checkout.paymongo.com',
+  'api.paymongo.com',
+  // GCash — the wallet most subscribers pay the QR with.
+  'gcash.com',
+  'www.gcash.com',
+  'm.gcash.com',
+  // Maya, the other half of the "GCash, Maya, cards, or bank" copy on error.html.
+  'maya.ph',
+  'www.maya.ph',
+] as const;
+
 const NONPAY_POOL_NAME = 'non-payment';
 /**
  * Virtual landing address for the non-payment captive rules. It is never
@@ -4089,8 +4117,7 @@ export async function configureNonPaymentWebProxy(
   const allowHosts = [
     billingHost,
     ...(opts.allowHosts || []),
-    'checkout.paymongo.com',
-    'api.paymongo.com',
+    ...NONPAY_PAYMENT_HOSTS,
   ]
     .map((h) => String(h || '').trim().toLowerCase())
     .filter(Boolean);
