@@ -11,7 +11,7 @@
  * payment link and start PayMongo hosted checkout.
  */
 import { db } from './db.js';
-import { fetchPppActive, withRouter, type RouterConn } from './mikrotik.js';
+import { fetchPppActive, withRouter, DEFAULT_LANDING_ADDRESS, type RouterConn } from './mikrotik.js';
 import { ensureFreshPayLink, resolvePublicBaseUrl } from './billing.js';
 import { createPaymongoCheckout, ensurePaymongoColumns, getPublicPayOptions } from './paymongo.js';
 
@@ -130,7 +130,7 @@ export async function findCaptiveIdentityFromProxyActivity(opts?: {
   timeoutMs?: number;
 }): Promise<{ username: string; address: string; routerId: number } | null> {
   const nonPayCidr = String(opts?.nonPayCidr || DEFAULT_NONPAY_CIDR).trim() || DEFAULT_NONPAY_CIDR;
-  const landing = String(opts?.landingAddress || '1.1.10.1').trim() || '1.1.10.1';
+  const landing = String(opts?.landingAddress || DEFAULT_LANDING_ADDRESS).trim() || DEFAULT_LANDING_ADDRESS;
   const proxyPort = String(opts?.proxyPort || 8080);
   const timeoutMs = Math.max(2000, Math.min(15000, Number(opts?.timeoutMs) || 6000));
   const routers = db.prepare('SELECT * FROM routers ORDER BY id ASC').all() as any[];

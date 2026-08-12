@@ -962,13 +962,22 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
   const errorPageUrl =
     String(b.errorPageUrl || '').trim() || `${publicBase}/error.html`;
   const lanIp = detectLanIpv4();
+  // Detected or caller-supplied only. This list is a firewall allowlist punched
+  // through the non-payment lockdown, and it used to carry one deployment's
+  // 192.168.0.120 unconditionally — granting whatever sat at that address on
+  // every other install. Pass billingLanIps explicitly if detection picks the
+  // wrong interface (a Docker bridge, say) on a multi-homed host.
   const billingLanIps = [
     ...(Array.isArray(b.billingLanIps) ? b.billingLanIps : []),
     lanIp,
-    '192.168.0.120',
   ]
     .map((x) => String(x || '').trim())
     .filter(Boolean);
+  if (!billingLanIps.length) {
+    console.warn(
+      '[captive] no billing LAN IP detected or supplied — landing:captiveApiPort dst-nat will be skipped'
+    );
+  }
   const conn = {
     host: r.host,
     port: Number(r.port) || 8728,
@@ -988,7 +997,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         portalRedirectUrl: `${publicBase}/portal`,
         // Local MikroTik Files/webproxy/error.html via action=deny (not external URL).
         username: kickUser || undefined,
-        billingLanIp: lanIp || '192.168.0.120',
+        billingLanIp: lanIp || undefined,
         landingAddress: b.landingAddress,
         captiveApiPort: b.captiveApiPort,
       });
@@ -1011,6 +1020,10 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
           nonPayCidr: b.nonPayCidr,
           proxyPort: b.proxyPort,
           portalRedirectUrl: `${publicBase}/portal`,
+          // Detected, not assumed — the watch script used to bake in one
+          // deployment's LAN address.
+          billingLanIp: lanIp || undefined,
+          landingAddress: b.landingAddress,
         });
       } catch {
         /* ignore */
