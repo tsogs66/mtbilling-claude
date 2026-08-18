@@ -712,10 +712,13 @@ function DatabaseManagement({ flash }: any) {
     setRestoreJob({ fileName: selectedFile.name, phase: 'uploading', percent: 0 });
     try {
       const { body, gzipped } = await maybeGzip(selectedFile.file);
+      // Default api timeout is 20s — large .db uploads (esp. over Cloudflare Tunnel)
+      // routinely exceed that and surface as "timeout of 20000ms exceeded".
       const r = await api.post(
         `/db/restore?restart=1${gzipped ? '&gzip=1' : ''}`,
         body,
         {
+          timeout: 10 * 60 * 1000,
           headers: { 'Content-Type': gzipped ? 'application/gzip' : 'application/octet-stream' },
           onUploadProgress: (ev) => {
             if (!ev.total) return;
@@ -801,6 +804,7 @@ function DatabaseManagement({ flash }: any) {
     try {
       const r = await api.get(`/db/backups/${name}/download`, {
         responseType: 'blob',
+        timeout: 10 * 60 * 1000,
         onDownloadProgress: (ev) => {
           if (!ev.total) return;
           const percent = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
