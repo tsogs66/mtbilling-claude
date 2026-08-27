@@ -604,7 +604,7 @@ export const INSTALLATION_SUCCESS_TEMPLATE = {
 export const PORTAL_ACTIVATION_TEMPLATE = {
   subject: 'Subscriber Portal Access',
   message:
-    'Hi {name}, your subscriber portal is now active. Account number: {account}. Default password: {password} (your registered mobile number). Sign in here: {portal_url}. Please change your password after the first login.',
+    'Hi {name}, your subscriber portal is now active. Account number: {account}. Default password: {password} (your registered mobile number). Sign in here: {portal_url}. You can keep this password or set a new one after the first login.',
 };
 
 async function notifyClient(client: Client, channels: ('email' | 'sms')[], subject: string, message: string, type: string) {

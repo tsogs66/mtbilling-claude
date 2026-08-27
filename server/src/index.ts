@@ -1948,7 +1948,7 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
     'pppoe',
     `Created ${row.service || 'pppoe'} user ${username} (acct ${account}) + MikroTik secret`
   );
-  // Portal login defaults: account number + phone/contact (must change on first login).
+  // Portal login defaults: account number + phone/contact (confirm or change on first login).
   try {
     const prov = ensureDefaultPortalCredentials(Number(insertedId));
     notifyPortalActivationIfProvisioned(Number(insertedId), prov);
