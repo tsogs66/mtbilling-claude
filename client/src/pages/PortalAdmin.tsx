@@ -57,7 +57,7 @@ const DEFAULT_SETTINGS: PortalSettings = {
   title: 'PANORTH',
   subtitle: 'Internet Solutions',
   helpText:
-    'Sign in with your account number and password. First time: use your phone number, then set a new password. Forgot it? Request a temporary password by SMS.',
+    'Sign in with your account number and password. First time: use your registered mobile number. You can keep it or set a new password. Forgot it? Request a temporary password by SMS.',
   welcomeText: '',
   showBalance: true,
   showInvoices: true,
@@ -440,7 +440,7 @@ export default function PortalAdmin() {
   };
 
   const resetDefaultPassword = async (id: number) => {
-    if (!confirm('Reset portal password to the subscriber’s phone number? They must set a new password on next login.')) {
+    if (!confirm('Reset portal password to the subscriber’s phone number? They can keep it or set a new password on next login.')) {
       return;
     }
     try {
@@ -456,7 +456,7 @@ export default function PortalAdmin() {
   const autoProvision = async () => {
     if (
       !confirm(
-        'Auto-create portal logins for all subscribers with an account number and phone?\n\nUsername = account number\nDefault password = phone number (must change on first login)'
+        'Auto-create portal logins for all subscribers with an account number and phone?\n\nUsername = account number\nDefault password = phone number (they can keep it or set a new one on first login)'
       )
     ) {
       return;
@@ -610,7 +610,7 @@ export default function PortalAdmin() {
             right={
               <p className="text-xs text-slate-500 max-w-md text-right">
                 Default login: <span className="font-medium text-slate-700">account number</span> +{' '}
-                <span className="font-medium text-slate-700">phone</span>. After first login they set a new password.
+                <span className="font-medium text-slate-700">phone</span>. After first login they can keep it or set a new password.
                 Manage contacts in <Link to="/pppoe" className="text-brand-600 hover:underline">PPPoE</Link>.
               </p>
             }
@@ -985,7 +985,7 @@ export default function PortalAdmin() {
             )}
             {!!edit.portal_must_change_password && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                Subscriber must set a new password on next portal login.
+                Subscriber will confirm or change their password on next portal login.
               </p>
             )}
           </div>
@@ -1051,8 +1051,8 @@ function EnablePortalModal({
     >
       <div className="space-y-3">
         <p className="text-sm text-slate-500">
-          Default login is <strong>account number</strong> + <strong>phone number</strong>. The subscriber sets a new
-          password after first sign-in at <code className="text-brand-600">/portal</code>.
+          Default login is <strong>account number</strong> + <strong>phone number</strong>. After first sign-in at{' '}
+          <code className="text-brand-600">/portal</code> they can keep that password or choose a new one.
         </p>
         <FormField label="Subscriber" required>
           <select className="input" value={pppoe_user_id} onChange={(e) => setId(e.target.value)}>

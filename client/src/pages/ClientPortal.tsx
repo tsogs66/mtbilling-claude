@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Wallet, FileText, LifeBuoy, LogOut, ExternalLink,
   Phone, Building2, ChevronRight, Download, Share, X, Mail, MapPin, Gauge, Zap,
-  Eye, Printer, Loader2, History, Bell,
+  Eye, EyeOff, Printer, Loader2, History, Bell,
 } from 'lucide-react';
 import { peso } from '../api';
 import { getApiBase } from '../config';
@@ -236,6 +236,8 @@ export default function ClientPortal() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotMsg, setForgotMsg] = useState('');
   const [forgotOk, setForgotOk] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [ticketThreadId, setTicketThreadId] = useState<number | null>(null);
   const [extrasRefresh, setExtrasRefresh] = useState(0);
   const [billingTab, setBillingTab] = useState<BillingTabId>('statement');
@@ -395,7 +397,11 @@ export default function ClientPortal() {
       setConfirmPassword('');
       // Remember what they chose so login autofill can use it after sign-out.
       setPassword(chosen);
-      setPwMsg('Password updated. Welcome to your portal.');
+      setPwMsg(
+        result?.keptExisting
+          ? 'Current password kept. Welcome to your portal.'
+          : 'Password updated. Welcome to your portal.'
+      );
       // Optimistically clear the gate even if /me is briefly stale.
       setMe((prev: any) => (prev ? { ...prev, mustChangePassword: false } : prev));
       try {
@@ -405,6 +411,34 @@ export default function ClientPortal() {
       }
     } catch (err: any) {
       setPwMsg(err.message || 'Could not update password');
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  const keepCurrentPassword = async () => {
+    setPwMsg('');
+    setPwBusy(true);
+    try {
+      const result = await portalFetch('/public/portal/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ keepCurrent: true }),
+      });
+      if (result?.mustChangePassword) {
+        setPwMsg('Could not keep the current password. Please try again.');
+        return;
+      }
+      setNewPassword('');
+      setConfirmPassword('');
+      setPwMsg('Current password kept. Welcome to your portal.');
+      setMe((prev: any) => (prev ? { ...prev, mustChangePassword: false } : prev));
+      try {
+        await loadMe();
+      } catch {
+        /* keep optimistic state */
+      }
+    } catch (err: any) {
+      setPwMsg(err.message || 'Could not keep the current password');
     } finally {
       setPwBusy(false);
     }
@@ -568,7 +602,7 @@ export default function ClientPortal() {
   const title = pageSettings.title?.trim() || brandTitle;
   const helpText =
     pageSettings.helpText ||
-    'Sign in with your account number and password. First time: use your phone number, then set a new password.';
+    'Sign in with your account number and password. First time: use your registered mobile number. You can keep it or set a new password.';
 
   if (!token || !me) {
     return (
@@ -695,20 +729,30 @@ export default function ClientPortal() {
                     Forgot password?
                   </button>
                 </div>
-                <input
-                  id="portal-password"
-                  className="portal-field w-full px-3 py-2.5"
-                  name="portal-password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  placeholder="Your portal password"
-                />
+                <div className="relative">
+                  <input
+                    id="portal-password"
+                    className="portal-field w-full px-3 py-2.5 pr-11"
+                    name="portal-password"
+                    type={showLoginPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    placeholder="Mobile number or your password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-portal-dim hover:text-white"
+                    aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showLoginPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <p className="text-xs text-portal-dim -mt-1 leading-relaxed">
-                First time? Use your phone number, then you will set a new password.
+                First time? Use your registered mobile number (09… or +63…). You can keep it as your password.
               </p>
               <button
                 className="portal-cta w-full inline-flex items-center justify-center gap-2 rounded-xl py-3.5 min-h-[48px]"
@@ -797,7 +841,8 @@ export default function ClientPortal() {
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">Set your password</h1>
             <p className="text-sm text-portal-muted leading-relaxed">
-              You signed in with a temporary or default password. Choose a new password to continue.
+              You signed in with a temporary or default password. Choose a new one, or keep your current
+              password — including your phone number.
             </p>
             {c?.accountNumber && (
               <p className="text-xs text-portal-dim font-mono">Account {c.accountNumber}</p>
@@ -806,7 +851,7 @@ export default function ClientPortal() {
           {pwMsg && (
             <div
               className={`text-sm rounded-xl px-3 py-2 border ${
-                pwMsg.includes('updated')
+                pwMsg.includes('updated') || pwMsg.includes('kept') || pwMsg.includes('Welcome')
                   ? 'text-emerald-200 bg-emerald-500/15 border-emerald-400/25'
                   : 'text-rose-200 bg-rose-500/15 border-rose-400/25'
               }`}
@@ -816,26 +861,34 @@ export default function ClientPortal() {
           )}
           <label className="block text-sm font-medium text-portal-muted">
             New password
-            <input
-              className="portal-field mt-1.5 w-full px-3 py-2.5"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-              minLength={6}
-              maxLength={64}
-              autoComplete="new-password"
-              placeholder="At least 6 characters"
-            />
+            <div className="relative mt-1.5">
+              <input
+                className="portal-field w-full px-3 py-2.5 pr-11"
+                type={showNewPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                minLength={6}
+                maxLength={64}
+                autoComplete="new-password"
+                placeholder="At least 6 characters, or your phone number"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewPassword((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-portal-dim hover:text-white"
+                aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+              >
+                {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </label>
           <label className="block text-sm font-medium text-portal-muted">
             Confirm password
             <input
               className="portal-field mt-1.5 w-full px-3 py-2.5"
-              type="password"
+              type={showNewPassword ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              required
               minLength={6}
               maxLength={64}
               autoComplete="new-password"
@@ -846,6 +899,14 @@ export default function ClientPortal() {
             disabled={pwBusy}
           >
             {pwBusy ? 'Saving…' : 'Save password & continue'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void keepCurrentPassword()}
+            disabled={pwBusy}
+            className="portal-btn-ghost w-full inline-flex items-center justify-center gap-2 rounded-xl font-semibold py-3 min-h-[48px]"
+          >
+            Keep my current password
           </button>
           <button
             type="button"
