@@ -455,6 +455,11 @@ function GenieAcsSettings({ flash }: { flash: (m: string) => void }) {
         nbiUrl: cfg.nbiUrl,
         uiUrl: cfg.uiUrl,
         username: cfg.username,
+        autolinkEnabled: !!cfg.autolinkEnabled,
+        autolinkIntervalMin: Number(cfg.autolinkIntervalMin) || 15,
+        provisionTags: !!cfg.provisionTags,
+        provisionOnInstall: !!cfg.provisionOnInstall,
+        cwmpUrl: cfg.cwmpUrl || '',
       };
       if (password.trim()) body.password = password;
       const r = await api.put('/acs/config', body);
@@ -507,6 +512,27 @@ function GenieAcsSettings({ flash }: { flash: (m: string) => void }) {
           </FormField>
           <FormField label={`NBI password ${cfg.passwordSet ? '(saved)' : ''}`}>
             <input className="input text-sm" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={cfg.passwordSet ? 'Leave blank to keep' : 'Optional'} autoComplete="new-password" />
+          </FormField>
+        </div>
+        <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4 space-y-3">
+          <div className="text-sm font-semibold text-slate-800">Autolink &amp; provisioning</div>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={cfg.autolinkEnabled !== false} onChange={(e) => setC({ autolinkEnabled: e.target.checked })} />
+            Autolink CPEs to subscribers (PPP username, tags, CPE MAC, MikroTik caller-id)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={cfg.provisionTags !== false} onChange={(e) => setC({ provisionTags: e.target.checked })} />
+            Apply GenieACS tags on link (mtbilling:sub, username, account, profile, status)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={cfg.provisionOnInstall !== false} onChange={(e) => setC({ provisionOnInstall: e.target.checked })} />
+            On new-install job completion: autolink, tag, refresh TR-069 tree
+          </label>
+          <FormField label="Autolink interval (minutes)" hint="Background sync when autolink is enabled.">
+            <input className="input text-sm w-32" type="number" min={5} max={240} value={cfg.autolinkIntervalMin ?? 15} onChange={(e) => setC({ autolinkIntervalMin: Number(e.target.value) })} />
+          </FormField>
+          <FormField label="CWMP ACS URL (optional)" hint="Pushed to CPE on install when set (Huawei ManagementServer.URL).">
+            <input className="input font-mono text-sm" value={cfg.cwmpUrl || ''} onChange={(e) => setC({ cwmpUrl: e.target.value })} placeholder="http://your-genieacs:7547/" />
           </FormField>
         </div>
         <div className="flex flex-wrap gap-2 justify-end">

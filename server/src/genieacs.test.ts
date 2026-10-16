@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import { flattenAcsParameters, pickFirstParam } from './genieacs.js';
+import {
+  buildProvisionTags,
+  extractDeviceMatchKeys,
+  normalizeMac,
+  normalizeUsername,
+} from './acsAutolink.js';
 
 const sample = {
   _id: 'TEST-DEVICE',
@@ -28,5 +34,37 @@ const picked = pickFirstParam(flat, [
   'missing.path',
 ]);
 assert(picked?.value === 'MyWifi', 'pickFirstParam');
+
+assert(normalizeUsername('  Juan.Doe  ') === 'juan.doe', 'username norm');
+assert(normalizeMac('AA:BB:CC:11:22:33') === 'aabbcc112233', 'mac norm');
+
+const tags = buildProvisionTags({
+  id: 42,
+  username: 'juan',
+  account_number: '123456789012',
+  profile: 'UNLI500',
+  status: 'Active',
+});
+assert(tags.some((t) => t === 'mtbilling:sub:42'), 'sub tag');
+assert(tags.some((t) => t === 'mtbilling:username:juan'), 'user tag');
+
+const keys = extractDeviceMatchKeys({
+  _tags: ['mtbilling:username:juan', 'mtbilling:account:123456789012'],
+  InternetGatewayDevice: {
+    WANDevice: {
+      '1': {
+        WANConnectionDevice: {
+          '1': {
+            WANPPPConnection: {
+              '1': { Username: { _value: 'otheruser', _type: 'xsd:string' } },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+assert(keys.usernames.includes('juan'), 'tag username parsed');
+assert(keys.pppUsernames.includes('otheruser'), 'ppp username parsed');
 
 console.log('genieacs.test.ts: ok');

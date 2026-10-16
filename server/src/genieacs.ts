@@ -6,6 +6,11 @@ export type AcsSettings = {
   acs_ui_url: string | null;
   acs_username: string | null;
   acs_password: string | null;
+  acs_autolink_enabled: number | null;
+  acs_autolink_interval_min: number | null;
+  acs_provision_tags: number | null;
+  acs_provision_on_install: number | null;
+  acs_cwmp_url: string | null;
 };
 
 export type FlatParam = {
@@ -27,11 +32,19 @@ export function initGenieacs() {
     ['acs_ui_url', 'TEXT'],
     ['acs_username', 'TEXT'],
     ['acs_password', 'TEXT'],
+    ['acs_autolink_enabled', 'INTEGER DEFAULT 1'],
+    ['acs_autolink_interval_min', 'INTEGER DEFAULT 15'],
+    ['acs_provision_tags', 'INTEGER DEFAULT 1'],
+    ['acs_provision_on_install', 'INTEGER DEFAULT 1'],
+    ['acs_cwmp_url', 'TEXT'],
   ] as [string, string][]) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
   }
   if (!columnExists('pppoe_users', 'acs_device_id')) {
     db.exec('ALTER TABLE pppoe_users ADD COLUMN acs_device_id TEXT');
+  }
+  if (!columnExists('pppoe_users', 'cpe_mac')) {
+    db.exec('ALTER TABLE pppoe_users ADD COLUMN cpe_mac TEXT');
   }
   if (db.prepare('SELECT id FROM app_settings WHERE id = 1').get() == null) {
     db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
@@ -42,7 +55,9 @@ function getSettingsRow(): AcsSettings {
   initGenieacs();
   return db
     .prepare(
-      `SELECT acs_enabled, acs_nbi_url, acs_ui_url, acs_username, acs_password
+      `SELECT acs_enabled, acs_nbi_url, acs_ui_url, acs_username, acs_password,
+              acs_autolink_enabled, acs_autolink_interval_min, acs_provision_tags,
+              acs_provision_on_install, acs_cwmp_url
        FROM app_settings WHERE id = 1`
     )
     .get() as AcsSettings;
@@ -56,6 +71,11 @@ export function publicAcsConfig() {
     uiUrl: s.acs_ui_url || '',
     username: s.acs_username || '',
     passwordSet: !!s.acs_password,
+    autolinkEnabled: s.acs_autolink_enabled == null ? true : !!s.acs_autolink_enabled,
+    autolinkIntervalMin: Number(s.acs_autolink_interval_min) || 15,
+    provisionTags: s.acs_provision_tags == null ? true : !!s.acs_provision_tags,
+    provisionOnInstall: s.acs_provision_on_install == null ? true : !!s.acs_provision_on_install,
+    cwmpUrl: s.acs_cwmp_url || '',
   };
 }
 
@@ -71,13 +91,35 @@ export function saveAcsConfig(body: Record<string, unknown>) {
   if (body.password != null && String(body.password).trim() !== '') {
     password = String(body.password);
   }
+  const autolinkEnabled =
+    body.autolinkEnabled != null ? (body.autolinkEnabled ? 1 : 0) : cur.acs_autolink_enabled ?? 1;
+  const autolinkIntervalMin =
+    body.autolinkIntervalMin != null
+      ? Math.max(5, Math.min(240, Number(body.autolinkIntervalMin) || 15))
+      : cur.acs_autolink_interval_min ?? 15;
+  const provisionTags =
+    body.provisionTags != null ? (body.provisionTags ? 1 : 0) : cur.acs_provision_tags ?? 1;
+  const provisionOnInstall =
+    body.provisionOnInstall != null
+      ? body.provisionOnInstall
+        ? 1
+        : 0
+      : cur.acs_provision_on_install ?? 1;
+  const cwmpUrl =
+    body.cwmpUrl != null ? String(body.cwmpUrl || '').trim() || null : cur.acs_cwmp_url;
+
   db.prepare(
     `UPDATE app_settings SET
        acs_enabled = @acs_enabled,
        acs_nbi_url = @acs_nbi_url,
        acs_ui_url = @acs_ui_url,
        acs_username = @acs_username,
-       acs_password = @acs_password
+       acs_password = @acs_password,
+       acs_autolink_enabled = @acs_autolink_enabled,
+       acs_autolink_interval_min = @acs_autolink_interval_min,
+       acs_provision_tags = @acs_provision_tags,
+       acs_provision_on_install = @acs_provision_on_install,
+       acs_cwmp_url = @acs_cwmp_url
      WHERE id = 1`
   ).run({
     acs_enabled: enabled,
@@ -85,7 +127,13 @@ export function saveAcsConfig(body: Record<string, unknown>) {
     acs_ui_url: uiUrl,
     acs_username: username,
     acs_password: password,
+    acs_autolink_enabled: autolinkEnabled,
+    acs_autolink_interval_min: autolinkIntervalMin,
+    acs_provision_tags: provisionTags,
+    acs_provision_on_install: provisionOnInstall,
+    acs_cwmp_url: cwmpUrl,
   });
+  restartAcsScheduler();
   return publicAcsConfig();
 }
 
@@ -220,6 +268,112 @@ export async function setAcsParameterValues(
   return postAcsTask(deviceId, { name: 'setParameterValues', parameterValues });
 }
 
+export async function addAcsDeviceTag(deviceId: string, tag: string) {
+  const id = encodeURIComponent(deviceId);
+  const t = encodeURIComponent(tag);
+  const r = await acsRequest('POST', `/devices/${id}/tags/${t}`);
+  if (!r.ok) throw new Error(r.error);
+  return r.data;
+}
+
+export async function addAcsDeviceTags(deviceId: string, tags: string[]) {
+  for (const tag of tags) {
+    try {
+      await addAcsDeviceTag(deviceId, tag);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/exist|duplicate|409/i.test(msg)) throw e;
+    }
+  }
+}
+
+const CWMP_URL_PATHS = [
+  'InternetGatewayDevice.ManagementServer.URL',
+  'Device.ManagementServer.URL',
+];
+
+export async function pushCwmpUrlToDevice(deviceId: string, url: string) {
+  if (!url.trim()) return;
+  const parameterValues: [string, string, string][] = CWMP_URL_PATHS.map((p) => [p, url.trim(), 'xsd:string']);
+  await setAcsParameterValues(deviceId, parameterValues);
+}
+
+let acsSchedulerTimer: ReturnType<typeof setInterval> | null = null;
+
+export function restartAcsScheduler() {
+  if (acsSchedulerTimer) {
+    clearInterval(acsSchedulerTimer);
+    acsSchedulerTimer = null;
+  }
+  startAcsAutolinkScheduler();
+}
+
+export function startAcsAutolinkScheduler() {
+  const cfg = publicAcsConfig();
+  if (!cfg.enabled || !cfg.autolinkEnabled) return;
+  const ms = Math.max(5, cfg.autolinkIntervalMin) * 60 * 1000;
+  acsSchedulerTimer = setInterval(() => {
+    void import('./acsAutolink.js')
+      .then((m) => m.runAcsAutolink({ syncTagsOnly: false }))
+      .catch((e) => console.error('[acs] autolink scheduler', e));
+  }, ms);
+  console.info(`[acs] autolink scheduler every ${cfg.autolinkIntervalMin} min`);
+}
+
+/** After subscriber create/update or install job — link, tag, optional CWMP push. */
+export async function acsAfterSubscriberUpsert(row: Record<string, unknown>, opts?: { install?: boolean }) {
+  const cfg = publicAcsConfig();
+  if (!cfg.enabled) return;
+
+  const { runAcsAutolink, buildProvisionTags } = await import('./acsAutolink.js');
+  const subId = Number(row.id);
+  if (!subId) return;
+
+  if (cfg.autolinkEnabled && !row.acs_device_id) {
+    try {
+      await runAcsAutolink({ subscriberId: subId });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const fresh = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(subId) as Record<string, unknown> | undefined;
+  const deviceId = fresh?.acs_device_id ? String(fresh.acs_device_id) : '';
+  if (!deviceId) return;
+
+  if (cfg.provisionTags && fresh) {
+    try {
+      await addAcsDeviceTags(deviceId, buildProvisionTags(fresh as import('./acsAutolink.js').SubscriberLinkRow));
+    } catch (e) {
+      console.error('[acs] provision tags', e);
+    }
+  }
+
+  const onInstall = opts?.install && cfg.provisionOnInstall;
+  if (onInstall && cfg.cwmpUrl) {
+    try {
+      await pushCwmpUrlToDevice(deviceId, cfg.cwmpUrl);
+    } catch (e) {
+      console.error('[acs] CWMP URL push', e);
+    }
+  }
+
+  if (onInstall) {
+    try {
+      await refreshAcsDevice(deviceId, 'InternetGatewayDevice.');
+      await refreshAcsDevice(deviceId, 'Device.');
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export async function acsOnInstallComplete(pppoeUserId: number) {
+  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(pppoeUserId);
+  if (!row) return;
+  await acsAfterSubscriberUpsert(row as Record<string, unknown>, { install: true });
+}
+
 /** Walk GenieACS device document and collect TR-069 parameter paths. */
 export function flattenAcsParameters(root: unknown, prefix = ''): FlatParam[] {
   const out: FlatParam[] = [];
@@ -323,5 +477,7 @@ export function linkSubscriberDevice(pppoeUserId: number, deviceId: string | nul
   if (!row) throw new Error('subscriber-not-found');
   const dev = deviceId != null ? String(deviceId).trim() || null : null;
   db.prepare('UPDATE pppoe_users SET acs_device_id = ? WHERE id = ?').run(dev, id);
+  const out = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as Record<string, unknown>;
+  if (dev) void acsAfterSubscriberUpsert(out).catch(() => undefined);
   return db.prepare('SELECT id, username, customer_name, acs_device_id FROM pppoe_users WHERE id = ?').get(id);
 }

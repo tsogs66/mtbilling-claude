@@ -48,6 +48,7 @@ export default function CpeTr069() {
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [customPath, setCustomPath] = useState('');
   const [customValue, setCustomValue] = useState('');
+  const [autolinkBusy, setAutolinkBusy] = useState(false);
 
   const flash = (m: string) => {
     setBanner(m);
@@ -55,6 +56,19 @@ export default function CpeTr069() {
   };
 
   const loadConfig = useCallback(() => api.get('/acs/config').then((r) => setConfig(r.data)), []);
+
+  const runAutolink = async () => {
+    setAutolinkBusy(true);
+    try {
+      const r = await api.post('/acs/autolink', {});
+      flash(`Autolink: ${r.data.linked} linked, ${r.data.tagsSynced} tag sync(s), ${r.data.skipped} skipped.`);
+      await loadDevices();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Autolink failed');
+    } finally {
+      setAutolinkBusy(false);
+    }
+  };
 
   const loadDevices = useCallback(async () => {
     setLoading(true);
@@ -187,6 +201,9 @@ export default function CpeTr069() {
           <Link to="/settings" className="btn-secondary text-sm inline-flex items-center gap-1.5">
             <Settings2 size={14} /> ACS settings
           </Link>
+          <button type="button" className="btn-secondary text-sm inline-flex items-center gap-1.5" onClick={runAutolink} disabled={autolinkBusy || loading}>
+            <RefreshCw size={14} className={autolinkBusy ? 'animate-spin' : ''} /> Run autolink
+          </button>
           <button type="button" className="btn-primary text-sm inline-flex items-center gap-1.5" onClick={loadDevices} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh list
           </button>

@@ -16,6 +16,7 @@ import {
   listSubscriberAcsLinks,
   linkSubscriberDevice,
 } from './genieacs.js';
+import { runAcsAutolink } from './acsAutolink.js';
 
 export const acsRouter = express.Router();
 
@@ -28,6 +29,29 @@ acsRouter.put('/acs/config', (req, res) => {
     res.json(saveAcsConfig(req.body || {}));
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : 'save failed' });
+  }
+});
+
+acsRouter.post('/acs/autolink', async (req, res) => {
+  try {
+    const dryRun = req.body?.dryRun === true || req.query.dryRun === '1';
+    const subscriberId =
+      req.body?.subscriberId != null
+        ? Number(req.body.subscriberId)
+        : req.query.subscriberId != null
+          ? Number(req.query.subscriberId)
+          : undefined;
+    const syncTagsOnly = req.body?.syncTagsOnly === true;
+    const result = await runAcsAutolink({
+      dryRun,
+      subscriberId: subscriberId && subscriberId > 0 ? subscriberId : undefined,
+      syncTagsOnly,
+    });
+    res.json(result);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'autolink failed';
+    const status = msg === 'acs-disabled' || msg === 'acs-autolink-disabled' ? 503 : 502;
+    res.status(status).json({ error: msg });
   }
 });
 
