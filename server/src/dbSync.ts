@@ -72,6 +72,20 @@ function tableExists(name: string): boolean {
   return Boolean(row?.ok);
 }
 
+/** SQLite json_object() allows ~63 key/value pairs; wide rows use json_patch chunks (CLI + embedded SQLite). */
+function jsonRowSnapshotExpr(colNames: string[], rowPrefix: 'NEW' | 'OLD'): string {
+  const chunkSize = 30;
+  if (!colNames.length) return "'{}'";
+  const parts: string[] = [];
+  for (let i = 0; i < colNames.length; i += chunkSize) {
+    const slice = colNames.slice(i, i + chunkSize);
+    const inner = slice.map((c) => `'${c.replace(/'/g, "''")}', ${rowPrefix}.${c}`).join(', ');
+    parts.push(`json_object(${inner})`);
+  }
+  if (parts.length === 1) return parts[0];
+  return parts.slice(1).reduce((acc, part) => `json_patch(${acc}, ${part})`, parts[0]);
+}
+
 export function initDbSync() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sync_outbox (
@@ -151,7 +165,7 @@ function ensureSyncTriggers() {
     }
     // Upsert into outbox with JSON of NEW row (or delete marker). Only fires useful work when edge+enabled (checked at flush time).
     const colList = cols.map((c) => c.name);
-    const jsonObject = colList.map((c) => `'${c}', NEW.${c}`).join(', ');
+    const jsonPayload = jsonRowSnapshotExpr(colList, 'NEW');
     try {
       db.exec(`
         CREATE TRIGGER IF NOT EXISTS ${triggerBase}_ai AFTER INSERT ON ${table}
@@ -160,7 +174,7 @@ function ensureSyncTriggers() {
         BEGIN
           INSERT INTO sync_outbox (entity_type, entity_id, op, payload, updated_at, next_attempt_at)
           VALUES ('${table}', CAST(NEW.${pk} AS TEXT), 'upsert',
-            json_object(${jsonObject}), datetime('now'), datetime('now'))
+            ${jsonPayload}, datetime('now'), datetime('now'))
           ON CONFLICT(entity_type, entity_id) DO UPDATE SET
             op='upsert',
             payload=excluded.payload,
@@ -176,7 +190,7 @@ function ensureSyncTriggers() {
         BEGIN
           INSERT INTO sync_outbox (entity_type, entity_id, op, payload, updated_at, next_attempt_at)
           VALUES ('${table}', CAST(NEW.${pk} AS TEXT), 'upsert',
-            json_object(${jsonObject}), datetime('now'), datetime('now'))
+            ${jsonPayload}, datetime('now'), datetime('now'))
           ON CONFLICT(entity_type, entity_id) DO UPDATE SET
             op='upsert',
             payload=excluded.payload,

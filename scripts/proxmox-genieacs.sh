@@ -180,6 +180,13 @@ wire_billing() {
 
   ensure_billing_acs_schema "$billing_ct"
 
+  # app_settings sync triggers use json_object(); wide schemas break the host sqlite3 CLI on UPDATE.
+  pct exec "$billing_ct" -- sqlite3 "$db" "
+    DROP TRIGGER IF EXISTS sync_outbox_app_settings_ai;
+    DROP TRIGGER IF EXISTS sync_outbox_app_settings_au;
+    DROP TRIGGER IF EXISTS sync_outbox_app_settings_ad;
+  " 2>/dev/null || true
+
   pct exec "$billing_ct" -- sqlite3 "$db" "
     UPDATE app_settings SET
       acs_enabled = 1,

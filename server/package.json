@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test:portal-password": "tsx src/portalPassword.test.ts",
-    "test:genieacs": "tsx src/genieacs.test.ts"
+    "test:genieacs": "tsx src/genieacs.test.ts",
+    "test:dbsync": "tsx src/dbSync.test.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
