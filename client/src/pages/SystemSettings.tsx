@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Cog, Network, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck, RadioTower,
   Palette, Binary, Satellite, Usb, ExternalLink, Monitor, Smartphone,
 } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -22,6 +22,7 @@ const TABS = [
   { key: 'time', label: 'Time Synchronization', icon: Clock },
   { key: 'account', label: 'Account & Security', icon: KeyRound },
   { key: 'routers', label: 'Router Management', icon: RouterIcon },
+  { key: 'acs', label: 'TR-069 / GenieACS', icon: RadioTower },
 ] as const;
 
 export default function SystemSettings() {
@@ -79,6 +80,7 @@ export default function SystemSettings() {
         </>
       )}
       {tab === 'routers' && <RouterManagement flash={flash} />}
+      {tab === 'acs' && <GenieAcsSettings flash={flash} />}
     </Layout>
   );
 }
@@ -424,6 +426,98 @@ function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
           </button>
           <button type="button" className="btn-primary" disabled={busy} onClick={apply}>
             {busy ? 'Working…' : 'Install & start tunnel'}
+          </button>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+function GenieAcsSettings({ flash }: { flash: (m: string) => void }) {
+  const [cfg, setCfg] = useState<any>(null);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api.get('/acs/config').then((r) => setCfg(r.data));
+  useEffect(() => {
+    load();
+  }, []);
+
+  if (!cfg) return <LoadingPage />;
+
+  const setC = (patch: Record<string, unknown>) => setCfg((s: any) => ({ ...s, ...patch }));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        enabled: !!cfg.enabled,
+        nbiUrl: cfg.nbiUrl,
+        uiUrl: cfg.uiUrl,
+        username: cfg.username,
+      };
+      if (password.trim()) body.password = password;
+      const r = await api.put('/acs/config', body);
+      setCfg(r.data);
+      setPassword('');
+      flash('GenieACS settings saved.');
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/acs/test');
+      flash(r.data.message || (r.data.ok ? 'Connected' : 'Failed'));
+    } catch (e: any) {
+      flash(e?.response?.data?.message || 'Test failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsSection icon={RadioTower} title="TR-069 / GenieACS (customer CPE)">
+      <div className="space-y-4 max-w-2xl">
+        <p className="text-sm text-slate-500">
+          Run{' '}
+          <a href="https://docs.genieacs.com/en/latest/installation-guide.html" className="text-brand-600 hover:underline" target="_blank" rel="noreferrer">
+            GenieACS
+          </a>{' '}
+          on this host or a management VM. CPEs (Huawei HG8145, etc.) must reach CWMP on TCP <b>7547</b> and use your ACS URL.
+          MikroTik PPPoE/IPoE is unchanged — ACS manages the home router separately.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={!!cfg.enabled} onChange={(e) => setC({ enabled: e.target.checked })} />
+          Enable TR-069 integration in MT-Billing
+        </label>
+        <FormField label="GenieACS NBI URL">
+          <input className="input font-mono text-sm" value={cfg.nbiUrl || ''} onChange={(e) => setC({ nbiUrl: e.target.value })} placeholder="http://127.0.0.1:7557" />
+        </FormField>
+        <FormField label="GenieACS UI URL (optional)">
+          <input className="input font-mono text-sm" value={cfg.uiUrl || ''} onChange={(e) => setC({ uiUrl: e.target.value })} placeholder="http://127.0.0.1:3000" />
+        </FormField>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField label="NBI username (if configured)">
+            <input className="input text-sm" value={cfg.username || ''} onChange={(e) => setC({ username: e.target.value })} autoComplete="off" />
+          </FormField>
+          <FormField label={`NBI password ${cfg.passwordSet ? '(saved)' : ''}`}>
+            <input className="input text-sm" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={cfg.passwordSet ? 'Leave blank to keep' : 'Optional'} autoComplete="new-password" />
+          </FormField>
+        </div>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <Link to="/cpe-tr069" className="btn-secondary text-sm">
+            Open CPE manager
+          </Link>
+          <button type="button" className="btn-secondary" disabled={busy} onClick={test}>
+            Test connection
+          </button>
+          <button type="button" className="btn-primary" disabled={busy} onClick={save}>
+            Save
           </button>
         </div>
       </div>

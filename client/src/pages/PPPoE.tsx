@@ -2720,6 +2720,7 @@ function UserFormModal({
     email: '',
     nap_id: '',
     plc_port: '',
+    acs_device_id: '',
     lat: DEFAULT_PIN[0] as number | null,
     lng: DEFAULT_PIN[1] as number | null,
   });
@@ -2746,6 +2747,7 @@ function UserFormModal({
           email: u.email || '',
           nap_id: u.nap_id ? String(u.nap_id) : '',
           plc_port: u.plc_port || '',
+          acs_device_id: u.acs_device_id || '',
           lat: u.lat ?? null,
           lng: u.lng ?? null,
         });
@@ -2893,6 +2895,15 @@ function UserFormModal({
               <div className="input bg-slate-50 text-slate-500 truncate" title={topology}>Topology: {topology}</div>
             </FormField>
           </div>
+
+          <FormField label="GenieACS device ID (TR-069)" hint="Copy from GenieACS UI — links this subscriber to their CPE for remote Wi‑Fi / router settings.">
+            <input
+              className="input font-mono text-sm"
+              placeholder="00259E-Huawei-HG8145V5-48575443…"
+              value={form.acs_device_id}
+              onChange={(e) => set({ acs_device_id: e.target.value })}
+            />
+          </FormField>
 
           <div className="pt-1 border-t border-slate-100" />
           <div className="flex items-center justify-between">

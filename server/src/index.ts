@@ -179,6 +179,8 @@ import {
   notifyPortalActivationIfProvisioned,
 } from './ispOps.js';
 import { initTwingate, twingateRouter } from './twingate.js';
+import { initGenieacs } from './genieacs.js';
+import { acsRouter } from './acsRouter.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
 import { cashierRouter, publicCashierRouter, cashierLoginExtras } from './cashier.js';
 import {
@@ -228,6 +230,7 @@ initDbSync();
 initExtra();
 initIspOps();
 initTwingate();
+initGenieacs();
 initNoc();
 
 /**
@@ -1849,7 +1852,7 @@ function generateAccountNumber(): string {
 async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true; row: any } | { ok: false; status: number; error: string }> {
   const {
     username, password, customer_name, profile, status, subscription_due, price, service,
-    expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
+    expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, acs_device_id,
   } = b;
   if (!username) return { ok: false, status: 400, error: 'username is required' };
   if (!password) return { ok: false, status: 400, error: 'password is required to create the MikroTik PPP secret' };
@@ -1876,9 +1879,9 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
       .prepare(
         `INSERT INTO pppoe_users
           (username, password, customer_name, account_number, profile, status, subscription_due, price,
-           router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, online)
+           router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, acs_device_id, online)
          VALUES (@username, @password, @customer_name, @account, @profile, @status, @subscription_due, @price,
-           @router_id, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, 1)`
+           @router_id, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, @acs_device_id, 1)`
       )
       .run({
         username,
@@ -1899,6 +1902,7 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
         address: address || null,
         lat: lat != null && lat !== '' ? Number(lat) : null,
         lng: lng != null && lng !== '' ? Number(lng) : null,
+        acs_device_id: acs_device_id != null && String(acs_device_id).trim() ? String(acs_device_id).trim() : null,
       });
     insertedId = Number(info.lastInsertRowid);
   } catch (e: any) {
@@ -2024,7 +2028,8 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
        customer_name = @customer_name, password = @password, profile = @profile, status = @status,
        subscription_due = @subscription_due, price = @price, expiration_profile = @expiration_profile,
        contact = @contact, email = @email, nap_id = @nap_id, plc_port = @plc_port,
-       address = @address, lat = @lat, lng = @lng
+       address = @address, lat = @lat, lng = @lng,
+       acs_device_id = @acs_device_id
      WHERE id = @id`
   ).run({
     id,
@@ -2042,6 +2047,10 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     address: b.address ?? existing.address,
     lat: b.lat != null && b.lat !== '' ? Number(b.lat) : b.lat === '' ? null : existing.lat,
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
+    acs_device_id:
+      b.acs_device_id != null
+        ? String(b.acs_device_id).trim() || null
+        : existing.acs_device_id,
   });
 
   // Manual restore to Active must clear non-payment markers (payment path already does).
@@ -5400,6 +5409,7 @@ app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
 app.use('/api', twingateRouter);
+app.use('/api', acsRouter);
 app.use('/api', nocRouter);
 app.use('/api', cashierRouter);
 

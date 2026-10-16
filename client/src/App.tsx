@@ -41,6 +41,7 @@ import MerchantPortal from './pages/MerchantPortal';
 import RogueMacs from './pages/RogueMacs';
 import Twingate from './pages/Twingate';
 import Noc from './pages/Noc';
+import CpeTr069 from './pages/CpeTr069';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -136,6 +137,7 @@ export default function App() {
                 <Route path="/ai-scripting" element={<AiScripting />} />
                 <Route path="/terminal" element={<TerminalPage />} />
                 <Route path="/network" element={<Network />} />
+                <Route path="/cpe-tr069" element={<CpeTr069 />} />
                 <Route path="/files" element={<MikrotikFiles />} />
                 <Route path="/zerotier" element={<ZeroTier />} />
                 <Route path="/twingate" element={<Twingate />} />
