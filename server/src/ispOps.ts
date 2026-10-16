@@ -558,6 +558,11 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
           }
         : null);
     if (target) void sendInstallationSuccessNotice(target).catch(() => undefined);
+    if (userId) {
+      void import('./genieacs.js')
+        .then((m) => m.acsOnInstallComplete(userId))
+        .catch(() => undefined);
+    }
   }
 });
 

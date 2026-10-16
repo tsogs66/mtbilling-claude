@@ -2720,6 +2720,8 @@ function UserFormModal({
     email: '',
     nap_id: '',
     plc_port: '',
+    acs_device_id: '',
+    cpe_mac: '',
     lat: DEFAULT_PIN[0] as number | null,
     lng: DEFAULT_PIN[1] as number | null,
   });
@@ -2746,6 +2748,8 @@ function UserFormModal({
           email: u.email || '',
           nap_id: u.nap_id ? String(u.nap_id) : '',
           plc_port: u.plc_port || '',
+          acs_device_id: u.acs_device_id || '',
+          cpe_mac: u.cpe_mac || '',
           lat: u.lat ?? null,
           lng: u.lng ?? null,
         });
@@ -2891,6 +2895,25 @@ function UserFormModal({
             </FormField>
             <FormField label="Linked (Read-only)">
               <div className="input bg-slate-50 text-slate-500 truncate" title={topology}>Topology: {topology}</div>
+            </FormField>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <FormField label="GenieACS device ID (TR-069)" hint="From GenieACS UI, or leave blank for autolink.">
+              <input
+                className="input font-mono text-sm"
+                placeholder="00259E-Huawei-HG8145V5-48575443…"
+                value={form.acs_device_id}
+                onChange={(e) => set({ acs_device_id: e.target.value })}
+              />
+            </FormField>
+            <FormField label="CPE WAN/LAN MAC (optional)" hint="Helps autolink match the right Huawei unit.">
+              <input
+                className="input font-mono text-sm"
+                placeholder="AA:BB:CC:11:22:33"
+                value={form.cpe_mac}
+                onChange={(e) => set({ cpe_mac: e.target.value })}
+              />
             </FormField>
           </div>
 

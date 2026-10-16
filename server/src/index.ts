@@ -179,6 +179,8 @@ import {
   notifyPortalActivationIfProvisioned,
 } from './ispOps.js';
 import { initTwingate, twingateRouter } from './twingate.js';
+import { initGenieacs, startAcsAutolinkScheduler, acsAfterSubscriberUpsert } from './genieacs.js';
+import { acsRouter } from './acsRouter.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
 import { cashierRouter, publicCashierRouter, cashierLoginExtras } from './cashier.js';
 import {
@@ -228,6 +230,7 @@ initDbSync();
 initExtra();
 initIspOps();
 initTwingate();
+initGenieacs();
 initNoc();
 
 /**
@@ -1849,7 +1852,7 @@ function generateAccountNumber(): string {
 async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true; row: any } | { ok: false; status: number; error: string }> {
   const {
     username, password, customer_name, profile, status, subscription_due, price, service,
-    expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
+    expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, acs_device_id, cpe_mac,
   } = b;
   if (!username) return { ok: false, status: 400, error: 'username is required' };
   if (!password) return { ok: false, status: 400, error: 'password is required to create the MikroTik PPP secret' };
@@ -1876,9 +1879,9 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
       .prepare(
         `INSERT INTO pppoe_users
           (username, password, customer_name, account_number, profile, status, subscription_due, price,
-           router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, online)
+           router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, acs_device_id, cpe_mac, online)
          VALUES (@username, @password, @customer_name, @account, @profile, @status, @subscription_due, @price,
-           @router_id, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, 1)`
+           @router_id, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, @acs_device_id, @cpe_mac, 1)`
       )
       .run({
         username,
@@ -1899,6 +1902,8 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
         address: address || null,
         lat: lat != null && lat !== '' ? Number(lat) : null,
         lng: lng != null && lng !== '' ? Number(lng) : null,
+        acs_device_id: acs_device_id != null && String(acs_device_id).trim() ? String(acs_device_id).trim() : null,
+        cpe_mac: cpe_mac != null && String(cpe_mac).trim() ? String(cpe_mac).trim() : null,
       });
     insertedId = Number(info.lastInsertRowid);
   } catch (e: any) {
@@ -1959,6 +1964,7 @@ async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true
   const out = refreshed || row;
   // Provision MikroTik grace→non-payments / disable one-shots for this due date
   scheduleRouterExpiry(out, out.expiration_profile).catch(() => undefined);
+  void acsAfterSubscriberUpsert(out).catch(() => undefined);
   return { ok: true, row: out };
 }
 
@@ -2024,7 +2030,9 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
        customer_name = @customer_name, password = @password, profile = @profile, status = @status,
        subscription_due = @subscription_due, price = @price, expiration_profile = @expiration_profile,
        contact = @contact, email = @email, nap_id = @nap_id, plc_port = @plc_port,
-       address = @address, lat = @lat, lng = @lng
+       address = @address, lat = @lat, lng = @lng,
+       acs_device_id = @acs_device_id,
+       cpe_mac = @cpe_mac
      WHERE id = @id`
   ).run({
     id,
@@ -2042,6 +2050,12 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     address: b.address ?? existing.address,
     lat: b.lat != null && b.lat !== '' ? Number(b.lat) : b.lat === '' ? null : existing.lat,
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
+    acs_device_id:
+      b.acs_device_id != null
+        ? String(b.acs_device_id).trim() || null
+        : existing.acs_device_id,
+    cpe_mac:
+      b.cpe_mac != null ? String(b.cpe_mac).trim() || null : existing.cpe_mac,
   });
 
   // Manual restore to Active must clear non-payment markers (payment path already does).
@@ -2066,6 +2080,7 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   } catch {
     /* ignore */
   }
+  void acsAfterSubscriberUpsert(row).catch(() => undefined);
   const router = getRouterById(row.router_id);
   if (routerHasApi(router)) {
     try {
@@ -5400,6 +5415,7 @@ app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
 app.use('/api', twingateRouter);
+app.use('/api', acsRouter);
 app.use('/api', nocRouter);
 app.use('/api', cashierRouter);
 
@@ -5467,6 +5483,7 @@ server.listen(PORT, () => {
   setTimeout(() => startNotifyScheduler(ap.intervals.notify), ap.appliance ? 90_000 : 45_000);
   setTimeout(() => startDbSyncScheduler(ap.intervals.dbSync ?? ap.intervals.routerSync), ap.appliance ? 75_000 : 40_000);
   setTimeout(() => startAutoBackupScheduler(15 * 60 * 1000), ap.appliance ? 150_000 : 90_000);
+  setTimeout(() => startAcsAutolinkScheduler(), ap.appliance ? 120_000 : 60_000);
   try {
     ensurePaymongoColumns();
   } catch {

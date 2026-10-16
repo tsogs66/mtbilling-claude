@@ -22,6 +22,7 @@ topology), sales reporting, hotspot vouchers, inventory and more.
 - **Local PC sync** – hub ↔ edge SQLite sync for offline branch PCs
 - **Windows installer** + flashable PC/SBC appliances
 - **Android** – Capacitor shell (panel URL on first launch)
+- **CPE / TR-069 (GenieACS)** – CPE manager, autolink, provisioning tags on install (optional dedicated LXC)
 - **License, roles, updater, auto-backups, audit trail**
 
 ## Tech stack
@@ -121,6 +122,7 @@ data otherwise).
 | `npm run android:sync` | Build web UI and sync into the Capacitor Android project |
 | `npm run android:open` | Open `client/android` in Android Studio |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
+| `scripts/proxmox-genieacs.sh` | Proxmox host: new GenieACS LXC + auto-wire MT-Billing TR-069 |
 | `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
 | `scripts/proxmox-reinstall.sh` | Proxmox host helper → clean reinstall to Git defaults |
 | `scripts/fetch-update-from-github.sh` | Copy updater files from GitHub raw into `install/` |
@@ -178,6 +180,31 @@ Optional environment variables:
 | `var_auto_update` | `1` | Enable systemd timer to pull `main` every 10 minutes |
 
 Uses [community-scripts](https://github.com/community-scripts/ProxmoxVE) `build.func` for storage/network prompts and container creation. Guest install script: `install/mt-billing-install.sh`.
+
+### GenieACS / TR-069 (separate LXC)
+
+Run on the **Proxmox host as root**. Creates or reuses a dedicated **GenieACS** container (MongoDB + CWMP/NBI/UI), downloads the guest installer on the **host** (fresh Ubuntu CTs often have no `curl`), pushes it with `pct push`, and wires **MT-Billing** SQLite settings + restarts the API when a billing LXC is found.
+
+Until this ships on `main`, the script defaults to branch `cursor/genieacs-tr069-68c7` (override with `REPO_RAW=.../main` after merge).
+
+```bash
+# Example: reuse existing containers (adjust CTIDs to yours)
+GENIEACS_CTID=109 BILLING_CTID=125 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/cursor/genieacs-tr069-68c7/scripts/proxmox-genieacs.sh)"
+```
+
+After merge to `main`:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/proxmox-genieacs.sh)"
+```
+
+**Panel code:** the installer can enable TR-069 in the DB on an older build, but **CPE manager UI and `/api/acs/*` need a billing deploy** that includes the TR-069 feature. Inside the billing LXC (or via `scripts/proxmox-update.sh` on the host):
+
+```bash
+REPO_BRANCH=cursor/genieacs-tr069-68c7 sudo bash /opt/mt-billing/install/mt-billing-update.sh
+```
+
+Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Forward **TCP 7547** on your edge to the GenieACS LXC if CPEs reach the ACS over the public internet.
 
 ### Updating after new commits (Proxmox)
 
