@@ -22,7 +22,8 @@
 
 set -euo pipefail
 
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main}"
+# Default to feature branch until TR-069 + this installer land on main (override with REPO_RAW=.../main).
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/tsogs66/mtbilling-claude/cursor/genieacs-tr069-68c7}"
 GUEST_INSTALL_URL="${GUEST_INSTALL_URL:-${REPO_RAW}/install/genieacs-guest-install.sh}"
 
 GENIEACS_HOSTNAME="${GENIEACS_HOSTNAME:-genieacs}"
@@ -132,6 +133,41 @@ wait_for_ip() {
   return 1
 }
 
+ensure_billing_acs_schema() {
+  local billing_ct="$1"
+  local db="/opt/mt-billing/server/data/mt-billing.db"
+  pct exec "$billing_ct" -- bash -s "$db" <<'EOS'
+set -euo pipefail
+DB="$1"
+has_col() {
+  sqlite3 "$DB" "SELECT 1 FROM pragma_table_info('$1') WHERE name='$2' LIMIT 1" 2>/dev/null | grep -q 1
+}
+add_col() {
+  sqlite3 "$DB" "ALTER TABLE $1 ADD COLUMN $2 $3" 2>/dev/null || true
+}
+for spec in \
+  "acs_enabled INTEGER DEFAULT 0" \
+  "acs_nbi_url TEXT DEFAULT NULL" \
+  "acs_ui_url TEXT DEFAULT NULL" \
+  "acs_username TEXT DEFAULT NULL" \
+  "acs_password TEXT DEFAULT NULL" \
+  "acs_autolink_enabled INTEGER DEFAULT 1" \
+  "acs_autolink_interval_min INTEGER DEFAULT 15" \
+  "acs_provision_tags INTEGER DEFAULT 1" \
+  "acs_provision_on_install INTEGER DEFAULT 1" \
+  "acs_cwmp_url TEXT DEFAULT NULL"; do
+  col="${spec%% *}"
+  rest="${spec#"$col "}"
+  has_col app_settings "$col" || add_col app_settings "$col" "$rest"
+done
+for spec in "acs_device_id TEXT" "cpe_mac TEXT"; do
+  col="${spec%% *}"
+  rest="${spec#"$col "}"
+  has_col pppoe_users "$col" || add_col pppoe_users "$col" "$rest"
+done
+EOS
+}
+
 wire_billing() {
   local billing_ct="$1"
   local acs_ip="$2"
@@ -144,6 +180,8 @@ wire_billing() {
     echo "WARNING: MT-Billing DB not found at ${db} — enable TR-069 manually in System Settings." >&2
     return 1
   fi
+
+  ensure_billing_acs_schema "$billing_ct"
 
   pct exec "$billing_ct" -- sqlite3 "$db" "
     UPDATE app_settings SET
@@ -179,7 +217,10 @@ if [[ -n "$BILLING_CTID" ]]; then
   BILLING_IP="$(wait_for_ip "$BILLING_CTID" || true)"
 fi
 
-ACS_CTID="$(find_genieacs_ctid || true)"
+ACS_CTID="${GENIEACS_CTID:-}"
+if [[ -z "$ACS_CTID" ]]; then
+  ACS_CTID="$(find_genieacs_ctid || true)"
+fi
 if [[ -z "$ACS_CTID" ]]; then
   ACS_CTID="$(next_ctid)"
   STORAGE="$(pick_storage)"
@@ -240,3 +281,8 @@ if [[ -n "$BILLING_CTID" && -n "$BILLING_IP" ]]; then
   echo "CPE manager      : http://${BILLING_IP}/cpe-tr069"
 fi
 echo "Services in ACS CT: systemctl status genieacs-cwmp genieacs-nbi"
+if pct exec "$ACS_CTID" -- systemctl is-active --quiet genieacs-cwmp genieacs-nbi 2>/dev/null; then
+  echo "GenieACS CWMP/NBI: active"
+else
+  echo "WARNING: Check guest install: pct enter ${ACS_CTID} — journalctl -u genieacs-cwmp -n 30" >&2
+fi
