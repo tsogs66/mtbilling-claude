@@ -210,7 +210,19 @@ ACS_IP="$(wait_for_ip "$ACS_CTID")" || {
 echo "GenieACS container IP: ${ACS_IP}"
 
 echo "Installing MongoDB + GenieACS inside CT ${ACS_CTID}…"
-pct exec "$ACS_CTID" -- bash -c "curl -fsSL '${GUEST_INSTALL_URL}' -o /tmp/genieacs-guest-install.sh && chmod +x /tmp/genieacs-guest-install.sh"
+# Fresh Ubuntu CT templates often have no curl — fetch on the Proxmox host and push in.
+HOST_GUEST="/var/tmp/mt-billing-genieacs-guest-install.sh"
+curl -fsSL "${GUEST_INSTALL_URL}" -o "$HOST_GUEST"
+chmod +x "$HOST_GUEST"
+pct push "$ACS_CTID" "$HOST_GUEST" /tmp/genieacs-guest-install.sh
+pct exec "$ACS_CTID" -- chmod +x /tmp/genieacs-guest-install.sh
+echo "Waiting for guest apt/network…"
+for _ in $(seq 1 45); do
+  if pct exec "$ACS_CTID" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq' 2>/dev/null; then
+    break
+  fi
+  sleep 2
+done
 pct exec "$ACS_CTID" -- env BILLING_IP="${BILLING_IP:-}" bash /tmp/genieacs-guest-install.sh
 
 if [[ -n "$BILLING_CTID" ]]; then
