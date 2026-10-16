@@ -185,23 +185,15 @@ Uses [community-scripts](https://github.com/community-scripts/ProxmoxVE) `build.
 
 Run on the **Proxmox host as root**. Creates or reuses a dedicated **GenieACS** container (MongoDB + CWMP/NBI/UI), downloads the guest installer on the **host** (fresh Ubuntu CTs often have no `curl`), pushes it with `pct push`, and wires **MT-Billing** SQLite settings + restarts the API when a billing LXC is found.
 
-Until this ships on `main`, the script defaults to branch `cursor/genieacs-tr069-68c7` (override with `REPO_RAW=.../main` after merge).
-
 ```bash
 # Example: reuse existing containers (adjust CTIDs to yours)
-GENIEACS_CTID=109 BILLING_CTID=125 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/cursor/genieacs-tr069-68c7/scripts/proxmox-genieacs.sh)"
+GENIEACS_CTID=109 BILLING_CTID=125 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/proxmox-genieacs.sh)"
 ```
 
-After merge to `main`:
+**Panel code:** pull the latest `main` on the billing LXC if it was installed before TR-069 shipped (inside the LXC or via `scripts/proxmox-update.sh` on the host):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/proxmox-genieacs.sh)"
-```
-
-**Panel code:** the installer can enable TR-069 in the DB on an older build, but **CPE manager UI and `/api/acs/*` need a billing deploy** that includes the TR-069 feature. Inside the billing LXC (or via `scripts/proxmox-update.sh` on the host):
-
-```bash
-REPO_BRANCH=cursor/genieacs-tr069-68c7 sudo bash /opt/mt-billing/install/mt-billing-update.sh
+sudo bash /opt/mt-billing/install/mt-billing-update.sh
 ```
 
 Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Forward **TCP 7547** on your edge to the GenieACS LXC if CPEs reach the ACS over the public internet.

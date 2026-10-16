@@ -4,10 +4,8 @@
 #
 # Proxmox VE host — create a dedicated GenieACS LXC and wire MT-Billing automatically.
 #
-# One-liner (public repo, after merge to main):
+# One-liner (public repo):
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/proxmox-genieacs.sh)"
-#
-# Until merged, use branch cursor/genieacs-tr069-68c7 in the URL.
 #
 # Optional env (no prompts):
 #   BILLING_CTID=101          MT-Billing container (auto-detect if unset)
@@ -22,8 +20,7 @@
 
 set -euo pipefail
 
-# Default to feature branch until TR-069 + this installer land on main (override with REPO_RAW=.../main).
-REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/tsogs66/mtbilling-claude/cursor/genieacs-tr069-68c7}"
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main}"
 GUEST_INSTALL_URL="${GUEST_INSTALL_URL:-${REPO_RAW}/install/genieacs-guest-install.sh}"
 
 GENIEACS_HOSTNAME="${GENIEACS_HOSTNAME:-genieacs}"
