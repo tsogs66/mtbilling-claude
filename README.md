@@ -196,7 +196,9 @@ GENIEACS_CTID=109 BILLING_CTID=125 bash -c "$(curl -fsSL https://raw.githubuserc
 sudo bash /opt/mt-billing/install/mt-billing-update.sh
 ```
 
-Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Forward **TCP 7547** on your edge to the GenieACS LXC if CPEs reach the ACS over the public internet.
+Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Forward **TCP 7547** on your edge to the GenieACS LXC if CPEs reach the public internet.
+
+**GenieACS web UI** (port 3000): on first install the guest script seeds **`admin` / `admin`** (override with `GENIEACS_UI_USER` / `GENIEACS_UI_PASSWORD` on `pct exec`). Credentials are also in `/opt/genieacs/ui-login.txt` inside the GenieACS LXC — change the password under **Admin → Users** after login.
 
 ### Updating after new commits (Proxmox)
 

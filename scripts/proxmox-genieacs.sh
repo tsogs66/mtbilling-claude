@@ -279,6 +279,7 @@ echo "=== Complete ==="
 echo "GenieACS LXC     : CTID ${ACS_CTID}  IP ${ACS_IP}"
 echo "CWMP (CPEs)      : http://${ACS_IP}:7547/  — forward TCP 7547 from WAN if CPEs are on the internet"
 echo "GenieACS UI      : http://${ACS_IP}:3000/"
+echo "GenieACS UI login: admin / admin (first install only; see /opt/genieacs/ui-login.txt in CT — change under Admin → Users)"
 echo "NBI (MT-Billing) : http://${ACS_IP}:7557 (restricted to billing IP when UFW applied)"
 if [[ -n "$BILLING_CTID" && -n "$BILLING_IP" ]]; then
   echo "MT-Billing panel : http://${BILLING_IP}/  → System Settings → TR-069 (already enabled)"

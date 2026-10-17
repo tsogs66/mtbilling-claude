@@ -10,6 +10,8 @@ set -euo pipefail
 GENIEACS_VERSION="${GENIEACS_VERSION:-1.2.16}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 BILLING_IP="${BILLING_IP:-}"
+GENIEACS_UI_USER="${GENIEACS_UI_USER:-admin}"
+GENIEACS_UI_PASSWORD="${GENIEACS_UI_PASSWORD:-admin}"
 
 log() { echo "[genieacs-guest] $*"; }
 
@@ -36,6 +38,12 @@ if ! command -v mongod >/dev/null 2>&1; then
 fi
 systemctl enable mongod
 systemctl start mongod
+for _ in $(seq 1 30); do
+  if mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
 
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)" -lt "$NODE_MAJOR" ]]; then
   log "Installing Node.js ${NODE_MAJOR}.x"
@@ -110,6 +118,62 @@ for u in genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui; do
   systemctl restart "$u"
 done
 
+seed_genieacs_ui_admin() {
+  if ! command -v mongosh >/dev/null 2>&1; then
+    log "WARNING: mongosh not found — skip GenieACS UI admin seed"
+    return 0
+  fi
+  local uid="${GENIEACS_UI_USER}"
+  local existing
+  existing="$(mongosh genieacs --quiet --eval "db.users.countDocuments({_id: '${uid}'})" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  if [[ "${existing}" != "0" ]]; then
+    log "GenieACS UI user '${uid}' already exists — not changing password"
+    return 0
+  fi
+  log "Seeding GenieACS UI admin role and user '${uid}'"
+  read -r SALT HASH <<EOF
+$(GENIEACS_UI_PASSWORD="${GENIEACS_UI_PASSWORD}" node - <<'NODE'
+const crypto = require('crypto');
+const pass = process.env.GENIEACS_UI_PASSWORD || 'admin';
+const salt = crypto.randomBytes(64).toString('hex');
+const hash = crypto.pbkdf2Sync(pass, salt, 10000, 128, 'sha512').toString('hex');
+process.stdout.write(`${salt}\n${hash}\n`);
+NODE
+)
+EOF
+  mongosh genieacs --quiet <<MONGO
+db.permissions.deleteMany({ role: 'admin' });
+db.permissions.insertMany([
+  { role: 'admin', resource: 'devices', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'faults', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'files', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'presets', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'provisions', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'config', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'permissions', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'users', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'virtualParameters', access: 3, validate: 'true' },
+  { role: 'admin', resource: 'views', access: 3, validate: 'true' }
+]);
+db.users.insertOne({
+  _id: '${uid}',
+  roles: 'admin',
+  salt: '${SALT}',
+  password: '${HASH}'
+});
+MONGO
+  cat >/opt/genieacs/ui-login.txt <<EOF
+# GenieACS web UI (http://<this-host>:3000/) — change password under Admin → Users
+username=${uid}
+password=${GENIEACS_UI_PASSWORD}
+EOF
+  chmod 600 /opt/genieacs/ui-login.txt
+  chown root:root /opt/genieacs/ui-login.txt
+  log "GenieACS UI login: user=${uid} password=${GENIEACS_UI_PASSWORD} (also /opt/genieacs/ui-login.txt)"
+}
+
+seed_genieacs_ui_admin
+
 # Restrict NBI to billing host when BILLING_IP is known (CWMP stays open for CPEs).
 if [[ -n "$BILLING_IP" ]] && command -v ufw >/dev/null 2>&1; then
   apt-get install -y -qq ufw || true
@@ -124,4 +188,5 @@ fi
 
 log "GenieACS services:"
 systemctl is-active genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui | paste - - - - || true
+log "GenieACS UI default login (if seeded this run): ${GENIEACS_UI_USER} / ${GENIEACS_UI_PASSWORD}"
 log "Done."
