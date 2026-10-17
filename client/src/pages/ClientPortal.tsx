@@ -458,13 +458,10 @@ export default function ClientPortal() {
   };
 
   const ensurePaymentLink = async (): Promise<PaymentLink | null> => {
-    const existing: PaymentLink | null = me?.paymentLink || null;
-    if (existing?.path && (existing.status === 'pending' || existing.status === 'submitted' || existing.status === 'rejected')) {
-      return existing;
-    }
+    const due = Math.max(0, Number(me?.balance) || 0);
     const data = await portalFetch('/public/portal/payment-link', {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify(due > 0 ? { amount: due } : {}),
     });
     const link: PaymentLink | null = data.paymentLink || null;
     setMe((prev: any) => (prev ? { ...prev, paymentLink: link } : prev));
@@ -795,6 +792,8 @@ export default function ClientPortal() {
     : billingTabs[0].id;
   const paymentLink: PaymentLink | null = me.paymentLink || null;
   const balance = Number(me.balance) || 0;
+  /** Invoice AR is source of truth; pay links can lag after plan changes until refreshed. */
+  const amountDue = balance > 0 ? balance : Number(paymentLink?.amount) || 0;
   const company = me.company || {};
   const portalLogo = company.logo || brandCompany?.logo || DEFAULT_LOGO;
   // Always allow sending payment details — creates a Payment Links entry if none exists (reverse of admin create).
@@ -985,7 +984,7 @@ export default function ClientPortal() {
               <div
                 className={`mt-1.5 text-3xl font-bold tabular-nums leading-none ${balance > 0 ? 'text-rose-300' : 'text-emerald-300'}`}
               >
-                {peso(paymentLink?.amount || balance)}
+                {peso(amountDue)}
               </div>
               <div className="mt-1 text-sm text-portal-muted leading-snug">
                 due {c.due || '—'}

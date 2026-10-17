@@ -12,7 +12,13 @@ import {
   recordSubscriberOutageReport,
   resolveOutageServiceSlugs,
 } from './outageMonitor.js';
-import { absolutePayUrl, changePppoeUserPlan, ensureFreshPayLink } from './billing.js';
+import {
+  absolutePayUrl,
+  changePppoeUserPlan,
+  ensureFreshPayLink,
+  openInvoiceBalanceForUser,
+  syncPendingPaymentLinkAmount,
+} from './billing.js';
 import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
 import {
   initStaffNotifications,
@@ -1674,23 +1680,24 @@ publicPortalRouter.post('/public/portal/payment-link', (req, res) => {
   if (!sess) return res.status(401).json({ error: 'Session expired' });
   if (rejectIfMustChangePassword(sess, res)) return;
 
-  const existing = portalPaymentLinkForUser(sess.uid);
-  if (existing && (existing.status === 'pending' || existing.status === 'submitted')) {
-    return res.json({ paymentLink: existing, created: false });
-  }
-
   markOverdueInvoices();
-  const balanceRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount - amount_paid), 0) AS bal FROM invoices
-       WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
-    )
-    .get(sess.uid) as { bal: number };
-  const bal = Number(balanceRow?.bal) || 0;
   const price = Number(sess.price) || 0;
   const months = Math.max(1, Math.floor(Number(req.body?.months) || 1));
+  const bal = openInvoiceBalanceForUser(sess.uid);
   const amountRaw = req.body?.amount != null ? Number(req.body.amount) : NaN;
-  const amount = Number.isFinite(amountRaw) && amountRaw > 0 ? amountRaw : bal > 0 ? bal : price * months;
+  const amount =
+    Number.isFinite(amountRaw) && amountRaw > 0 ? amountRaw : bal > 0 ? bal : price * months;
+
+  const existing = portalPaymentLinkForUser(sess.uid);
+  if (existing?.status === 'submitted') {
+    return res.json({ paymentLink: existing, created: false });
+  }
+  if (existing?.status === 'pending') {
+    const target = amount > 0 ? amount : bal;
+    if (target > 0) syncPendingPaymentLinkAmount(sess.uid, target);
+    const synced = portalPaymentLinkForUser(sess.uid);
+    return res.json({ paymentLink: synced || existing, created: false });
+  }
 
   try {
     // Subscriber-initiated entry — shows up on Payment Links like an admin create, tagged portal.
