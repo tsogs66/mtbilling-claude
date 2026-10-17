@@ -200,6 +200,8 @@ Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Fo
 
 **GenieACS web UI** (port 3000): on first install the guest script seeds **`admin` / `admin`** (override with `GENIEACS_UI_USER` / `GENIEACS_UI_PASSWORD` on `pct exec`). Credentials are also in `/opt/genieacs/ui-login.txt` inside the GenieACS LXC — change the password under **Admin → Users** after login.
 
+If login fails or the browser shows **401** on `/api/*`, reset the UI user inside the GenieACS LXC: `sudo bash /opt/genieacs/genieacs-reset-ui-admin.sh` (or `install/genieacs-reset-ui-admin.sh` from the repo before copy).
+
 ### Updating after new commits (Proxmox)
 
 **Automatic (default on new installs):** a systemd timer inside the LXC polls GitHub every 10 minutes and applies fast-forward updates when `main` moves.
