@@ -256,11 +256,15 @@ echo "GenieACS container IP: ${ACS_IP}"
 
 echo "Installing MongoDB + GenieACS inside CT ${ACS_CTID}…"
 # Fresh Ubuntu CT templates often have no curl — fetch on the Proxmox host and push in.
-HOST_GUEST="/var/tmp/mt-billing-genieacs-guest-install.sh"
-curl -fsSL "${GUEST_INSTALL_URL}" -o "$HOST_GUEST"
-chmod +x "$HOST_GUEST"
-pct push "$ACS_CTID" "$HOST_GUEST" /tmp/genieacs-guest-install.sh
-pct exec "$ACS_CTID" -- chmod +x /tmp/genieacs-guest-install.sh
+INSTALL_RAW="${REPO_RAW}/install"
+pct exec "$ACS_CTID" -- mkdir -p /tmp/mt-billing-install
+for _guest_script in genieacs-guest-install.sh genieacs-ui-admin.sh genieacs-reset-ui-admin.sh; do
+  _host="/var/tmp/mt-billing-${_guest_script}"
+  curl -fsSL "${INSTALL_RAW}/${_guest_script}" -o "$_host"
+  chmod +x "$_host"
+  pct push "$ACS_CTID" "$_host" "/tmp/mt-billing-install/${_guest_script}"
+  pct exec "$ACS_CTID" -- chmod +x "/tmp/mt-billing-install/${_guest_script}"
+done
 echo "Waiting for guest apt/network…"
 for _ in $(seq 1 45); do
   if pct exec "$ACS_CTID" -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -qq' 2>/dev/null; then
@@ -279,7 +283,7 @@ echo "=== Complete ==="
 echo "GenieACS LXC     : CTID ${ACS_CTID}  IP ${ACS_IP}"
 echo "CWMP (CPEs)      : http://${ACS_IP}:7547/  — forward TCP 7547 from WAN if CPEs are on the internet"
 echo "GenieACS UI      : http://${ACS_IP}:3000/"
-echo "GenieACS UI login: admin / admin (first install only; see /opt/genieacs/ui-login.txt in CT — change under Admin → Users)"
+echo "GenieACS UI login: admin / admin (see /opt/genieacs/ui-login.txt — if 401/login fails: pct exec ${ACS_CTID} -- bash /opt/genieacs/genieacs-reset-ui-admin.sh)"
 echo "NBI (MT-Billing) : http://${ACS_IP}:7557 (restricted to billing IP when UFW applied)"
 if [[ -n "$BILLING_CTID" && -n "$BILLING_IP" ]]; then
   echo "MT-Billing panel : http://${BILLING_IP}/  → System Settings → TR-069 (already enabled)"

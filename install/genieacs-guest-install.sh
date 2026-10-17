@@ -112,67 +112,29 @@ write_unit genieacs-nbi "${BIN_DIR}/genieacs-nbi"
 write_unit genieacs-fs "${BIN_DIR}/genieacs-fs"
 write_unit genieacs-ui "${BIN_DIR}/genieacs-ui"
 
+SCRIPT_DIR="${GUEST_INSTALL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+if [[ ! -f "${SCRIPT_DIR}/genieacs-ui-admin.sh" ]]; then
+  log "ERROR: genieacs-ui-admin.sh missing next to guest install (push install/ scripts from host)"
+  exit 1
+fi
+install -m 755 "${SCRIPT_DIR}/genieacs-ui-admin.sh" /opt/genieacs/genieacs-ui-admin.sh
+install -m 755 "${SCRIPT_DIR}/genieacs-reset-ui-admin.sh" /opt/genieacs/genieacs-reset-ui-admin.sh
+
+# Seed UI admin before starting genieacs-ui (otherwise UI caches an empty user list → login fails / 401 on /api).
+if ! grep -q '^GENIEACS_UI_JWT_SECRET=.\+' /opt/genieacs/genieacs.env 2>/dev/null; then
+  node -e "console.log('GENIEACS_UI_JWT_SECRET=' + require('crypto').randomBytes(128).toString('hex'))" >>/opt/genieacs/genieacs.env
+  chown genieacs:genieacs /opt/genieacs/genieacs.env
+  chmod 600 /opt/genieacs/genieacs.env
+fi
+
+GENIEACS_UI_USER="${GENIEACS_UI_USER}" GENIEACS_UI_PASSWORD="${GENIEACS_UI_PASSWORD}" \
+  bash /opt/genieacs/genieacs-ui-admin.sh || log "WARNING: UI admin seed failed — run /opt/genieacs/genieacs-reset-ui-admin.sh"
+
 systemctl daemon-reload
 for u in genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui; do
   systemctl enable "$u"
   systemctl restart "$u"
 done
-
-seed_genieacs_ui_admin() {
-  if ! command -v mongosh >/dev/null 2>&1; then
-    log "WARNING: mongosh not found — skip GenieACS UI admin seed"
-    return 0
-  fi
-  local uid="${GENIEACS_UI_USER}"
-  local existing
-  existing="$(mongosh genieacs --quiet --eval "db.users.countDocuments({_id: '${uid}'})" 2>/dev/null | tr -d '[:space:]' || echo 0)"
-  if [[ "${existing}" != "0" ]]; then
-    log "GenieACS UI user '${uid}' already exists — not changing password"
-    return 0
-  fi
-  log "Seeding GenieACS UI admin role and user '${uid}'"
-  read -r SALT HASH <<EOF
-$(GENIEACS_UI_PASSWORD="${GENIEACS_UI_PASSWORD}" node - <<'NODE'
-const crypto = require('crypto');
-const pass = process.env.GENIEACS_UI_PASSWORD || 'admin';
-const salt = crypto.randomBytes(64).toString('hex');
-const hash = crypto.pbkdf2Sync(pass, salt, 10000, 128, 'sha512').toString('hex');
-process.stdout.write(`${salt}\n${hash}\n`);
-NODE
-)
-EOF
-  mongosh genieacs --quiet <<MONGO
-db.permissions.deleteMany({ role: 'admin' });
-db.permissions.insertMany([
-  { role: 'admin', resource: 'devices', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'faults', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'files', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'presets', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'provisions', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'config', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'permissions', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'users', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'virtualParameters', access: 3, validate: 'true' },
-  { role: 'admin', resource: 'views', access: 3, validate: 'true' }
-]);
-db.users.insertOne({
-  _id: '${uid}',
-  roles: 'admin',
-  salt: '${SALT}',
-  password: '${HASH}'
-});
-MONGO
-  cat >/opt/genieacs/ui-login.txt <<EOF
-# GenieACS web UI (http://<this-host>:3000/) — change password under Admin → Users
-username=${uid}
-password=${GENIEACS_UI_PASSWORD}
-EOF
-  chmod 600 /opt/genieacs/ui-login.txt
-  chown root:root /opt/genieacs/ui-login.txt
-  log "GenieACS UI login: user=${uid} password=${GENIEACS_UI_PASSWORD} (also /opt/genieacs/ui-login.txt)"
-}
-
-seed_genieacs_ui_admin
 
 # Restrict NBI to billing host when BILLING_IP is known (CWMP stays open for CPEs).
 if [[ -n "$BILLING_IP" ]] && command -v ufw >/dev/null 2>&1; then
