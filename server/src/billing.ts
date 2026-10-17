@@ -1133,6 +1133,34 @@ function randomToken(): string {
   return crypto.randomBytes(18).toString('base64url');
 }
 
+/** Open AR total for a subscriber (unpaid / partial / overdue invoices). */
+export function openInvoiceBalanceForUser(pppoeUserId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount - amount_paid), 0) AS bal FROM invoices
+       WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
+    )
+    .get(pppoeUserId) as { bal: number };
+  return Math.max(0, Number(row?.bal) || 0);
+}
+
+/** Keep pending pay links aligned with current amount due (e.g. after prorated plan change). */
+export function syncPendingPaymentLinkAmount(pppoeUserId: number, amount: number): boolean {
+  const due = Math.max(0, Number(amount) || 0);
+  if (due <= 0) return false;
+  const row = db
+    .prepare(
+      `SELECT id, amount FROM payment_links
+       WHERE pppoe_user_id = ? AND status = 'pending' AND datetime(expires_at) > datetime('now')
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(pppoeUserId) as { id: number; amount: number } | undefined;
+  if (!row) return false;
+  if (Math.abs(Number(row.amount) - due) < 0.009) return false;
+  db.prepare('UPDATE payment_links SET amount = ? WHERE id = ?').run(due, row.id);
+  return true;
+}
+
 export function createPaymentLink(opts: {
   pppoeUserId: number;
   months?: number;
@@ -1550,6 +1578,14 @@ export function ensureFreshPayLink(
     )
     .get(userId) as any;
   if (existing) {
+    const desired =
+      opts?.amount != null && Number(opts.amount) > 0
+        ? Number(opts.amount)
+        : openInvoiceBalanceForUser(userId);
+    if (desired > 0 && Math.abs(Number(existing.amount) - desired) > 0.009) {
+      db.prepare('UPDATE payment_links SET amount = ? WHERE id = ?').run(desired, existing.id);
+      existing.amount = desired;
+    }
     const path = `/pay/${existing.token}`;
     const resolved = resolvePublicBaseUrl(baseUrl);
     return {
@@ -1559,7 +1595,7 @@ export function ensureFreshPayLink(
       baseUrl: resolved.baseUrl || null,
       source: resolved.source,
       warning: resolved.warning || null,
-      amount: existing.amount,
+      amount: Number(existing.amount) || desired,
       months: existing.months,
       createdBy: existing.created_by || 'admin',
     };
