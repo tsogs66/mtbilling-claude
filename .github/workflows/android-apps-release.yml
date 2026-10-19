@@ -48,10 +48,16 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_HOME/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          SDKM="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$SDKM" ] || [ ! -x "$SDKM" ]; then
+            echo "sdkmanager not found under $ANDROID_HOME/cmdline-tools" >&2
+            ls -la "$ANDROID_HOME/cmdline-tools" 2>&1 || true
+            exit 1
+          fi
+          echo "$(dirname "$SDKM")" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install dependencies
         run: npm install
