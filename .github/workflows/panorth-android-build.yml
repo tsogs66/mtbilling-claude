@@ -1,15 +1,6 @@
 name: PANORTH Android APK
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'client/**'
-      - 'server/src/db.ts'
-      - 'server/src/ispOps.ts'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/panorth-android-build.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -42,10 +33,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK platform + build-tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install dependencies
         run: npm install
@@ -65,7 +62,7 @@ jobs:
             "applicationId": "com.tsogs.panorth",
             "versionCode": $VC,
             "versionName": "1.0.$VC",
-            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/portal-android-latest/panorth-debug.apk"
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/android-apps-latest/panorth-debug.apk"
           }
           EOF
 
