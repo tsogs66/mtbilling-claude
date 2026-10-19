@@ -7,8 +7,9 @@ import { RouterProvider } from './context/RouterContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { ThemeProvider } from './context/ThemeContext';
 import ServerSetup from './pages/ServerSetup';
-import { isNativeApp, needsServerSetup } from './config';
+import { isNativeApp, isNativePortalApp, needsServerSetup } from './config';
 import { initNativeShell } from './lib/nativeShell';
+import PortalAndroidUpdateGate from './components/portal/PortalAndroidUpdateGate';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
@@ -41,6 +42,7 @@ function Root() {
           <CompanyProvider>
             <RouterProvider>
               <App />
+              {isNativePortalApp() ? <PortalAndroidUpdateGate /> : null}
             </RouterProvider>
           </CompanyProvider>
         </AuthProvider>

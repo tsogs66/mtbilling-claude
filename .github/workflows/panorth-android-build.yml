@@ -1,0 +1,111 @@
+name: PANORTH Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - 'server/src/db.ts'
+      - 'server/src/ispOps.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/panorth-android-build.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: panorth-android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform + build-tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set PANORTH version from run number
+        run: |
+          VC=${{ github.run_number }}
+          GRADLE=client/android-panorth/app/build.gradle
+          sed -i "s/versionCode [0-9][0-9]*/versionCode $VC/" "$GRADLE"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.$VC\"/" "$GRADLE"
+
+      - name: Write version manifest for panel / env reference
+        run: |
+          VC=${{ github.run_number }}
+          cat > panorth-version.json <<EOF
+          {
+            "applicationId": "com.tsogs.panorth",
+            "versionCode": $VC,
+            "versionName": "1.0.$VC",
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/portal-android-latest/panorth-debug.apk"
+          }
+          EOF
+
+      - name: Build web UI (portal native) and sync Capacitor android-panorth
+        run: npm run android:sync:panorth
+
+      - name: Build debug APK
+        working-directory: client/android-panorth
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panorth-debug-apk
+          path: client/android-panorth/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish rolling portal-android-latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: portal-android-latest
+          name: PANORTH Android (subscriber portal APK)
+          body: |
+            Automatically built **PANORTH** subscriber portal APK from `main` (commit ${{ github.sha }}).
+
+            - App name: **PANORTH**
+            - Package: `com.tsogs.panorth` (installing a newer APK **updates** the existing app)
+            - Build: `${{ github.run_number }}` / version `1.0.${{ github.run_number }}`
+
+            **Panel:** set Subscriber Portal → **Published version code** to `${{ github.run_number }}`,
+            **Version name** to `1.0.${{ github.run_number }}`, and **APK download URL** to the
+            `panorth-debug.apk` asset below (or set env `PORTAL_ANDROID_GITHUB_REPO=${{ github.repository }}`).
+
+            **Install:** download `panorth-debug.apk`, allow unknown sources, open the file. On first launch,
+            enter your ISP portal HTTPS URL. When a newer build is published, opening PANORTH will offer an update.
+          files: |
+            client/android-panorth/app/build/outputs/apk/debug/app-debug.apk#panorth-debug.apk
+            panorth-version.json
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PANORTH</string>
+    <string name="title_activity_main">PANORTH</string>
+    <string name="package_name">com.tsogs.panorth</string>
+    <string name="custom_url_scheme">com.tsogs.panorth</string>
+</resources>

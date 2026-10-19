@@ -28,6 +28,16 @@ type PortalSettings = {
   autoPortalLink?: string;
   /** Public /portal appearance */
   theme: PortalThemeId;
+  /** PANORTH Android app (com.tsogs.panorth) — version check on subscriber phones */
+  androidVersionCode?: number;
+  androidVersionName?: string;
+  androidApkUrl?: string;
+  androidPublish?: {
+    applicationId: string;
+    versionCode: number;
+    versionName: string;
+    apkUrl: string | null;
+  };
 };
 
 type PortalAccount = {
@@ -67,6 +77,9 @@ const DEFAULT_SETTINGS: PortalSettings = {
   portalLink: '',
   autoPortalLink: '',
   theme: 'matrix',
+  androidVersionCode: 0,
+  androidVersionName: '1.0',
+  androidApkUrl: '',
 };
 
 const PORTAL_THEMES: { key: PortalThemeId; label: string; hint: string; Icon: typeof Binary }[] = [
@@ -867,6 +880,64 @@ export default function PortalAdmin() {
                   {label}
                 </label>
               ))}
+            </div>
+            <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+              <div className="text-sm font-semibold text-slate-800">PANORTH Android app</div>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Subscribers who install the native <strong>PANORTH</strong> APK (<code className="text-brand-600">com.tsogs.panorth</code>)
+                are prompted to update when the published build number is higher than what they have. Installing the new APK
+                replaces the app in place — no uninstall required. Set version code to <code>0</code> to disable update prompts.
+              </p>
+              <div className="grid sm:grid-cols-3 gap-3">
+                <FormField label="Published version code" hint="Must exceed installed APK build">
+                  <input
+                    type="number"
+                    min={0}
+                    className="input font-mono"
+                    value={settings.androidVersionCode ?? 0}
+                    onChange={(e) =>
+                      setSettings({ ...settings, androidVersionCode: Math.max(0, Number(e.target.value) || 0) })
+                    }
+                  />
+                </FormField>
+                <FormField label="Version name" hint="Shown to subscribers">
+                  <input
+                    className="input font-mono text-sm"
+                    value={settings.androidVersionName ?? '1.0'}
+                    onChange={(e) => setSettings({ ...settings, androidVersionName: e.target.value })}
+                  />
+                </FormField>
+                <FormField label="APK download URL" hint="HTTPS link to .apk file">
+                  <input
+                    className="input font-mono text-sm"
+                    value={settings.androidApkUrl ?? ''}
+                    onChange={(e) => setSettings({ ...settings, androidApkUrl: e.target.value })}
+                    placeholder="https://…/panorth-debug.apk"
+                  />
+                </FormField>
+              </div>
+              {settings.androidPublish?.apkUrl || settings.androidPublish?.versionCode ? (
+                <p className="text-xs text-slate-500">
+                  Effective for phones: build{' '}
+                  <code className="text-slate-700">{settings.androidPublish?.versionCode ?? 0}</code>
+                  {settings.androidPublish?.apkUrl ? (
+                    <>
+                      {' '}
+                      ·{' '}
+                      <a
+                        className="text-brand-600 hover:underline"
+                        href={settings.androidPublish.apkUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        APK link
+                      </a>
+                    </>
+                  ) : (
+                    ' · no APK URL (set URL or PORTAL_ANDROID_APK_URL on server)'
+                  )}
+                </p>
+              ) : null}
             </div>
             <div className="md:col-span-2 space-y-2">
               <div className="text-sm font-medium text-slate-700">Portal theme</div>

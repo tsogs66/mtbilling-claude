@@ -1,25 +1,27 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
+const portalNative = process.env.CAPACITOR_PORTAL === '1';
+
 const config: CapacitorConfig = {
-  appId: 'com.tsogs.mtbilling',
-  appName: 'MT-Billing',
+  appId: portalNative ? 'com.tsogs.panorth' : 'com.tsogs.mtbilling',
+  appName: portalNative ? 'PANORTH' : 'MT-Billing',
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    // cleartext only needed if testing against http:// LAN IPs
     cleartext: true,
   },
   plugins: {
     SplashScreen: {
       launchAutoHide: true,
-      backgroundColor: '#0f172a',
+      backgroundColor: portalNative ? '#020806' : '#0f172a',
     },
     StatusBar: {
       style: 'DARK',
-      backgroundColor: '#0f172a',
+      backgroundColor: portalNative ? '#020806' : '#0f172a',
     },
   },
   android: {
+    path: portalNative ? 'android-panorth' : 'android',
     allowMixedContent: true,
   },
 };

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Server, ArrowRight, Loader2, Shield } from 'lucide-react';
-import { normalizeServerUrl, setStoredServerUrl } from '../config';
+import { isNativePortalApp, normalizeServerUrl, setStoredServerUrl } from '../config';
 import { BRAND_SHORT, PRODUCT_TITLE } from '../branding';
 import Logo from '../components/Logo';
 
@@ -55,10 +55,12 @@ export default function ServerSetup({ onReady }: { onReady: () => void }) {
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <Server size={22} className="text-brand-500" />
-              Connect panel
+              {isNativePortalApp() ? 'Connect to your ISP' : 'Connect panel'}
             </h1>
             <p className="text-sm text-slate-500 mt-1 leading-relaxed">
-              Enter your MT-Billing public address (same hostname you open in a browser). The app will use it for API calls.
+              {isNativePortalApp()
+                ? 'Enter your ISP’s PANORTH portal address (the same HTTPS site you use in a browser). The app will connect to that server.'
+                : 'Enter your MT-Billing public address (same hostname you open in a browser). The app will use it for API calls.'}
             </p>
           </div>
 
