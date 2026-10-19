@@ -202,6 +202,17 @@ Then open **System Settings → TR-069** and **CPE / TR-069** (`/cpe-tr069`). Fo
 
 If login fails or the browser shows **401** on `/api/*`, reset the UI user inside the GenieACS LXC: `sudo bash /opt/genieacs/genieacs-reset-ui-admin.sh` (or `install/genieacs-reset-ui-admin.sh` from the repo before copy).
 
+**MikroTik (all `/ip pool` → GenieACS CWMP):** from a host that reaches RouterOS API (8728), e.g. the billing LXC:
+
+```bash
+cd /opt/mt-billing
+node scripts/mikrotik-setup-tr069-genieacs.mjs \
+  --host <mikrotik-bridge-ip> --user <api-user> --password '<api-pass>' \
+  --genieacs 192.168.0.107 --acs-front <IP-ONTs-use-for-ACS-URL>
+```
+
+This builds address-list `tr069-cpe-pools` from every pool range, dst-nats `acs-front:7547` → GenieACS, and allows/forwards TR-069 from those ranges. Set the same ACS URL on Huawei ONTs and in **System Settings → TR-069 → CWMP ACS URL**.
+
 ### Updating after new commits (Proxmox)
 
 **Automatic (default on new installs):** a systemd timer inside the LXC polls GitHub every 10 minutes and applies fast-forward updates when `main` moves.
