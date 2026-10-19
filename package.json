@@ -12,6 +12,7 @@
     "lint": "npm --prefix client run lint",
     "start": "npm --prefix server run start",
     "android:sync": "npm --prefix client run cap:sync",
+    "android:sync:panorth": "npm --prefix client run cap:sync:panorth",
     "android:open": "npm --prefix client run cap:open",
     "flash:rpi": "bash scripts/build-rpi-img.sh",
     "flash:opi": "bash scripts/build-opi-img.sh",

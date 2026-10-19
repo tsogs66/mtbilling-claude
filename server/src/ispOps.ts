@@ -793,12 +793,42 @@ function normalizePortalLink(raw: unknown): string {
     .replace(/\/+$/, '');
 }
 
+function portalAndroidPublishInfo() {
+  const row = db
+    .prepare(
+      `SELECT portal_android_version_code, portal_android_version_name, portal_android_apk_url
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as any;
+  const envCode = Number(process.env.PORTAL_ANDROID_VERSION_CODE);
+  const versionCode = Number.isFinite(envCode) && envCode > 0
+    ? Math.round(envCode)
+    : Math.max(0, Math.round(Number(row?.portal_android_version_code) || 0));
+  const versionName = String(
+    process.env.PORTAL_ANDROID_VERSION_NAME || row?.portal_android_version_name || '1.0'
+  ).trim() || '1.0';
+  let apkUrl = String(process.env.PORTAL_ANDROID_APK_URL || row?.portal_android_apk_url || '').trim();
+  if (!apkUrl) {
+    const repo = String(process.env.PORTAL_ANDROID_GITHUB_REPO || '').trim();
+    if (repo) {
+      apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/portal-android-latest/panorth-debug.apk`;
+    }
+  }
+  return {
+    applicationId: 'com.tsogs.panorth',
+    versionCode,
+    versionName,
+    apkUrl: apkUrl || null,
+  };
+}
+
 function portalSettingsRow() {
   const row = db
     .prepare(
       `SELECT portal_title, portal_subtitle, portal_help_text, portal_welcome_text,
               portal_show_balance, portal_show_invoices, portal_show_tickets, portal_show_company,
               portal_session_days, portal_link, portal_theme,
+              portal_android_version_code, portal_android_version_name, portal_android_apk_url,
               public_base_url, ngrok_url, ngrok_status,
               cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
        FROM app_settings WHERE id = 1`
@@ -835,6 +865,10 @@ function portalSettingsRow() {
     portalLink: normalizePortalLink(row?.portal_link),
     autoPortalLink,
     theme: row?.portal_theme === 'orbital' ? 'orbital' : 'matrix',
+    androidVersionCode: Math.max(0, Math.round(Number(row?.portal_android_version_code) || 0)),
+    androidVersionName: String(row?.portal_android_version_name || '1.0').trim() || '1.0',
+    androidApkUrl: String(row?.portal_android_apk_url || '').trim(),
+    androidPublish: portalAndroidPublishInfo(),
   };
 }
 
@@ -874,11 +908,18 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
   sessionDays = Math.min(90, Math.max(1, Math.round(sessionDays)));
   const themeRaw = String(b.theme ?? b.portalTheme ?? 'matrix').trim().toLowerCase();
   const portalTheme = themeRaw === 'orbital' ? 'orbital' : 'matrix';
+  let androidVersionCode = Number(b.androidVersionCode ?? b.portal_android_version_code);
+  if (!Number.isFinite(androidVersionCode) || androidVersionCode < 0) androidVersionCode = 0;
+  androidVersionCode = Math.round(androidVersionCode);
+  const androidVersionName =
+    String(b.androidVersionName ?? b.portal_android_version_name ?? '1.0').trim() || '1.0';
+  const androidApkUrl = String(b.androidApkUrl ?? b.portal_android_apk_url ?? '').trim();
   db.prepare(
     `UPDATE app_settings SET
        portal_title = ?, portal_subtitle = ?, portal_help_text = ?, portal_welcome_text = ?,
        portal_show_balance = ?, portal_show_invoices = ?, portal_show_tickets = ?, portal_show_company = ?,
-       portal_session_days = ?, portal_link = ?, portal_theme = ?
+       portal_session_days = ?, portal_link = ?, portal_theme = ?,
+       portal_android_version_code = ?, portal_android_version_name = ?, portal_android_apk_url = ?
      WHERE id = 1`
   ).run(
     title,
@@ -891,7 +932,10 @@ ispOpsRouter.put('/client-portal/settings', (req, res) => {
     showCompany,
     sessionDays,
     portalLink || null,
-    portalTheme
+    portalTheme,
+    androidVersionCode,
+    androidVersionName,
+    androidApkUrl || null
   );
   res.json(portalSettingsRow());
 });
@@ -1382,6 +1426,11 @@ function rejectIfMustChangePassword(sess: any, res: Response): boolean {
 
 publicPortalRouter.get('/public/portal/settings', (_req, res) => {
   res.json(portalSettingsRow());
+});
+
+/** PANORTH Android app — compare versionCode on launch; same applicationId allows in-place APK upgrade. */
+publicPortalRouter.get('/public/portal/android-app', (_req, res) => {
+  res.json(portalAndroidPublishInfo());
 });
 
 publicPortalRouter.post('/public/portal/login', (req, res) => {

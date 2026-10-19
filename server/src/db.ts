@@ -554,6 +554,10 @@ export function migrate() {
     ['portal_link', 'TEXT'],
     // Public /portal appearance: matrix | orbital
     ['portal_theme', "TEXT DEFAULT 'matrix'"],
+    // PANORTH Android subscriber app (com.tsogs.panorth) — version check on launch
+    ['portal_android_version_code', 'INTEGER DEFAULT 0'],
+    ['portal_android_version_name', "TEXT DEFAULT '1.0'"],
+    ['portal_android_apk_url', 'TEXT'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);

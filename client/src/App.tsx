@@ -46,6 +46,7 @@ import Logo from './components/Logo';
 import { useEffect } from 'react';
 import { PRODUCT_TITLE } from './branding';
 import { refreshApplianceHints } from './lib/appliance';
+import { isNativePortalApp } from './config';
 
 function DocumentTitle() {
   useEffect(() => {
@@ -95,6 +96,17 @@ const stub = (title: string, description: string) => (
 
 export default function App() {
   const { user } = useAuth();
+  if (isNativePortalApp()) {
+    return (
+      <>
+        <Routes>
+          <Route path="/portal" element={<ClientPortal />} />
+          <Route path="/pay/:token" element={<SubscriberPay />} />
+          <Route path="*" element={<Navigate to="/portal" replace />} />
+        </Routes>
+      </>
+    );
+  }
   return (
     <>
       <DocumentTitle />

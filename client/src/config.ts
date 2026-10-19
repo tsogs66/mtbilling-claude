@@ -87,3 +87,8 @@ export function needsServerSetup(): boolean {
   if (String(import.meta.env.VITE_API_BASE || '').trim()) return false;
   return !getStoredServerUrl();
 }
+
+/** Capacitor build of the subscriber portal only (launcher name PANORTH). */
+export function isNativePortalApp() {
+  return isNativeApp() && String(import.meta.env.VITE_NATIVE_PORTAL || '').trim() === '1';
+}
