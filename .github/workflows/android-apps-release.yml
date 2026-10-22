@@ -89,7 +89,7 @@ jobs:
             "applicationId": "com.tsogs.panorth",
             "versionCode": $VC,
             "versionName": "1.0.$VC",
-            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/android-apps-latest/panorth-debug.apk"
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/android-apps-v${{ github.run_number }}/panorth-debug.apk"
           }
           EOF
 
@@ -117,9 +117,11 @@ jobs:
             | **mt-billing-debug.apk** | MT-Billing (staff panel) | `com.tsogs.mtbilling` |
             | **panorth-debug.apk** | PANORTH (subscriber portal) | `com.tsogs.panorth` |
 
-            PANORTH build **${{ github.run_number }}** / version **1.0.${{ github.run_number }}** — set Subscriber Portal →
-            **Published version code** to `${{ github.run_number }}` and **APK URL** to:
-            `https://github.com/${{ github.repository }}/releases/download/android-apps-latest/panorth-debug.apk`
+            **Series build ${{ github.run_number }}** — immutable tag `android-apps-v${{ github.run_number }}` (version **1.0.${{ github.run_number }}**).
+
+            PANORTH: set Subscriber Portal → **Published version code** to `${{ github.run_number }}` and **APK URL** to:
+            `https://github.com/${{ github.repository }}/releases/download/android-apps-v${{ github.run_number }}/panorth-debug.apk`
+            (or `android-apps-latest` for rolling latest).
 
             Debug builds (not Play Store signed). Allow install from unknown sources when sideloading.
           files: |
@@ -127,6 +129,30 @@ jobs:
             panorth-debug.apk
             panorth-version.json
           prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish numbered android-apps-v${{ github.run_number }} (immutable series)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-apps-v${{ github.run_number }}
+          name: MT-Billing Android Apps v${{ github.run_number }} (1.0.${{ github.run_number }})
+          body: |
+            Immutable **series release #${{ github.run_number }}** from commit `${{ github.sha }}`.
+
+            | Download | App |
+            |----------|-----|
+            | mt-billing-debug.apk | Staff panel |
+            | panorth-debug.apk | PANORTH subscriber portal |
+            | panorth-version.json | Version manifest (versionCode **${{ github.run_number }}**) |
+
+            Rolling latest: `android-apps-latest`.
+          files: |
+            mt-billing-debug.apk
+            panorth-debug.apk
+            panorth-version.json
+          prerelease: true
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -140,6 +166,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Publish numbered android-v${{ github.run_number }} (staff series)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-v${{ github.run_number }}
+          name: MT-Billing Android staff v${{ github.run_number }}
+          files: mt-billing-debug.apk
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish rolling portal-android-latest (PANORTH only)
         uses: softprops/action-gh-release@v2
         with:
@@ -149,5 +186,18 @@ jobs:
             panorth-debug.apk
             panorth-version.json
           prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish numbered portal-android-v${{ github.run_number }} (PANORTH series)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: portal-android-v${{ github.run_number }}
+          name: PANORTH Android v${{ github.run_number }} (1.0.${{ github.run_number }})
+          files: |
+            panorth-debug.apk
+            panorth-version.json
+          prerelease: true
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
