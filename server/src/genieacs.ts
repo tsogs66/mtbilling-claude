@@ -234,10 +234,29 @@ export async function listAcsDevices(opts?: { query?: string; limit?: number }) 
   return Array.isArray(r.data) ? r.data : [];
 }
 
+/** GenieACS NBI device id encoding (path segment). */
+export function encodeAcsDeviceId(deviceId: string): string {
+  return encodeURIComponent(deviceId);
+}
+
 export async function getAcsDevice(deviceId: string) {
-  const id = encodeURIComponent(deviceId);
-  const r = await acsRequest('GET', `/devices/${id}`);
+  const raw = String(deviceId || '').trim();
+  if (!raw) throw new Error('device-id-required');
+  const id = encodeAcsDeviceId(raw);
+  let r = await acsRequest('GET', `/devices/${id}`);
+  if (!r.ok && (r.status === 404 || r.status === 400)) {
+    const query = JSON.stringify({ _id: raw });
+    r = await acsRequest('GET', '/devices/', undefined, { query, limit: '1' });
+    if (r.ok && Array.isArray(r.data) && r.data.length) return r.data[0];
+  }
   if (!r.ok) throw new Error(r.error);
+  if (Array.isArray(r.data)) {
+    const hit = r.data.find(
+      (d) => d && typeof d === 'object' && String((d as { _id?: string })._id || '') === raw
+    );
+    if (hit) return hit;
+    if (r.data.length === 1) return r.data[0];
+  }
   return r.data;
 }
 
@@ -374,13 +393,22 @@ export async function acsOnInstallComplete(pppoeUserId: number) {
   await acsAfterSubscriberUpsert(row as Record<string, unknown>, { install: true });
 }
 
+const FLATTEN_MAX_DEPTH = 64;
+const FLATTEN_MAX_PARAMS = 12_000;
+
 /** Walk GenieACS device document and collect TR-069 parameter paths. */
-export function flattenAcsParameters(root: unknown, prefix = ''): FlatParam[] {
-  const out: FlatParam[] = [];
+export function flattenAcsParameters(
+  root: unknown,
+  prefix = '',
+  depth = 0,
+  out: FlatParam[] = []
+): FlatParam[] {
+  if (depth > FLATTEN_MAX_DEPTH || out.length >= FLATTEN_MAX_PARAMS) return out;
   if (root == null || typeof root !== 'object') return out;
   const obj = root as Record<string, unknown>;
   for (const [key, val] of Object.entries(obj)) {
     if (key.startsWith('_')) continue;
+    if (out.length >= FLATTEN_MAX_PARAMS) break;
     const path = prefix ? `${prefix}${key}` : key;
     if (val != null && typeof val === 'object' && !Array.isArray(val)) {
       const rec = val as Record<string, unknown>;
@@ -392,7 +420,7 @@ export function flattenAcsParameters(root: unknown, prefix = ''): FlatParam[] {
           timestamp: typeof rec._timestamp === 'number' ? rec._timestamp : undefined,
         });
       } else {
-        out.push(...flattenAcsParameters(val, `${path}.`));
+        flattenAcsParameters(val, `${path}.`, depth + 1, out);
       }
     }
   }

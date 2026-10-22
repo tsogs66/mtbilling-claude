@@ -114,7 +114,14 @@ acsRouter.get('/acs/devices/:deviceId', async (req, res) => {
   try {
     const deviceId = decodeURIComponent(req.params.deviceId);
     const doc = await getAcsDevice(deviceId);
-    const params = flattenAcsParameters(doc);
+    let params: ReturnType<typeof flattenAcsParameters> = [];
+    let parametersTruncated = false;
+    try {
+      params = flattenAcsParameters(doc);
+      parametersTruncated = params.length >= 12_000;
+    } catch (flatErr: unknown) {
+      console.error('[acs] flatten device', deviceId, flatErr);
+    }
     const presets = ACS_PARAMETER_PRESETS.map((p) => ({
       ...p,
       current: pickFirstParam(params, p.paths),
@@ -125,10 +132,36 @@ acsRouter.get('/acs/devices/:deviceId', async (req, res) => {
          WHERE acs_device_id = ? COLLATE NOCASE LIMIT 1`
       )
       .get(deviceId) as { id: number; username: string; customer_name: string; account_number: string } | undefined;
-    res.json({ device: doc, parameters: params, presets, subscriber: sub || null });
+    res.json({
+      device: doc,
+      parameters: params,
+      parametersTruncated,
+      presets,
+      subscriber: sub || null,
+    });
   } catch (e: unknown) {
     res.status(502).json({ error: e instanceof Error ? e.message : 'fetch failed' });
   }
+});
+
+acsRouter.get('/acs/subscribers/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  const safe = q.replace(/[%_]/g, '');
+  if (!safe) return res.json([]);
+  const like = `%${safe}%`;
+  const rows = db
+    .prepare(
+      `SELECT id, username, customer_name, account_number, acs_device_id, status
+       FROM pppoe_users
+       WHERE customer_name LIKE ? COLLATE NOCASE
+          OR username LIKE ? COLLATE NOCASE
+          OR account_number LIKE ?
+       ORDER BY customer_name
+       LIMIT 30`
+    )
+    .all(like, like, like);
+  res.json(rows);
 });
 
 acsRouter.post('/acs/devices/:deviceId/tasks', async (req, res) => {
