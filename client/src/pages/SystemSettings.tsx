@@ -225,9 +225,38 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
 const ANDROID_APK_URL = '/api/android/app.apk';
 /** Rolling "android-latest" release page (auto-rebuilt from main on every push). */
 const ANDROID_RELEASE_URL =
-  'https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest';
+  'https://github.com/tsogs66/MT-Billing/releases/tag/android-latest';
 
 function AndroidAppInstall() {
+  const [staffVc, setStaffVc] = useState('');
+  const [staffVn, setStaffVn] = useState('1.0');
+  const [staffApk, setStaffApk] = useState('');
+  const [staffBusy, setStaffBusy] = useState(false);
+
+  useEffect(() => {
+    api.get('/settings/staff-android').then((r) => {
+      setStaffVc(String(r.data?.versionCode ?? 0));
+      setStaffVn(String(r.data?.versionName ?? '1.0'));
+      setStaffApk(String(r.data?.apkUrl ?? ''));
+    }).catch(() => undefined);
+  }, []);
+
+  const saveStaffAndroid = async () => {
+    setStaffBusy(true);
+    try {
+      const r = await api.put('/settings/staff-android', {
+        versionCode: Number(staffVc) || 0,
+        versionName: staffVn,
+        apkUrl: staffApk,
+      });
+      setStaffVc(String(r.data?.versionCode ?? 0));
+      setStaffVn(String(r.data?.versionName ?? '1.0'));
+      setStaffApk(String(r.data?.apkUrl ?? ''));
+    } finally {
+      setStaffBusy(false);
+    }
+  };
+
   return (
     <SettingsSection icon={Smartphone} title="Android App" className="mt-5">
       <div className="max-w-3xl">
@@ -265,7 +294,30 @@ function AndroidAppInstall() {
                 <li>Tap the APK and allow <b>&ldquo;Install unknown apps&rdquo;</b> for your browser/files app when prompted.</li>
                 <li>It is a debug build (unsigned), so Android may show an &ldquo;app not verified&rdquo; notice — that is expected.</li>
                 <li>Launch the app, enter this panel&apos;s URL, then sign in.</li>
+                <li>
+                  <b>In-place updates:</b> set published build number to match the GitHub release (e.g.{' '}
+                  <code className="text-slate-700">android-apps-v8</code> → version code <b>8</b>). The app prompts
+                  and opens the system installer. Use the same APK series; if Android says &ldquo;App not installed&rdquo;,
+                  uninstall once (old signature) then install from GitHub CI builds.
+                </li>
               </ol>
+              <div className="mt-4 pt-4 border-t border-emerald-500/20 space-y-2">
+                <div className="text-sm font-semibold text-slate-800">Staff app in-app update</div>
+                <div className="grid sm:grid-cols-3 gap-2">
+                  <FormField label="Published version code">
+                    <input className="input text-sm" value={staffVc} onChange={(e) => setStaffVc(e.target.value)} placeholder="8" />
+                  </FormField>
+                  <FormField label="Version name">
+                    <input className="input text-sm" value={staffVn} onChange={(e) => setStaffVn(e.target.value)} placeholder="1.0.8" />
+                  </FormField>
+                  <FormField label="APK URL (HTTPS)">
+                    <input className="input text-sm font-mono" value={staffApk} onChange={(e) => setStaffApk(e.target.value)} placeholder="https://github.com/.../mt-billing-debug.apk" />
+                  </FormField>
+                </div>
+                <button type="button" className="btn-secondary text-sm" onClick={() => void saveStaffAndroid()} disabled={staffBusy}>
+                  {staffBusy ? 'Saving…' : 'Save staff Android update settings'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

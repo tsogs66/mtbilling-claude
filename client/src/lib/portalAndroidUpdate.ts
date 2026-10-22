@@ -53,12 +53,6 @@ export function isPortalUpdateDismissedForSession(serverVersionCode: number): bo
 }
 
 export async function openPortalAndroidApkUrl(apkUrl: string) {
-  const url = String(apkUrl || '').trim();
-  if (!url) return;
-  try {
-    const { Browser } = await import('@capacitor/browser');
-    await Browser.open({ url });
-  } catch {
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
+  const { downloadAndInstallAndroidApk } = await import('./androidApkInstall');
+  await downloadAndInstallAndroidApk(apkUrl);
 }
