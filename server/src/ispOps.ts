@@ -822,11 +822,47 @@ function portalAndroidPublishInfo() {
   if (!apkUrl) {
     const repo = String(process.env.PORTAL_ANDROID_GITHUB_REPO || '').trim();
     if (repo) {
-      apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/portal-android-latest/panorth-debug.apk`;
+      apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/android-apps-latest/panorth-debug.apk`;
     }
   }
   return {
     applicationId: 'com.tsogs.panorth',
+    versionCode,
+    versionName,
+    apkUrl: apkUrl || null,
+  };
+}
+
+export function staffAndroidPublishInfo() {
+  const row = db
+    .prepare(
+      `SELECT staff_android_version_code, staff_android_version_name, staff_android_apk_url
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as {
+    staff_android_version_code?: number;
+    staff_android_version_name?: string;
+    staff_android_apk_url?: string;
+  } | undefined;
+  const envCode = Number(process.env.MT_STAFF_ANDROID_VERSION_CODE ?? process.env.MT_ANDROID_VERSION_CODE);
+  const versionCode = Number.isFinite(envCode) && envCode > 0
+    ? Math.round(envCode)
+    : Math.max(0, Math.round(Number(row?.staff_android_version_code) || 0));
+  const versionName = String(
+    process.env.MT_STAFF_ANDROID_VERSION_NAME ||
+      process.env.MT_ANDROID_VERSION_NAME ||
+      row?.staff_android_version_name ||
+      '1.0'
+  ).trim() || '1.0';
+  let apkUrl = String(
+    process.env.MT_STAFF_ANDROID_APK_URL || process.env.MT_ANDROID_APK_URL || row?.staff_android_apk_url || ''
+  ).trim();
+  if (!apkUrl) {
+    const repo = String(process.env.MT_ANDROID_GITHUB_REPO || 'tsogs66/MT-Billing').trim();
+    apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/android-apps-latest/mt-billing-debug.apk`;
+  }
+  return {
+    applicationId: 'com.tsogs.mtbilling',
     versionCode,
     versionName,
     apkUrl: apkUrl || null,
@@ -885,6 +921,27 @@ function portalSettingsRow() {
 
 ispOpsRouter.get('/client-portal/settings', (_req, res) => {
   res.json(portalSettingsRow());
+});
+
+ispOpsRouter.get('/settings/staff-android', (_req, res) => {
+  res.json(staffAndroidPublishInfo());
+});
+
+ispOpsRouter.put('/settings/staff-android', (req, res) => {
+  const b = req.body || {};
+  let versionCode = Number(b.versionCode ?? b.staff_android_version_code);
+  if (!Number.isFinite(versionCode) || versionCode < 0) versionCode = 0;
+  versionCode = Math.round(versionCode);
+  const versionName = String(b.versionName ?? b.staff_android_version_name ?? '1.0').trim() || '1.0';
+  const apkUrl = String(b.apkUrl ?? b.staff_android_apk_url ?? '').trim();
+  db.prepare(
+    `UPDATE app_settings SET
+       staff_android_version_code = ?,
+       staff_android_version_name = ?,
+       staff_android_apk_url = ?
+     WHERE id = 1`
+  ).run(versionCode, versionName, apkUrl || null);
+  res.json(staffAndroidPublishInfo());
 });
 
 /** Staff topbar inbox — portal / payment-link subscriber activity. */
@@ -1442,6 +1499,11 @@ publicPortalRouter.get('/public/portal/settings', (_req, res) => {
 /** PANORTH Android app — compare versionCode on launch; same applicationId allows in-place APK upgrade. */
 publicPortalRouter.get('/public/portal/android-app', (_req, res) => {
   res.json(portalAndroidPublishInfo());
+});
+
+/** Staff MT-Billing Android app — compare versionCode on launch for in-place APK upgrade. */
+publicPortalRouter.get('/public/staff/android-app', (_req, res) => {
+  res.json(staffAndroidPublishInfo());
 });
 
 publicPortalRouter.post('/public/portal/login', (req, res) => {

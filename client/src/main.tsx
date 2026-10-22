@@ -10,6 +10,7 @@ import ServerSetup from './pages/ServerSetup';
 import { isNativeApp, isNativePortalApp, needsServerSetup } from './config';
 import { initNativeShell } from './lib/nativeShell';
 import PortalAndroidUpdateGate from './components/portal/PortalAndroidUpdateGate';
+import StaffAndroidUpdateGate from './components/StaffAndroidUpdateGate';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
@@ -43,6 +44,7 @@ function Root() {
             <RouterProvider>
               <App />
               {isNativePortalApp() ? <PortalAndroidUpdateGate /> : null}
+              {isNativeApp() && !isNativePortalApp() ? <StaffAndroidUpdateGate /> : null}
             </RouterProvider>
           </CompanyProvider>
         </AuthProvider>

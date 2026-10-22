@@ -62,12 +62,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Set PANORTH version from run number
+      - name: Set Android versionCode from run number (staff + PANORTH)
         run: |
           VC=${{ github.run_number }}
-          GRADLE=client/android-panorth/app/build.gradle
-          sed -i "s/versionCode [0-9][0-9]*/versionCode $VC/" "$GRADLE"
-          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.$VC\"/" "$GRADLE"
+          for GRADLE in client/android/app/build.gradle client/android-panorth/app/build.gradle; do
+            sed -i "s/versionCode [0-9][0-9]*/versionCode $VC/" "$GRADLE"
+            sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.$VC\"/" "$GRADLE"
+          done
 
       - name: Build MT-Billing staff APK
         run: |
@@ -81,7 +82,7 @@ jobs:
           cd client/android-panorth && ./gradlew assembleDebug --no-daemon
           cp app/build/outputs/apk/debug/app-debug.apk ../../panorth-debug.apk
 
-      - name: Write PANORTH version manifest
+      - name: Write Android version manifests
         run: |
           VC=${{ github.run_number }}
           cat > panorth-version.json <<EOF
@@ -90,6 +91,14 @@ jobs:
             "versionCode": $VC,
             "versionName": "1.0.$VC",
             "apkUrl": "https://github.com/${{ github.repository }}/releases/download/android-apps-v${{ github.run_number }}/panorth-debug.apk"
+          }
+          EOF
+          cat > staff-android-version.json <<EOF
+          {
+            "applicationId": "com.tsogs.mtbilling",
+            "versionCode": $VC,
+            "versionName": "1.0.$VC",
+            "apkUrl": "https://github.com/${{ github.repository }}/releases/download/android-apps-v${{ github.run_number }}/mt-billing-debug.apk"
           }
           EOF
 
@@ -101,6 +110,7 @@ jobs:
             mt-billing-debug.apk
             panorth-debug.apk
             panorth-version.json
+            staff-android-version.json
           if-no-files-found: error
           retention-days: 30
 
@@ -128,6 +138,7 @@ jobs:
             mt-billing-debug.apk
             panorth-debug.apk
             panorth-version.json
+            staff-android-version.json
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,6 +162,7 @@ jobs:
             mt-billing-debug.apk
             panorth-debug.apk
             panorth-version.json
+            staff-android-version.json
           prerelease: true
           make_latest: false
         env:

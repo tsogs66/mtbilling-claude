@@ -558,6 +558,10 @@ export function migrate() {
     ['portal_android_version_code', 'INTEGER DEFAULT 0'],
     ['portal_android_version_name', "TEXT DEFAULT '1.0'"],
     ['portal_android_apk_url', 'TEXT'],
+    // MT-Billing staff Android (com.tsogs.mtbilling) — in-app update on launch
+    ['staff_android_version_code', 'INTEGER DEFAULT 0'],
+    ['staff_android_version_name', "TEXT DEFAULT '1.0'"],
+    ['staff_android_apk_url', 'TEXT'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);

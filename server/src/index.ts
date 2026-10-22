@@ -825,7 +825,7 @@ app.post('/api/sync/push', express.json({ limit: '80mb' }), syncAuth, (req, res)
  */
 const ANDROID_APK_URL =
   process.env.MT_ANDROID_APK_URL ||
-  'https://github.com/tsogs66/mtbilling-claude/releases/download/android-latest/app-debug.apk';
+  'https://github.com/tsogs66/MT-Billing/releases/download/android-apps-latest/mt-billing-debug.apk';
 
 app.get('/api/android/app.apk', async (req, res) => {
   try {

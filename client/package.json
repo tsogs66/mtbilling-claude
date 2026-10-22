@@ -1,6 +1,6 @@
 {
   "name": "mt-billing-client",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,6 +19,7 @@
     "@capacitor/app": "^7.1.2",
     "@capacitor/browser": "^7.0.2",
     "@capacitor/core": "^7.6.7",
+    "@capacitor/filesystem": "^7.1.5",
     "@capacitor/keyboard": "^7.0.6",
     "@capacitor/splash-screen": "^7.0.5",
     "@capacitor/status-bar": "^7.0.6",

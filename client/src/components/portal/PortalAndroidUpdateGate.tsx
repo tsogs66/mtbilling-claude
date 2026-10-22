@@ -17,6 +17,8 @@ import { isNativePortalApp } from '../../config';
 export default function PortalAndroidUpdateGate() {
   const [info, setInfo] = useState<PortalAndroidPublishInfo | null>(null);
   const [installed, setInstalled] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!isNativePortalApp()) return;
@@ -45,7 +47,13 @@ export default function PortalAndroidUpdateGate() {
   };
 
   const update = () => {
-    void openPortalAndroidApkUrl(info.apkUrl!);
+    setBusy(true);
+    setError('');
+    void openPortalAndroidApkUrl(info.apkUrl!)
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : 'Install failed');
+      })
+      .finally(() => setBusy(false));
   };
 
   return (
@@ -79,14 +87,16 @@ export default function PortalAndroidUpdateGate() {
         <p className="text-xs text-white/50 mt-2">
           Installed build {installed} → available build {info.versionCode}
         </p>
+        {error ? <p className="text-xs text-rose-300 mt-2">{error}</p> : null}
         <div className="flex flex-col sm:flex-row gap-2 mt-5">
           <button
             type="button"
             onClick={update}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold py-2.5 px-4 text-sm"
+            disabled={busy}
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold py-2.5 px-4 text-sm disabled:opacity-60"
           >
             <Download size={18} />
-            Download update
+            {busy ? 'Downloading…' : 'Install update'}
           </button>
           <button
             type="button"
