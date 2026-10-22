@@ -33,7 +33,17 @@ type Preset = {
 type DeviceDetail = {
   presets: Preset[];
   parameters: { path: string; value: string }[];
+  parametersTruncated?: boolean;
   subscriber: { id: number; username: string; customer_name: string } | null;
+};
+
+type SubscriberPick = {
+  id: number;
+  username: string;
+  customer_name: string;
+  account_number: string;
+  acs_device_id: string | null;
+  status: string;
 };
 
 export default function CpeTr069() {
@@ -49,6 +59,11 @@ export default function CpeTr069() {
   const [customPath, setCustomPath] = useState('');
   const [customValue, setCustomValue] = useState('');
   const [autolinkBusy, setAutolinkBusy] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [linkSearch, setLinkSearch] = useState('');
+  const [linkHits, setLinkHits] = useState<SubscriberPick[]>([]);
+  const [linkSearchBusy, setLinkSearchBusy] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
 
   const flash = (m: string) => {
     setBanner(m);
@@ -103,25 +118,99 @@ export default function CpeTr069() {
     );
   }, [devices, search]);
 
+  const selectedRow = useMemo(
+    () => (selectedId ? devices.find((d) => d.id === selectedId) ?? null : null),
+    [devices, selectedId]
+  );
+
+  useEffect(() => {
+    const q = linkSearch.trim();
+    if (q.length < 2) {
+      setLinkHits([]);
+      return;
+    }
+    const t = window.setTimeout(() => {
+      setLinkSearchBusy(true);
+      api
+        .get('/acs/subscribers/search', { params: { q } })
+        .then((r) => setLinkHits(r.data as SubscriberPick[]))
+        .catch(() => setLinkHits([]))
+        .finally(() => setLinkSearchBusy(false));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [linkSearch]);
+
   const openDevice = async (id: string) => {
     setSelectedId(id);
     setDetail(null);
+    setDetailError('');
     setEditValues({});
+    setLinkSearch('');
+    setLinkHits([]);
     setDetailBusy(true);
     try {
       const r = await api.get(`/acs/devices/${encodeURIComponent(id)}`);
-      const d = r.data as DeviceDetail;
+      const body = r.data as DeviceDetail & { presets?: Preset[] };
+      const presets = Array.isArray(body.presets) ? body.presets : [];
+      const parameters = Array.isArray(body.parameters) ? body.parameters : [];
+      const d: DeviceDetail = {
+        presets,
+        parameters,
+        parametersTruncated: body.parametersTruncated,
+        subscriber: body.subscriber ?? null,
+      };
       setDetail(d);
       const init: Record<string, string> = {};
-      for (const p of d.presets) {
+      for (const p of presets) {
         if (p.writable && p.current) init[p.id] = p.current.value;
       }
       setEditValues(init);
     } catch (e: any) {
-      flash(e?.response?.data?.error || 'Failed to load device');
-      setSelectedId(null);
+      const msg = e?.response?.data?.error || 'Failed to load device parameters from GenieACS';
+      setDetailError(msg);
+      flash(`${msg} — you can still link this CPE to a subscriber below.`);
     } finally {
       setDetailBusy(false);
+    }
+  };
+
+  const linkToSubscriber = async (sub: SubscriberPick) => {
+    if (!selectedId) return;
+    if (
+      sub.acs_device_id &&
+      sub.acs_device_id !== selectedId &&
+      !window.confirm(
+        `${sub.customer_name} is already linked to another CPE (${sub.acs_device_id}). Replace with this device?`
+      )
+    ) {
+      return;
+    }
+    setLinkBusy(true);
+    try {
+      await api.put('/acs/link', { pppoeUserId: sub.id, deviceId: selectedId });
+      flash(`Linked ${selectedId} to ${sub.customer_name} (${sub.username}).`);
+      await loadDevices();
+      await openDevice(selectedId);
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Link failed');
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  const unlinkSubscriber = async () => {
+    if (!selectedId || !detail?.subscriber) return;
+    if (!window.confirm('Remove ACS device link from this subscriber?')) return;
+    setLinkBusy(true);
+    try {
+      await api.put('/acs/link', { pppoeUserId: detail.subscriber.id, deviceId: null });
+      flash('Device unlinked.');
+      await loadDevices();
+      await openDevice(selectedId);
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Unlink failed');
+    } finally {
+      setLinkBusy(false);
     }
   };
 
@@ -220,8 +309,8 @@ export default function CpeTr069() {
         </Card>
       )}
 
-      <div className="grid lg:grid-cols-5 gap-4">
-        <Card className="lg:col-span-2 p-0 overflow-hidden">
+      <div className="flex flex-col lg:grid lg:grid-cols-5 gap-4">
+        <Card className="lg:col-span-2 p-0 overflow-hidden order-1">
           <div className="p-3 border-b border-slate-100">
             <SearchInput value={search} onChange={setSearch} placeholder="Search device ID or subscriber…" />
           </div>
@@ -259,41 +348,96 @@ export default function CpeTr069() {
           </div>
         </Card>
 
-        <Card className="lg:col-span-3 p-4">
+        <Card className="lg:col-span-3 p-4 order-2">
           {!selectedId && (
             <div className="text-sm text-slate-500 py-12 text-center">Select a CPE to read or push TR-069 parameters.</div>
           )}
-          {selectedId && detailBusy && !detail && (
+          {selectedId && detailBusy && !detail && !detailError && (
             <div className="py-12 flex justify-center text-slate-400 gap-2 text-sm">
               <Loader2 className="animate-spin" size={18} /> Loading device…
             </div>
           )}
-          {selectedId && detail && (
+          {selectedId && (detail || detailError || !detailBusy) && (
             <div className="space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <div className="font-mono text-sm text-slate-900 break-all">{selectedId}</div>
-                  {detail.subscriber ? (
+                  {(detail?.subscriber || selectedRow?.subscriber) ? (
                     <div className="text-xs text-slate-500 mt-1">
-                      Linked: {detail.subscriber.customer_name}{' '}
+                      Linked:{' '}
+                      {detail?.subscriber?.customer_name ?? selectedRow?.subscriber?.name ?? ''}{' '}
                       <Link to="/pppoe" className="text-brand-600 hover:underline">
-                        ({detail.subscriber.username})
+                        ({detail?.subscriber?.username ?? selectedRow?.subscriber?.username})
                       </Link>
                     </div>
                   ) : (
-                    <div className="text-xs text-amber-700 mt-1">Link this device ID on the subscriber edit form in PPPoE Management.</div>
+                    <div className="text-xs text-amber-700 mt-1">Not linked to a subscriber — search below to attach this CPE.</div>
+                  )}
+                  {detailError && (
+                    <div className="text-xs text-rose-700 mt-1 rounded-lg bg-rose-50 border border-rose-100 px-2 py-1">
+                      {detailError}
+                    </div>
                   )}
                 </div>
                 <div className="flex gap-2">
-                  <button type="button" className="btn-secondary text-xs" onClick={() => runDeviceAction('refresh')} disabled={detailBusy}>
+                  <button type="button" className="btn-secondary text-xs" onClick={() => runDeviceAction('refresh')} disabled={detailBusy || !!detailError}>
                     <RefreshCw size={12} /> Refresh
                   </button>
-                  <button type="button" className="btn-secondary text-xs text-rose-700 border-rose-200" onClick={() => runDeviceAction('reboot')} disabled={detailBusy}>
+                  <button type="button" className="btn-secondary text-xs text-rose-700 border-rose-200" onClick={() => runDeviceAction('reboot')} disabled={detailBusy || !!detailError}>
                     <Power size={12} /> Reboot
                   </button>
                 </div>
               </div>
 
+              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+                <div className="text-sm font-semibold text-slate-800 mb-2">Subscriber link</div>
+                {detail?.subscriber ? (
+                  <button type="button" className="btn-secondary text-xs text-rose-700 border-rose-200" onClick={unlinkSubscriber} disabled={linkBusy}>
+                    Unlink from subscriber
+                  </button>
+                ) : (
+                  <>
+                    <SearchInput
+                      value={linkSearch}
+                      onChange={setLinkSearch}
+                      placeholder="Search name, username, or account #…"
+                    />
+                    {linkSearchBusy && (
+                      <div className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+                        <Loader2 size={12} className="animate-spin" /> Searching…
+                      </div>
+                    )}
+                    {!linkSearchBusy && linkSearch.trim().length >= 2 && linkHits.length === 0 && (
+                      <div className="text-xs text-slate-400 mt-2">No matching subscribers.</div>
+                    )}
+                    <ul className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white overflow-hidden">
+                      {linkHits.map((s) => (
+                        <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                          <div className="min-w-0">
+                            <div className="font-medium text-slate-800 truncate">{s.customer_name}</div>
+                            <div className="text-xs text-slate-500 truncate">
+                              {s.username} · {s.account_number || 'no account #'}
+                              {s.acs_device_id ? ` · linked: ${s.acs_device_id}` : ''}
+                            </div>
+                          </div>
+                          <button type="button" className="btn-primary text-xs shrink-0" onClick={() => linkToSubscriber(s)} disabled={linkBusy}>
+                            Link here
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+
+              {!detail && detailError && (
+                <p className="text-xs text-slate-500">
+                  TR-069 parameter view is unavailable until GenieACS returns this device. Linking still saves the device ID on the subscriber for autolink and provisioning.
+                </p>
+              )}
+
+              {detail && (
+              <>
               <div>
                 <div className="text-sm font-semibold text-slate-800 mb-2">Common settings</div>
                 <div className="space-y-3">
@@ -342,7 +486,10 @@ export default function CpeTr069() {
               </div>
 
               <details className="text-xs">
-                <summary className="cursor-pointer text-slate-500 hover:text-slate-700">All cached parameters ({detail.parameters.length})</summary>
+                <summary className="cursor-pointer text-slate-500 hover:text-slate-700">
+                  All cached parameters ({detail.parameters.length}
+                  {detail.parametersTruncated ? ', list truncated' : ''})
+                </summary>
                 <div className="mt-2 max-h-48 overflow-y-auto font-mono bg-slate-900 text-slate-100 rounded-lg p-2 space-y-0.5">
                   {detail.parameters.slice(0, 400).map((p) => (
                     <div key={p.path} className="truncate">
@@ -352,6 +499,8 @@ export default function CpeTr069() {
                   ))}
                 </div>
               </details>
+              </>
+              )}
             </div>
           )}
         </Card>
