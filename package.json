@@ -1,6 +1,6 @@
 {
   "name": "mt-billing",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Mikrotik ISP Billing, Monitoring and Commisioning Software. Created by: ts0gs, version 1.0.0",
   "scripts": {
