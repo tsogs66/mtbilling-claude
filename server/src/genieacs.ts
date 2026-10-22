@@ -239,33 +239,128 @@ export function encodeAcsDeviceId(deviceId: string): string {
   return encodeURIComponent(deviceId);
 }
 
-export async function getAcsDevice(deviceId: string) {
-  const raw = String(deviceId || '').trim();
-  if (!raw) throw new Error('device-id-required');
-  const id = encodeAcsDeviceId(raw);
-  let r = await acsRequest('GET', `/devices/${id}`);
-  if (!r.ok && (r.status === 404 || r.status === 400)) {
-    const query = JSON.stringify({ _id: raw });
-    r = await acsRequest('GET', '/devices/', undefined, { query, limit: '1' });
-    if (r.ok && Array.isArray(r.data) && r.data.length) return r.data[0];
+/** Decode percent-sequences in device IDs (e.g. HG8145X6%2D10 → HG8145X6-10). */
+export function normalizeAcsDeviceId(deviceId: string): string {
+  let s = String(deviceId ?? '').trim();
+  if (!s) return s;
+  for (let i = 0; i < 4; i++) {
+    if (!/%[0-9A-Fa-f]{2}/.test(s)) break;
+    try {
+      const decoded = decodeURIComponent(s);
+      if (decoded === s) break;
+      s = decoded;
+    } catch {
+      break;
+    }
   }
-  if (!r.ok) throw new Error(r.error);
-  if (Array.isArray(r.data)) {
-    const hit = r.data.find(
-      (d) => d && typeof d === 'object' && String((d as { _id?: string })._id || '') === raw
+  return s;
+}
+
+/** Distinct _id strings to try against GenieACS NBI (encoded vs decoded Huawei IDs). */
+export function acsDeviceIdLookupVariants(deviceId: string): string[] {
+  const raw = String(deviceId ?? '').trim();
+  if (!raw) return [];
+  const norm = normalizeAcsDeviceId(raw);
+  const out = new Set<string>([raw, norm]);
+  if (norm.includes('-')) {
+    out.add(norm.replace(/-/g, '%2D'));
+  }
+  return [...out].filter(Boolean);
+}
+
+export function acsDeviceIdsEquivalent(a: string, b: string): boolean {
+  const va = acsDeviceIdLookupVariants(a);
+  const vb = acsDeviceIdLookupVariants(b);
+  return va.some((x) => vb.includes(x));
+}
+
+const ACS_DETAIL_PROJECTION = [
+  '_id',
+  '_lastInform',
+  '_tags',
+  'InternetGatewayDevice.DeviceInfo',
+  'InternetGatewayDevice.LANDevice.1.WLANConfiguration.',
+  'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.',
+  'Device.DeviceInfo',
+  'Device.WiFi.',
+  'Device.IP.Interface.1.',
+].join(',');
+
+function pickDeviceFromList(data: unknown, variants: string[]): unknown | null {
+  if (!Array.isArray(data) || !data.length) return null;
+  if (data.length === 1) return data[0];
+  for (const v of variants) {
+    const hit = data.find(
+      (d) => d && typeof d === 'object' && String((d as { _id?: string })._id || '') === v
     );
     if (hit) return hit;
-    if (r.data.length === 1) return r.data[0];
   }
-  return r.data;
+  return data[0];
+}
+
+async function fetchAcsDeviceDocument(idVariant: string): Promise<unknown | null> {
+  const query = JSON.stringify({ _id: idVariant });
+  const byQuery = await acsRequest('GET', '/devices/', undefined, {
+    query,
+    limit: '1',
+    projection: ACS_DETAIL_PROJECTION,
+  });
+  if (byQuery.ok) {
+    const doc = pickDeviceFromList(byQuery.data, [idVariant]);
+    if (doc) return doc;
+  }
+
+  const enc = encodeAcsDeviceId(idVariant);
+  const byPath = await acsRequest('GET', `/devices/${enc}`, undefined, {
+    projection: ACS_DETAIL_PROJECTION,
+  });
+  if (byPath.ok && byPath.data != null && !Array.isArray(byPath.data)) return byPath.data;
+  if (byPath.ok && Array.isArray(byPath.data) && byPath.data.length) {
+    return pickDeviceFromList(byPath.data, [idVariant]);
+  }
+  return null;
+}
+
+export async function getAcsDevice(deviceId: string) {
+  const variants = acsDeviceIdLookupVariants(deviceId);
+  if (!variants.length) throw new Error('device-id-required');
+
+  let lastError = 'Device not found in GenieACS';
+  for (const variant of variants) {
+    try {
+      const doc = await fetchAcsDeviceDocument(variant);
+      if (doc) return doc;
+    } catch (e: unknown) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  throw new Error(lastError);
+}
+
+/** Canonical `_id` from GenieACS for tasks/tags (falls back to normalized input). */
+export async function resolveAcsDeviceCanonicalId(deviceId: string): Promise<string> {
+  try {
+    const doc = (await getAcsDevice(deviceId)) as { _id?: string };
+    const fromDoc = doc._id != null ? String(doc._id).trim() : '';
+    if (fromDoc) return fromDoc;
+  } catch {
+    /* use normalized input */
+  }
+  return normalizeAcsDeviceId(deviceId) || String(deviceId).trim();
 }
 
 export async function postAcsTask(deviceId: string, task: Record<string, unknown>, connectionRequest = true) {
-  const id = encodeURIComponent(deviceId);
+  const canonical = await resolveAcsDeviceCanonicalId(deviceId);
+  const variants = acsDeviceIdLookupVariants(canonical);
   const q = connectionRequest ? { connection_request: 'true' } : undefined;
-  const r = await acsRequest('POST', `/devices/${id}/tasks`, task, q);
-  if (!r.ok) throw new Error(r.error);
-  return r.data;
+  let lastError = 'ACS task failed';
+  for (const raw of variants) {
+    const id = encodeAcsDeviceId(raw);
+    const r = await acsRequest('POST', `/devices/${id}/tasks`, task, q);
+    if (r.ok) return r.data;
+    lastError = r.error;
+  }
+  throw new Error(lastError);
 }
 
 export async function refreshAcsDevice(deviceId: string, objectName = 'InternetGatewayDevice.') {
@@ -288,11 +383,16 @@ export async function setAcsParameterValues(
 }
 
 export async function addAcsDeviceTag(deviceId: string, tag: string) {
-  const id = encodeURIComponent(deviceId);
+  const canonical = await resolveAcsDeviceCanonicalId(deviceId);
   const t = encodeURIComponent(tag);
-  const r = await acsRequest('POST', `/devices/${id}/tags/${t}`);
-  if (!r.ok) throw new Error(r.error);
-  return r.data;
+  let lastError = 'ACS tag failed';
+  for (const raw of acsDeviceIdLookupVariants(canonical)) {
+    const id = encodeAcsDeviceId(raw);
+    const r = await acsRequest('POST', `/devices/${id}/tags/${t}`);
+    if (r.ok) return r.data;
+    lastError = r.error;
+  }
+  throw new Error(lastError);
 }
 
 export async function addAcsDeviceTags(deviceId: string, tags: string[]) {
@@ -503,7 +603,8 @@ export function linkSubscriberDevice(pppoeUserId: number, deviceId: string | nul
   const id = Number(pppoeUserId);
   const row = db.prepare('SELECT id FROM pppoe_users WHERE id = ?').get(id);
   if (!row) throw new Error('subscriber-not-found');
-  const dev = deviceId != null ? String(deviceId).trim() || null : null;
+  let dev = deviceId != null ? String(deviceId).trim() || null : null;
+  if (dev) dev = normalizeAcsDeviceId(dev) || dev;
   db.prepare('UPDATE pppoe_users SET acs_device_id = ? WHERE id = ?').run(dev, id);
   const out = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as Record<string, unknown>;
   if (dev) void acsAfterSubscriberUpsert(out).catch(() => undefined);

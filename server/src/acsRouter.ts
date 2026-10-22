@@ -15,10 +15,62 @@ import {
   pickFirstParam,
   listSubscriberAcsLinks,
   linkSubscriberDevice,
+  normalizeAcsDeviceId,
+  acsDeviceIdsEquivalent,
 } from './genieacs.js';
 import { runAcsAutolink } from './acsAutolink.js';
 
 export const acsRouter = express.Router();
+
+function subscriberForAcsDevice(deviceId: string) {
+  const links = listSubscriberAcsLinks() as {
+    acs_device_id: string;
+    id: number;
+    username: string;
+    customer_name: string;
+    account_number: string;
+  }[];
+  const hit = links.find((l) => acsDeviceIdsEquivalent(l.acs_device_id, deviceId));
+  return hit
+    ? {
+        id: hit.id,
+        username: hit.username,
+        customer_name: hit.customer_name,
+        account_number: hit.account_number,
+      }
+    : undefined;
+}
+
+async function buildAcsDeviceDetailPayload(deviceIdInput: string) {
+  const deviceId = String(deviceIdInput || '').trim();
+  const doc = await getAcsDevice(deviceId);
+  let params: ReturnType<typeof flattenAcsParameters> = [];
+  let parametersTruncated = false;
+  try {
+    params = flattenAcsParameters(doc);
+    parametersTruncated = params.length >= 12_000;
+  } catch (flatErr: unknown) {
+    console.error('[acs] flatten device', deviceId, flatErr);
+  }
+  const presets = ACS_PARAMETER_PRESETS.map((p) => ({
+    ...p,
+    current: pickFirstParam(params, p.paths),
+  }));
+  const sub = subscriberForAcsDevice(deviceId);
+  const canonicalId =
+    doc && typeof doc === 'object' && (doc as { _id?: string })._id != null
+      ? String((doc as { _id: string })._id)
+      : normalizeAcsDeviceId(deviceId);
+  return {
+    device: doc,
+    deviceId: canonicalId,
+    displayId: normalizeAcsDeviceId(canonicalId) || canonicalId,
+    parameters: params,
+    parametersTruncated,
+    presets,
+    subscriber: sub || null,
+  };
+}
 
 acsRouter.get('/acs/config', (_req, res) => {
   res.json(publicAcsConfig());
@@ -89,12 +141,12 @@ acsRouter.get('/acs/devices', async (req, res) => {
     const limit = req.query.limit != null ? Number(req.query.limit) : 200;
     const devices = await listAcsDevices({ query, limit });
     const links = listSubscriberAcsLinks() as { acs_device_id: string; id: number; customer_name: string; username: string }[];
-    const byDevice = new Map(links.map((l) => [l.acs_device_id, l]));
     const enriched = (devices as Record<string, unknown>[]).map((d) => {
       const id = String(d._id || '');
-      const sub = byDevice.get(id);
+      const sub = links.find((l) => acsDeviceIdsEquivalent(l.acs_device_id, id));
       return {
         id,
+        displayId: normalizeAcsDeviceId(id) || id,
         lastInform: d._lastInform ?? null,
         tags: d._tags ?? [],
         subscriber: sub
@@ -110,35 +162,21 @@ acsRouter.get('/acs/devices', async (req, res) => {
   }
 });
 
+acsRouter.get('/acs/devices/by-id', async (req, res) => {
+  try {
+    const deviceId = String(req.query.deviceId ?? req.query.id ?? '').trim();
+    if (!deviceId) return res.status(400).json({ error: 'deviceId query parameter required' });
+    res.json(await buildAcsDeviceDetailPayload(deviceId));
+  } catch (e: unknown) {
+    res.status(502).json({ error: e instanceof Error ? e.message : 'fetch failed' });
+  }
+});
+
 acsRouter.get('/acs/devices/:deviceId', async (req, res) => {
   try {
+    if (req.params.deviceId === 'by-id') return res.status(400).json({ error: 'use /acs/devices/by-id' });
     const deviceId = decodeURIComponent(req.params.deviceId);
-    const doc = await getAcsDevice(deviceId);
-    let params: ReturnType<typeof flattenAcsParameters> = [];
-    let parametersTruncated = false;
-    try {
-      params = flattenAcsParameters(doc);
-      parametersTruncated = params.length >= 12_000;
-    } catch (flatErr: unknown) {
-      console.error('[acs] flatten device', deviceId, flatErr);
-    }
-    const presets = ACS_PARAMETER_PRESETS.map((p) => ({
-      ...p,
-      current: pickFirstParam(params, p.paths),
-    }));
-    const sub = db
-      .prepare(
-        `SELECT id, username, customer_name, account_number FROM pppoe_users
-         WHERE acs_device_id = ? COLLATE NOCASE LIMIT 1`
-      )
-      .get(deviceId) as { id: number; username: string; customer_name: string; account_number: string } | undefined;
-    res.json({
-      device: doc,
-      parameters: params,
-      parametersTruncated,
-      presets,
-      subscriber: sub || null,
-    });
+    res.json(await buildAcsDeviceDetailPayload(deviceId));
   } catch (e: unknown) {
     res.status(502).json({ error: e instanceof Error ? e.message : 'fetch failed' });
   }

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { flattenAcsParameters, pickFirstParam } from './genieacs.js';
+import {
+  flattenAcsParameters,
+  pickFirstParam,
+  normalizeAcsDeviceId,
+  acsDeviceIdLookupVariants,
+  acsDeviceIdsEquivalent,
+} from './genieacs.js';
 import {
   buildProvisionTags,
   extractDeviceMatchKeys,
@@ -66,5 +72,16 @@ const keys = extractDeviceMatchKeys({
 });
 assert(keys.usernames.includes('juan'), 'tag username parsed');
 assert(keys.pppUsernames.includes('otheruser'), 'ppp username parsed');
+
+assert(
+  normalizeAcsDeviceId('00259E-HG8145X6%2D10-48575443075EF0B2') === '00259E-HG8145X6-10-48575443075EF0B2',
+  'decode %2D in device id'
+);
+const variants = acsDeviceIdLookupVariants('00259E-HG8145X6%2D10-48575443075EF0B2');
+assert(variants.includes('00259E-HG8145X6-10-48575443075EF0B2'), 'variant decoded');
+assert(
+  acsDeviceIdsEquivalent('00259E-HG8145X6%2D10-48575443075EF0B2', '00259E-HG8145X6-10-48575443075EF0B2'),
+  'ids equivalent'
+);
 
 console.log('genieacs.test.ts: ok');

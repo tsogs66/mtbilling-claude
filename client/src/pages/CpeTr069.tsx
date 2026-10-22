@@ -17,6 +17,7 @@ type AcsConfig = {
 
 type DeviceRow = {
   id: string;
+  displayId?: string;
   lastInform: string | null;
   tags: string[];
   subscriber: { id: number; name: string; username: string } | null;
@@ -64,6 +65,7 @@ export default function CpeTr069() {
   const [linkHits, setLinkHits] = useState<SubscriberPick[]>([]);
   const [linkSearchBusy, setLinkSearchBusy] = useState(false);
   const [linkBusy, setLinkBusy] = useState(false);
+  const [selectedDisplayId, setSelectedDisplayId] = useState('');
 
   const flash = (m: string) => {
     setBanner(m);
@@ -142,6 +144,7 @@ export default function CpeTr069() {
 
   const openDevice = async (id: string) => {
     setSelectedId(id);
+    setSelectedDisplayId('');
     setDetail(null);
     setDetailError('');
     setEditValues({});
@@ -149,8 +152,9 @@ export default function CpeTr069() {
     setLinkHits([]);
     setDetailBusy(true);
     try {
-      const r = await api.get(`/acs/devices/${encodeURIComponent(id)}`);
-      const body = r.data as DeviceDetail & { presets?: Preset[] };
+      const r = await api.get('/acs/devices/by-id', { params: { deviceId: id } });
+      const body = r.data as DeviceDetail & { presets?: Preset[]; displayId?: string; deviceId?: string };
+      setSelectedDisplayId(body.displayId || body.deviceId || id);
       const presets = Array.isArray(body.presets) ? body.presets : [];
       const parameters = Array.isArray(body.parameters) ? body.parameters : [];
       const d: DeviceDetail = {
@@ -332,7 +336,7 @@ export default function CpeTr069() {
               >
                 <Router size={16} className="text-slate-400 shrink-0 mt-0.5" />
                 <div className="min-w-0 flex-1">
-                  <div className="font-mono text-xs text-slate-800 truncate">{d.id}</div>
+                  <div className="font-mono text-xs text-slate-800 truncate">{d.displayId || d.id}</div>
                   {d.subscriber ? (
                     <div className="text-xs text-slate-500 truncate">{d.subscriber.name} ({d.subscriber.username})</div>
                   ) : (
@@ -361,7 +365,7 @@ export default function CpeTr069() {
             <div className="space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <div className="font-mono text-sm text-slate-900 break-all">{selectedId}</div>
+                  <div className="font-mono text-sm text-slate-900 break-all">{selectedDisplayId || selectedRow?.displayId || selectedId}</div>
                   {(detail?.subscriber || selectedRow?.subscriber) ? (
                     <div className="text-xs text-slate-500 mt-1">
                       Linked:{' '}
