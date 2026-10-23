@@ -13,6 +13,7 @@ import {
   flattenAcsParameters,
   ACS_PARAMETER_PRESETS,
   pickFirstParam,
+  readAcsParam,
   listSubscriberAcsLinks,
   linkSubscriberDevice,
   normalizeAcsDeviceId,
@@ -49,25 +50,30 @@ function deviceIdFromClient(input: unknown): string {
 async function buildAcsDeviceDetailPayload(deviceIdInput: string) {
   const deviceId = deviceIdFromClient(deviceIdInput);
   const doc = await getAcsDevice(deviceId);
+  const PARAM_CAP = 400;
   let params: ReturnType<typeof flattenAcsParameters> = [];
   let parametersTruncated = false;
   try {
-    params = flattenAcsParameters(doc);
-    parametersTruncated = params.length >= 12_000;
+    params = flattenAcsParameters(doc, '', 0, [], PARAM_CAP);
+    parametersTruncated = params.length >= PARAM_CAP;
   } catch (flatErr: unknown) {
     console.error('[acs] flatten device', deviceId, flatErr);
   }
-  const presets = ACS_PARAMETER_PRESETS.map((p) => ({
-    ...p,
-    current: pickFirstParam(params, p.paths),
-  }));
+  const presets = ACS_PARAMETER_PRESETS.map((p) => {
+    const direct = p.paths
+      .map((path) => readAcsParam(doc, path))
+      .find((hit) => hit && hit.value !== '');
+    return {
+      ...p,
+      current: direct || pickFirstParam(params, p.paths),
+    };
+  });
   const sub = subscriberForAcsDevice(deviceId);
   const canonicalId =
     doc && typeof doc === 'object' && (doc as { _id?: string })._id != null
       ? String((doc as { _id: string })._id)
       : normalizeAcsDeviceId(deviceId);
   return {
-    device: doc,
     deviceId: canonicalId,
     displayId: normalizeAcsDeviceId(canonicalId) || canonicalId,
     parameters: params,
