@@ -1,4 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -955,7 +956,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             aria-label={`Select ${u.username}`}
           />,
           <div key="u">
-            <div className="font-semibold text-slate-800">{u.username}</div>
+            <Link to={`/ops?subscriber=${u.id}`} className="font-semibold text-brand-700 hover:underline">{u.username}</Link>
             <div className="text-xs text-slate-400">{u.customer}</div>
           </div>,
           <span key="acc" className="text-slate-500">{u.account}</span>,

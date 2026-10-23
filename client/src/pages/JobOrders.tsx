@@ -234,6 +234,21 @@ function JobModal({ job, subs, onClose, onSaved }: any) {
         <FormField label="Notes">
           <textarea className="input min-h-[60px]" value={form.notes || ''} onChange={(e) => set({ notes: e.target.value })} />
         </FormField>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Due">
+            <input className="input" type="datetime-local" value={form.due_at || ''} onChange={(e) => set({ due_at: e.target.value })} />
+          </FormField>
+          <FormField label="ONU serial">
+            <input className="input" value={form.onu_serial || ''} onChange={(e) => set({ onu_serial: e.target.value })} />
+          </FormField>
+        </div>
+        <FormField label="Photo / proof note">
+          <input className="input" placeholder="What the photo shows, or a stored file name" value={form.photo_note || ''} onChange={(e) => set({ photo_note: e.target.value })} />
+        </FormField>
+        <FormField label="Materials JSON">
+          <input className="input font-mono text-xs" placeholder='[{"inventoryId":1,"qty":1}]' value={form.materials_json || ''} onChange={(e) => set({ materials_json: e.target.value })} />
+        </FormField>
+        <p className="text-[11px] text-slate-400">Completing the job stores the ONU on the subscriber, marks them online, and deducts the listed stock.</p>
       </div>
     </Modal>
   );

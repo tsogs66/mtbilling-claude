@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
+import { finalizeJobOrder } from './ispDesk.js';
 import { fetchDhcpLeases, removeHotspotActive, type RouterConn } from './mikrotik.js';
 import {
   listOutageServiceCatalog,
@@ -520,7 +521,8 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
     `UPDATE job_orders SET
       pppoe_user_id=?, customer_name=?, contact=?, address=?, lat=?, lng=?,
       type=?, status=?, priority=?, assigned_to=?, description=?, notes=?,
-      scheduled_at=?, completed_at=?, updated_at=CURRENT_TIMESTAMP
+      scheduled_at=?, completed_at=?, updated_at=CURRENT_TIMESTAMP,
+      due_at=?, onu_serial=?, photo_note=?, materials_json=?
      WHERE id=?`
   ).run(
     b.pppoe_user_id !== undefined ? b.pppoe_user_id || null : ex.pppoe_user_id,
@@ -537,8 +539,13 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
     b.notes !== undefined ? b.notes : ex.notes,
     b.scheduled_at !== undefined ? b.scheduled_at : ex.scheduled_at,
     completed_at,
+    b.due_at !== undefined ? b.due_at || null : ex.due_at,
+    b.onu_serial !== undefined ? b.onu_serial || null : ex.onu_serial,
+    b.photo_note !== undefined ? b.photo_note || null : ex.photo_note,
+    b.materials_json !== undefined ? b.materials_json || null : ex.materials_json,
     id
   );
+  finalizeJobOrder(id, String(ex.status || ''));
   const row = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(id) as any;
   res.json(row);
 
