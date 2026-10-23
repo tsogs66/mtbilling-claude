@@ -88,25 +88,35 @@ function SubscriberTab({ initialId }: { initialId: number }) {
 
   const takePayment = async () => {
     if (!hub?.user?.id) return;
-    const r = await api.post('/isp/payments', {
-      pppoeUserId: hub.user.id,
-      amount: Number(pay.amount),
-      method: pay.method,
-      extendMonths: Number(pay.extendMonths) || 0,
-      note: pay.note,
-    });
-    setMsg(`Receipt ${r.data.or_number} recorded.`);
-    open(hub.user.id);
+    try {
+      const r = await api.post('/isp/payments', {
+        pppoeUserId: hub.user.id,
+        amount: Number(pay.amount),
+        method: pay.method,
+        extendMonths: Number(pay.extendMonths) || 0,
+        note: pay.note,
+      });
+      setMsg(`Receipt ${r.data.or_number} recorded.`);
+      open(hub.user.id);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } };
+      setMsg(err?.response?.data?.error || 'Payment failed');
+    }
   };
 
   const cpe = async (action: string) => {
     if (!hub?.user?.id) return;
-    await api.post(`/isp/subscribers/${hub.user.id}/cpe`, {
-      action,
-      ssid: wifi.ssid,
-      password: wifi.password,
-    });
-    setMsg(action === 'wifi' ? 'Wi-Fi push queued.' : `${action} queued on the CPE.`);
+    try {
+      await api.post(`/isp/subscribers/${hub.user.id}/cpe`, {
+        action,
+        ssid: wifi.ssid,
+        password: wifi.password,
+      });
+      setMsg(action === 'wifi' ? 'Wi-Fi push queued.' : `${action} queued on the CPE.`);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } } };
+      setMsg(err?.response?.data?.error || 'CPE action failed');
+    }
   };
 
   const u = hub?.user;
