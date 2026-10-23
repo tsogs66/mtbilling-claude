@@ -512,7 +512,15 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
   const ex = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-  const status = b.status !== undefined ? b.status : ex.status;
+if (b.materials_json != null && String(b.materials_json).trim()) {
+    try {
+      const parsed = JSON.parse(String(b.materials_json));
+      if (!Array.isArray(parsed)) return res.status(400).json({ error: 'materials-json-invalid' });
+    } catch {
+      return res.status(400).json({ error: 'materials-json-invalid' });
+    }
+  }
+    const status = b.status !== undefined ? b.status : ex.status;
   const type = b.type !== undefined ? b.type : ex.type;
   const completed_at =
     status === 'completed' ? b.completed_at || ex.completed_at || new Date().toISOString() : status !== 'completed' ? null : ex.completed_at;
@@ -545,7 +553,12 @@ ispOpsRouter.put('/job-orders/:id', (req, res) => {
     b.materials_json !== undefined ? b.materials_json || null : ex.materials_json,
     id
   );
-  finalizeJobOrder(id, String(ex.status || ''));
+  try {
+    finalizeJobOrder(id, String(ex.status || ''));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'job-finalize-failed';
+    return res.status(400).json({ error: msg });
+  }
   const row = db.prepare('SELECT * FROM job_orders WHERE id = ?').get(id) as any;
   res.json(row);
 

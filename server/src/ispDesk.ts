@@ -220,6 +220,8 @@ function daysPast(due: string | null): number | null {
 export function subscriberHub(id: number) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as Record<string, unknown> | undefined;
   if (!user) return null;
+  delete user.password;
+  delete user.portal_pin_hash;
   const nap = user.nap_id
     ? db.prepare('SELECT id, name, kind, ports, parent_id FROM naps WHERE id = ?').get(user.nap_id)
     : null;
@@ -579,10 +581,10 @@ export function radiusExport(): string {
   for (const u of users) {
     const secret = String(u.password || '').replace(/"/g, '');
     lines.push(`${u.username} Cleartext-Password := "${secret}"`);
-    lines.push(`    Mikrotik-Group := "${u.profile || 'default'}",`);
+    lines.push(`    Mikrotik-Group := "${u.profile || 'default'}"`);
     lines.push('');
   }
-  return lines.join('\n');
+  return `${lines.join('\n')}\n`;
 }
 
 export function publicAreaStatus() {
@@ -615,10 +617,15 @@ export function finalizeJobOrder(id: number, previousStatus: string) {
   }
   if (job.stock_applied) return;
   let items: { inventoryId?: number; qty?: number }[] = [];
-  try {
-    items = job.materials_json ? (JSON.parse(job.materials_json) as { inventoryId?: number; qty?: number }[]) : [];
-  } catch {
-    items = [];
+  if (job.materials_json && job.materials_json.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(job.materials_json);
+    } catch {
+      throw new Error('materials-json-invalid');
+    }
+    if (!Array.isArray(parsed)) throw new Error('materials-json-invalid');
+    items = parsed as { inventoryId?: number; qty?: number }[];
   }
   const tx = db.transaction(() => {
     for (const item of items) {
