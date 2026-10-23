@@ -351,10 +351,31 @@ async function fetchAcsDeviceDocument(idVariant: string, variants: string[]): Pr
   );
 }
 
-async function findAcsDeviceInList(variants: string[]): Promise<unknown | null> {
-  const r = await acsRequest('GET', '/devices/', undefined, { limit: '500' });
+/** Resolve canonical `_id` from a lightweight device list (projection `_id` only). */
+async function findAcsCanonicalIdInList(variants: string[]): Promise<string | null> {
+  const r = await acsRequest('GET', '/devices/', undefined, { limit: '500', projection: '_id' });
   if (!r.ok || !Array.isArray(r.data)) return null;
-  return pickDeviceFromList(r.data, variants);
+  for (const d of r.data) {
+    if (!d || typeof d !== 'object') continue;
+    const id = String((d as { _id?: string })._id || '');
+    if (variants.some((v) => acsDeviceIdsEquivalent(id, v))) return id;
+  }
+  return null;
+}
+
+async function fetchAcsDeviceByOrQuery(variants: string[]): Promise<unknown | null> {
+  if (!variants.length) return null;
+  const orQuery = JSON.stringify({ $or: variants.map((_id) => ({ _id })) });
+  for (const useProjection of [true, false]) {
+    const q: Record<string, string> = { query: orQuery, limit: String(Math.max(10, variants.length)) };
+    if (useProjection) q.projection = ACS_DETAIL_PROJECTION;
+    const r = await acsRequest('GET', '/devices/', undefined, q);
+    if (r.ok) {
+      const doc = pickDeviceFromList(r.data, variants);
+      if (doc) return doc;
+    }
+  }
+  return null;
 }
 
 export async function getAcsDevice(deviceId: string) {
@@ -362,6 +383,10 @@ export async function getAcsDevice(deviceId: string) {
   if (!variants.length) throw new Error('device-id-required');
 
   let lastError = 'Device not found in GenieACS';
+
+  const byOr = await fetchAcsDeviceByOrQuery(variants);
+  if (byOr) return byOr;
+
   for (const variant of variants) {
     try {
       const doc = await fetchAcsDeviceDocument(variant, variants);
@@ -370,8 +395,15 @@ export async function getAcsDevice(deviceId: string) {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
-  const fromList = await findAcsDeviceInList(variants);
-  if (fromList) return fromList;
+
+  const canonicalId = await findAcsCanonicalIdInList(variants);
+  if (canonicalId) {
+    const doc =
+      (await fetchAcsDeviceDocument(canonicalId, variants)) ??
+      (await fetchAcsDeviceDocumentAttempt(canonicalId, variants, false));
+    if (doc) return doc;
+  }
+
   throw new Error(lastError);
 }
 

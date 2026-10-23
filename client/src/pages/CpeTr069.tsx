@@ -152,7 +152,7 @@ export default function CpeTr069() {
     setLinkHits([]);
     setDetailBusy(true);
     try {
-      const r = await api.get('/acs/devices/by-id', { params: { deviceId: id } });
+      const r = await api.post('/acs/devices/detail', { deviceId: id }, { timeout: 60000 });
       const body = r.data as DeviceDetail & { presets?: Preset[]; displayId?: string; deviceId?: string };
       setSelectedDisplayId(body.displayId || body.deviceId || id);
       const presets = Array.isArray(body.presets) ? body.presets : [];
@@ -170,7 +170,11 @@ export default function CpeTr069() {
       }
       setEditValues(init);
     } catch (e: any) {
-      const msg = e?.response?.data?.error || 'Failed to load device parameters from GenieACS';
+      const msg =
+        e?.response?.data?.error ||
+        (e?.code === 'ECONNABORTED' ? 'Timed out loading device from GenieACS (try Refresh list, then open again)' : null) ||
+        e?.message ||
+        'Failed to load device parameters from GenieACS';
       setDetailError(msg);
       flash(`${msg} — you can still link this CPE to a subscriber below.`);
     } finally {
