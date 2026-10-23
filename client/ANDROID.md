@@ -125,6 +125,28 @@ npm run android:sync
 - Prefer **HTTPS** on the panel (Let’s Encrypt / Cloudflare). Cleartext HTTP is allowed for LAN testing only.
 - Terminal WebSockets use `wss://` against the same host.
 - Play Store: create a keystore and use a signed **release** build.
+- **Debug signing:** staff and PANORTH debug APKs use `client/shared-android-keystore/debug.keystore`
+  so GitHub Actions and local `./gradlew assembleDebug` share the same certificate. Required for
+  in-place upgrades. If an old install used another debug key, uninstall once, then install from
+  CI or this keystore.
+
+## Staff app in-app updates (Android)
+
+On the **staff** native app (`com.tsogs.mtbilling`), launch compares the installed `versionCode`
+with the panel-published APK in **System Settings → Staff app in-app update** (version code,
+version name, APK URL). When a newer build is published, **Install update** downloads the APK and
+opens the system package installer (no browser download).
+
+CI publishes:
+
+| Tag | Contents |
+|-----|----------|
+| [`android-latest`](https://github.com/tsogs66/mtbilling-claude/releases/tag/android-latest) | Rolling staff debug APK |
+| `android-vN` | Immutable staff series (N = workflow run number) |
+| [`android-apps-latest`](https://github.com/tsogs66/mtbilling-claude/releases/tag/android-apps-latest) | Staff + PANORTH bundle + JSON manifests |
+
+Default staff APK URL on the server points at `android-apps-latest/mt-billing-debug.apk` unless
+you override it in settings.
 
 ## Mobile optimizations
 
