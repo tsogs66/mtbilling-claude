@@ -239,6 +239,18 @@ export function encodeAcsDeviceId(deviceId: string): string {
   return encodeURIComponent(deviceId);
 }
 
+/**
+ * Huawei TR-069 serials in GenieACS often use `%2D` only between model and revision
+ * (e.g. `00259E-HG8145X6%2D10-48575443075EF0B2`), not every hyphen.
+ */
+export function huaweiEncodedAcsDeviceId(deviceId: string): string | null {
+  const norm = normalizeAcsDeviceId(deviceId);
+  const m = norm.match(/^([0-9A-Fa-f]{6})-([A-Za-z0-9]+)-(\d+)-(.+)$/);
+  if (!m) return null;
+  const [, oui, model, revision, serial] = m;
+  return `${oui}-${model}%2D${revision}-${serial}`;
+}
+
 /** Decode percent-sequences in device IDs (e.g. HG8145X6%2D10 → HG8145X6-10). */
 export function normalizeAcsDeviceId(deviceId: string): string {
   let s = String(deviceId ?? '').trim();
@@ -262,9 +274,8 @@ export function acsDeviceIdLookupVariants(deviceId: string): string[] {
   if (!raw) return [];
   const norm = normalizeAcsDeviceId(raw);
   const out = new Set<string>([raw, norm]);
-  if (norm.includes('-')) {
-    out.add(norm.replace(/-/g, '%2D'));
-  }
+  const huawei = huaweiEncodedAcsDeviceId(norm);
+  if (huawei) out.add(huawei);
   return [...out].filter(Boolean);
 }
 
@@ -288,37 +299,62 @@ const ACS_DETAIL_PROJECTION = [
 
 function pickDeviceFromList(data: unknown, variants: string[]): unknown | null {
   if (!Array.isArray(data) || !data.length) return null;
-  if (data.length === 1) return data[0];
-  for (const v of variants) {
-    const hit = data.find(
-      (d) => d && typeof d === 'object' && String((d as { _id?: string })._id || '') === v
-    );
-    if (hit) return hit;
+  for (const d of data) {
+    if (!d || typeof d !== 'object') continue;
+    const id = String((d as { _id?: string })._id || '');
+    if (variants.some((v) => acsDeviceIdsEquivalent(id, v))) return d;
   }
-  return data[0];
+  return data.length === 1 ? data[0] : null;
 }
 
-async function fetchAcsDeviceDocument(idVariant: string): Promise<unknown | null> {
+function pathEncodingsForAcsDeviceId(idVariant: string): string[] {
+  const out = new Set<string>();
+  out.add(encodeAcsDeviceId(idVariant));
+  const norm = normalizeAcsDeviceId(idVariant);
+  if (norm !== idVariant) out.add(encodeAcsDeviceId(norm));
+  const huawei = huaweiEncodedAcsDeviceId(idVariant);
+  if (huawei) out.add(encodeAcsDeviceId(huawei));
+  return [...out];
+}
+
+async function fetchAcsDeviceDocumentAttempt(
+  idVariant: string,
+  variants: string[],
+  useProjection: boolean
+): Promise<unknown | null> {
   const query = JSON.stringify({ _id: idVariant });
-  const byQuery = await acsRequest('GET', '/devices/', undefined, {
-    query,
-    limit: '1',
-    projection: ACS_DETAIL_PROJECTION,
-  });
+  const listQuery: Record<string, string> = { query, limit: '1' };
+  if (useProjection) listQuery.projection = ACS_DETAIL_PROJECTION;
+
+  const byQuery = await acsRequest('GET', '/devices/', undefined, listQuery);
   if (byQuery.ok) {
-    const doc = pickDeviceFromList(byQuery.data, [idVariant]);
+    const doc = pickDeviceFromList(byQuery.data, variants);
     if (doc) return doc;
   }
 
-  const enc = encodeAcsDeviceId(idVariant);
-  const byPath = await acsRequest('GET', `/devices/${enc}`, undefined, {
-    projection: ACS_DETAIL_PROJECTION,
-  });
-  if (byPath.ok && byPath.data != null && !Array.isArray(byPath.data)) return byPath.data;
-  if (byPath.ok && Array.isArray(byPath.data) && byPath.data.length) {
-    return pickDeviceFromList(byPath.data, [idVariant]);
+  const pathQuery = useProjection ? { projection: ACS_DETAIL_PROJECTION } : undefined;
+  for (const enc of pathEncodingsForAcsDeviceId(idVariant)) {
+    const byPath = await acsRequest('GET', `/devices/${enc}`, undefined, pathQuery);
+    if (byPath.ok && byPath.data != null && !Array.isArray(byPath.data)) return byPath.data;
+    if (byPath.ok && Array.isArray(byPath.data) && byPath.data.length) {
+      const doc = pickDeviceFromList(byPath.data, variants);
+      if (doc) return doc;
+    }
   }
   return null;
+}
+
+async function fetchAcsDeviceDocument(idVariant: string, variants: string[]): Promise<unknown | null> {
+  return (
+    (await fetchAcsDeviceDocumentAttempt(idVariant, variants, true)) ??
+    (await fetchAcsDeviceDocumentAttempt(idVariant, variants, false))
+  );
+}
+
+async function findAcsDeviceInList(variants: string[]): Promise<unknown | null> {
+  const r = await acsRequest('GET', '/devices/', undefined, { limit: '500' });
+  if (!r.ok || !Array.isArray(r.data)) return null;
+  return pickDeviceFromList(r.data, variants);
 }
 
 export async function getAcsDevice(deviceId: string) {
@@ -328,12 +364,14 @@ export async function getAcsDevice(deviceId: string) {
   let lastError = 'Device not found in GenieACS';
   for (const variant of variants) {
     try {
-      const doc = await fetchAcsDeviceDocument(variant);
+      const doc = await fetchAcsDeviceDocument(variant, variants);
       if (doc) return doc;
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
+  const fromList = await findAcsDeviceInList(variants);
+  if (fromList) return fromList;
   throw new Error(lastError);
 }
 

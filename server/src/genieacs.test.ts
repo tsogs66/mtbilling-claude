@@ -3,6 +3,7 @@ import {
   flattenAcsParameters,
   pickFirstParam,
   normalizeAcsDeviceId,
+  huaweiEncodedAcsDeviceId,
   acsDeviceIdLookupVariants,
   acsDeviceIdsEquivalent,
 } from './genieacs.js';
@@ -82,6 +83,19 @@ assert(variants.includes('00259E-HG8145X6-10-48575443075EF0B2'), 'variant decode
 assert(
   acsDeviceIdsEquivalent('00259E-HG8145X6%2D10-48575443075EF0B2', '00259E-HG8145X6-10-48575443075EF0B2'),
   'ids equivalent'
+);
+assert(
+  huaweiEncodedAcsDeviceId('00259E-HG8145X6-10-48575443075EF0B2') === '00259E-HG8145X6%2D10-48575443075EF0B2',
+  'huawei encode model revision dash'
+);
+const decodedVariants = acsDeviceIdLookupVariants('00259E-HG8145X6-10-48575443075EF0B2');
+assert(
+  decodedVariants.includes('00259E-HG8145X6%2D10-48575443075EF0B2'),
+  'lookup variants include GenieACS-encoded Huawei id'
+);
+assert(
+  !decodedVariants.includes('00259E-HG8145X6%2D10%2D48575443075EF0B2'),
+  'lookup variants do not encode every hyphen'
 );
 
 console.log('genieacs.test.ts: ok');
