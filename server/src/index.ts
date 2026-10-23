@@ -181,6 +181,7 @@ import {
 import { initTwingate, twingateRouter } from './twingate.js';
 import { initGenieacs, startAcsAutolinkScheduler, acsAfterSubscriberUpsert } from './genieacs.js';
 import { acsRouter } from './acsRouter.js';
+import { initIspDesk, ispDeskRouter, publicIspRouter, startIspDunningScheduler } from './ispDesk.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
 import { cashierRouter, publicCashierRouter, cashierLoginExtras } from './cashier.js';
 import {
@@ -229,6 +230,7 @@ seed();
 initDbSync();
 initExtra();
 initIspOps();
+initIspDesk();
 initTwingate();
 initGenieacs();
 initNoc();
@@ -747,6 +749,7 @@ app.get('/api/health', (_req, res) => {
 /** Public subscriber self-service portal (no JWT). */
 app.use('/api', publicPortalRouter);
 app.use('/api', publicCashierRouter);
+app.use('/api', publicIspRouter);
 
 // ---- Hub ↔ Edge DB sync (device token auth; no staff JWT) ----
 function syncAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -878,6 +881,7 @@ app.use('/api', (req: AuthedRequest, res, next) => {
     { re: /^\/notifications(\/|$)/, perms: ['notifications'] },
     { re: /^\/inventory(\/|$)/, perms: ['inventory'] },
     { re: /^\/pppoe(\/|$)/, perms: ['pppoe'] },
+    { re: /^\/isp(\/|$)/, perms: ['pppoe', 'sales', 'invoices', 'finance', 'job-orders', 'noc', 'notifications'] },
     { re: /^\/ipoe(\/|$)/, perms: ['ipoe'] },
     { re: /^\/hotspot(\/|$)/, perms: ['hotspot'] },
     { re: /^\/usage(\/|$)/, perms: ['pppoe'] },
@@ -5416,6 +5420,7 @@ app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
 app.use('/api', twingateRouter);
 app.use('/api', acsRouter);
+app.use('/api', ispDeskRouter);
 app.use('/api', nocRouter);
 app.use('/api', cashierRouter);
 
@@ -5481,6 +5486,7 @@ server.listen(PORT, () => {
   setTimeout(() => startUsageScheduler(ap.intervals.usage), ap.appliance ? 45_000 : 15_000);
   setTimeout(() => startRouterSyncScheduler(ap.intervals.routerSync), ap.appliance ? 60_000 : 30_000);
   setTimeout(() => startNotifyScheduler(ap.intervals.notify), ap.appliance ? 90_000 : 45_000);
+  setTimeout(() => startIspDunningScheduler(), ap.appliance ? 120_000 : 60_000);
   setTimeout(() => startDbSyncScheduler(ap.intervals.dbSync ?? ap.intervals.routerSync), ap.appliance ? 75_000 : 40_000);
   setTimeout(() => startAutoBackupScheduler(15 * 60 * 1000), ap.appliance ? 150_000 : 90_000);
   setTimeout(() => startAcsAutolinkScheduler(), ap.appliance ? 120_000 : 60_000);

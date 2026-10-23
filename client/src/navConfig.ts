@@ -26,6 +26,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Subscribers & Access',
     items: [
       { to: '/pppoe', label: 'PPPoE Management', icon: Users, permission: 'pppoe' },
+      { to: '/ops', label: 'Operations desk', icon: ClipboardList, permission: 'pppoe' },
       { to: '/ipoe', label: 'IPoE Management', icon: Share2, permission: 'ipoe' },
       { to: '/hotspot', label: 'Hotspot', icon: Wifi, permission: 'hotspot' },
       { to: '/usage', label: 'Usage Stats', icon: PieChart, permission: 'pppoe' },
@@ -117,7 +118,7 @@ export const BOTTOM_NAV_TABS: BottomTab[] = [
     label: 'Subs',
     icon: Users,
     permission: 'pppoe',
-    matchPaths: ['/pppoe', '/ipoe', '/hotspot', '/usage', '/fair-use'],
+    matchPaths: ['/pppoe', '/ipoe', '/hotspot', '/usage', '/fair-use', '/ops'],
   },
   {
     to: '/network',
@@ -160,6 +161,7 @@ export function buildNavSections(
 
 export function permissionForPath(pathname: string): string {
   if (pathname === '/' || pathname === '') return 'dashboard';
+  if (pathname.startsWith('/ops')) return 'pppoe';
   const map: Record<string, string> = {
     '/terminal': 'terminal',
     '/ai-scripting': 'ai',

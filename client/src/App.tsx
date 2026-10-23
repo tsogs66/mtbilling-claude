@@ -42,6 +42,8 @@ import RogueMacs from './pages/RogueMacs';
 import Twingate from './pages/Twingate';
 import Noc from './pages/Noc';
 import CpeTr069 from './pages/CpeTr069';
+import OperationsDesk from './pages/OperationsDesk';
+import AreaStatus from './pages/AreaStatus';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -71,8 +73,15 @@ function Protected({ children }: { children: React.ReactNode }) {
       </div>
     );
   if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
-  if ((String(user.role || '').trim().toLowerCase() === 'cashier' || String(user.role || '').trim().toLowerCase() === 'merchant')) {
+  const role = String(user.role || '').trim().toLowerCase();
+  if (role === 'cashier' || role === 'merchant') {
     return <Navigate to="/merchant" replace />;
+  }
+  if (loc.pathname === '/' && (role === 'technician' || role === 'tech')) {
+    return <Navigate to="/job-orders" replace />;
+  }
+  if (loc.pathname === '/' && role === 'noc') {
+    return <Navigate to="/noc" replace />;
   }
   return <>{children}</>;
 }
@@ -115,6 +124,7 @@ export default function App() {
       <Route path="/login" element={user ? <Navigate to={['cashier','merchant'].includes(String(user.role || '').toLowerCase()) ? '/merchant' : '/'} replace /> : <Login />} />
       <Route path="/pay/:token" element={<SubscriberPay />} />
       <Route path="/portal" element={<ClientPortal />} />
+      <Route path="/area-status" element={<AreaStatus />} />
       <Route path="/merchant" element={<MerchantPortal />} />
       <Route path="/cashier" element={<Navigate to="/merchant" replace />} />
       <Route
@@ -150,6 +160,7 @@ export default function App() {
                 <Route path="/terminal" element={<TerminalPage />} />
                 <Route path="/network" element={<Network />} />
                 <Route path="/cpe-tr069" element={<CpeTr069 />} />
+                <Route path="/ops" element={<OperationsDesk />} />
                 <Route path="/files" element={<MikrotikFiles />} />
                 <Route path="/zerotier" element={<ZeroTier />} />
                 <Route path="/twingate" element={<Twingate />} />
