@@ -41,8 +41,13 @@ function subscriberForAcsDevice(deviceId: string) {
     : undefined;
 }
 
+/** Express already URL-decodes query params once; do not decodeURIComponent again (%2D → -). */
+function deviceIdFromClient(input: unknown): string {
+  return String(input ?? '').trim();
+}
+
 async function buildAcsDeviceDetailPayload(deviceIdInput: string) {
-  const deviceId = String(deviceIdInput || '').trim();
+  const deviceId = deviceIdFromClient(deviceIdInput);
   const doc = await getAcsDevice(deviceId);
   let params: ReturnType<typeof flattenAcsParameters> = [];
   let parametersTruncated = false;
@@ -162,14 +167,23 @@ acsRouter.get('/acs/devices', async (req, res) => {
   }
 });
 
-acsRouter.get('/acs/devices/by-id', async (req, res) => {
+async function respondAcsDeviceDetail(req: express.Request, res: express.Response, deviceIdRaw: unknown) {
+  const deviceId = deviceIdFromClient(deviceIdRaw);
+  if (!deviceId) return res.status(400).json({ error: 'deviceId required' });
   try {
-    const deviceId = String(req.query.deviceId ?? req.query.id ?? '').trim();
-    if (!deviceId) return res.status(400).json({ error: 'deviceId query parameter required' });
     res.json(await buildAcsDeviceDetailPayload(deviceId));
   } catch (e: unknown) {
     res.status(502).json({ error: e instanceof Error ? e.message : 'fetch failed' });
   }
+}
+
+acsRouter.get('/acs/devices/by-id', async (req, res) => {
+  await respondAcsDeviceDetail(req, res, req.query.deviceId ?? req.query.id);
+});
+
+/** Prefer POST on mobile — avoids axios double-encoding `%2D` in query strings. */
+acsRouter.post('/acs/devices/detail', async (req, res) => {
+  await respondAcsDeviceDetail(req, res, req.body?.deviceId ?? req.body?.device_id);
 });
 
 acsRouter.get('/acs/devices/:deviceId', async (req, res) => {
