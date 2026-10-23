@@ -226,12 +226,39 @@ export async function testAcsConnection(): Promise<{ ok: boolean; message: strin
   };
 }
 
+const ACS_DOC_CACHE_MS = 10 * 60 * 1000;
+const acsDocCache = new Map<string, { doc: unknown; at: number }>();
+
+/** Keep full GenieACS documents from a successful device list so detail is instant. */
+export function rememberAcsDeviceDocs(devices: unknown[]): void {
+  const now = Date.now();
+  for (const doc of devices) {
+    if (!doc || typeof doc !== 'object') continue;
+    const id = String((doc as { _id?: string })._id || '').trim();
+    if (!id) continue;
+    for (const key of acsDeviceIdLookupVariants(id)) {
+      acsDocCache.set(key, { doc, at: now });
+    }
+  }
+}
+
+function cachedAcsDeviceDoc(deviceId: string): unknown | null {
+  const now = Date.now();
+  for (const key of acsDeviceIdLookupVariants(deviceId)) {
+    const hit = acsDocCache.get(key);
+    if (hit && now - hit.at < ACS_DOC_CACHE_MS) return hit.doc;
+  }
+  return null;
+}
+
 export async function listAcsDevices(opts?: { query?: string; limit?: number }) {
   const q: Record<string, string> = { limit: String(opts?.limit ?? 200) };
   if (opts?.query?.trim()) q.query = opts.query.trim();
   const r = await acsRequest('GET', '/devices/', undefined, q);
   if (!r.ok) throw new Error(r.error);
-  return Array.isArray(r.data) ? r.data : [];
+  const rows = Array.isArray(r.data) ? r.data : [];
+  rememberAcsDeviceDocs(rows);
+  return rows;
 }
 
 /** GenieACS NBI device id encoding (path segment). */
@@ -382,28 +409,33 @@ export async function getAcsDevice(deviceId: string) {
   const variants = acsDeviceIdLookupVariants(deviceId);
   if (!variants.length) throw new Error('device-id-required');
 
-  let lastError = 'Device not found in GenieACS';
+  const cached = cachedAcsDeviceDoc(deviceId);
+  if (cached) return cached;
+
+  // The device list already succeeds in the UI. Reuse that same NBI call
+  // instead of many per-id queries that time out on large Huawei documents.
+  await listAcsDevices({ limit: 300 });
+  const fromList = cachedAcsDeviceDoc(deviceId);
+  if (fromList) return fromList;
 
   const byOr = await fetchAcsDeviceByOrQuery(variants);
-  if (byOr) return byOr;
+  if (byOr) {
+    rememberAcsDeviceDocs([byOr]);
+    return byOr;
+  }
 
+  let lastError = 'Device not found in GenieACS';
   for (const variant of variants) {
     try {
       const doc = await fetchAcsDeviceDocument(variant, variants);
-      if (doc) return doc;
+      if (doc) {
+        rememberAcsDeviceDocs([doc]);
+        return doc;
+      }
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
-
-  const canonicalId = await findAcsCanonicalIdInList(variants);
-  if (canonicalId) {
-    const doc =
-      (await fetchAcsDeviceDocument(canonicalId, variants)) ??
-      (await fetchAcsDeviceDocumentAttempt(canonicalId, variants, false));
-    if (doc) return doc;
-  }
-
   throw new Error(lastError);
 }
 
@@ -571,14 +603,15 @@ export function flattenAcsParameters(
   root: unknown,
   prefix = '',
   depth = 0,
-  out: FlatParam[] = []
+  out: FlatParam[] = [],
+  max = FLATTEN_MAX_PARAMS
 ): FlatParam[] {
-  if (depth > FLATTEN_MAX_DEPTH || out.length >= FLATTEN_MAX_PARAMS) return out;
+  if (depth > FLATTEN_MAX_DEPTH || out.length >= max) return out;
   if (root == null || typeof root !== 'object') return out;
   const obj = root as Record<string, unknown>;
   for (const [key, val] of Object.entries(obj)) {
     if (key.startsWith('_')) continue;
-    if (out.length >= FLATTEN_MAX_PARAMS) break;
+    if (out.length >= max) break;
     const path = prefix ? `${prefix}${key}` : key;
     if (val != null && typeof val === 'object' && !Array.isArray(val)) {
       const rec = val as Record<string, unknown>;
@@ -590,11 +623,29 @@ export function flattenAcsParameters(
           timestamp: typeof rec._timestamp === 'number' ? rec._timestamp : undefined,
         });
       } else {
-        flattenAcsParameters(val, `${path}.`, depth + 1, out);
+        flattenAcsParameters(val, `${path}.`, depth + 1, out, max);
       }
     }
   }
   return out;
+}
+
+/** Read one TR-069 path from a GenieACS document (nested objects, not a flat map). */
+export function readAcsParam(root: unknown, dotted: string): FlatParam | undefined {
+  const parts = dotted.split('.').filter(Boolean);
+  let cur: unknown = root;
+  for (const part of parts) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  if (cur == null || typeof cur !== 'object' || !('_value' in (cur as object))) return undefined;
+  const rec = cur as Record<string, unknown>;
+  return {
+    path: dotted,
+    value: rec._value == null ? '' : String(rec._value),
+    type: rec._type != null ? String(rec._type) : undefined,
+    timestamp: typeof rec._timestamp === 'number' ? rec._timestamp : undefined,
+  };
 }
 
 export const ACS_PARAMETER_PRESETS: { id: string; label: string; paths: string[]; writable?: boolean }[] = [

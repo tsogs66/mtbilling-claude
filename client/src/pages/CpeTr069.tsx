@@ -170,9 +170,11 @@ export default function CpeTr069() {
       }
       setEditValues(init);
     } catch (e: any) {
+      const status = e?.response?.status;
       const msg =
         e?.response?.data?.error ||
         (e?.code === 'ECONNABORTED' ? 'Timed out loading device from GenieACS (try Refresh list, then open again)' : null) ||
+        (status ? `GenieACS detail failed (HTTP ${status})` : null) ||
         e?.message ||
         'Failed to load device parameters from GenieACS';
       setDetailError(msg);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   flattenAcsParameters,
   pickFirstParam,
+  readAcsParam,
   normalizeAcsDeviceId,
   huaweiEncodedAcsDeviceId,
   acsDeviceIdLookupVariants,
@@ -41,6 +42,10 @@ const picked = pickFirstParam(flat, [
   'missing.path',
 ]);
 assert(picked?.value === 'MyWifi', 'pickFirstParam');
+assert(
+  readAcsParam(sample, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID')?.value === 'MyWifi',
+  'readAcsParam nested path'
+);
 
 assert(normalizeUsername('  Juan.Doe  ') === 'juan.doe', 'username norm');
 assert(normalizeMac('AA:BB:CC:11:22:33') === 'aabbcc112233', 'mac norm');
