@@ -42,7 +42,11 @@ function subscriberForAcsDevice(deviceId: string) {
     : undefined;
 }
 
-/** Express already URL-decodes query params once; do not decodeURIComponent again (%2D → -). */
+/**
+ * Express already URL-decodes query strings and route params once; decoding
+ * again turns `%2D` into `-` and throws URIError on a stray `%`.
+ * Every handler takes the id through here.
+ */
 function deviceIdFromClient(input: unknown): string {
   return String(input ?? '').trim();
 }
@@ -195,7 +199,7 @@ acsRouter.post('/acs/devices/detail', async (req, res) => {
 acsRouter.get('/acs/devices/:deviceId', async (req, res) => {
   try {
     if (req.params.deviceId === 'by-id') return res.status(400).json({ error: 'use /acs/devices/by-id' });
-    const deviceId = decodeURIComponent(req.params.deviceId);
+    const deviceId = deviceIdFromClient(req.params.deviceId);
     res.json(await buildAcsDeviceDetailPayload(deviceId));
   } catch (e: unknown) {
     res.status(502).json({ error: e instanceof Error ? e.message : 'fetch failed' });
@@ -224,7 +228,7 @@ acsRouter.get('/acs/subscribers/search', (req, res) => {
 
 acsRouter.post('/acs/devices/:deviceId/tasks', async (req, res) => {
   try {
-    const deviceId = decodeURIComponent(req.params.deviceId);
+    const deviceId = deviceIdFromClient(req.params.deviceId);
     const connectionRequest = req.query.connection_request !== 'false';
     const out = await postAcsTask(deviceId, req.body || {}, connectionRequest);
     res.json(out);
@@ -235,7 +239,7 @@ acsRouter.post('/acs/devices/:deviceId/tasks', async (req, res) => {
 
 acsRouter.post('/acs/devices/:deviceId/refresh', async (req, res) => {
   try {
-    const deviceId = decodeURIComponent(req.params.deviceId);
+    const deviceId = deviceIdFromClient(req.params.deviceId);
     const objectName = String(req.body?.objectName || 'InternetGatewayDevice.');
     res.json(await refreshAcsDevice(deviceId, objectName));
   } catch (e: unknown) {
@@ -245,7 +249,7 @@ acsRouter.post('/acs/devices/:deviceId/refresh', async (req, res) => {
 
 acsRouter.post('/acs/devices/:deviceId/reboot', async (req, res) => {
   try {
-    const deviceId = decodeURIComponent(req.params.deviceId);
+    const deviceId = deviceIdFromClient(req.params.deviceId);
     res.json(await rebootAcsDevice(deviceId));
   } catch (e: unknown) {
     res.status(502).json({ error: e instanceof Error ? e.message : 'reboot failed' });
@@ -254,7 +258,7 @@ acsRouter.post('/acs/devices/:deviceId/reboot', async (req, res) => {
 
 acsRouter.post('/acs/devices/:deviceId/set-parameter', async (req, res) => {
   try {
-    const deviceId = decodeURIComponent(req.params.deviceId);
+    const deviceId = deviceIdFromClient(req.params.deviceId);
     const path = String(req.body?.path || '').trim();
     const value = req.body?.value != null ? String(req.body.value) : '';
     const type = String(req.body?.type || 'xsd:string');

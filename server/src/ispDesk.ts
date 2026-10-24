@@ -5,7 +5,13 @@
 import express from 'express';
 import { db } from './db.js';
 import { sendManual } from './notify.js';
-import { rebootAcsDevice, refreshAcsDevice, setAcsParameterValues } from './genieacs.js';
+import { rebootAcsDevice, refreshAcsDevice, setAcsWifiCredentials } from './genieacs.js';
+import {
+  enqueueRouterSync,
+  refreshInvoiceStatus,
+  restoreServiceAfterPayment,
+  settleOpenInvoicesForUser,
+} from './billing.js';
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -266,7 +272,7 @@ export function subscriberHub(id: number) {
   };
 }
 
-export function recordIspPayment(body: {
+export async function recordIspPayment(body: {
   pppoeUserId: number;
   amount: number;
   method?: string;
@@ -274,47 +280,87 @@ export function recordIspPayment(body: {
   note?: string;
   extendMonths?: number;
 }) {
-  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(body.pppoeUserId) as {
-    id: number;
-    customer_name: string;
-    username: string;
-    subscription_due: string;
-  } | undefined;
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(body.pppoeUserId) as
+    | Record<string, any>
+    | undefined;
   if (!user) throw new Error('subscriber-not-found');
   const amount = Number(body.amount);
   if (!(amount > 0)) throw new Error('amount-required');
   const months = Math.max(0, Math.min(24, Number(body.extendMonths) || 0));
-  const orNumber = nextOfficialReceipt();
-  const info = db
-    .prepare(
-      `INSERT INTO isp_payments
-       (pppoe_user_id, customer_name, amount, method, cashier_username, or_number, note, extend_months)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      user.id,
-      user.customer_name || user.username,
-      amount,
-      body.method || 'cash',
-      body.cashier || null,
-      orNumber,
-      body.note || null,
-      months
-    );
-  db.prepare(
-    `INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, receipt_json)
-     VALUES (?, ?, ?, 'payment', ?)`
-  ).run(
-    user.id,
-    user.customer_name || user.username,
-    amount,
-    JSON.stringify({ or: orNumber, method: body.method || 'cash', cashier: body.cashier || null, partial: true })
-  );
+  const method = body.method || 'cash';
+  const previousStatus = String(user.status || '');
+
+  // Allocate the OR number and write both ledger rows atomically, so a failure
+  // halfway through can never burn a BIR receipt number on a payment that
+  // was not recorded.
+  const write = db.transaction(() => {
+    const orNumber = nextOfficialReceipt();
+    const info = db
+      .prepare(
+        `INSERT INTO isp_payments
+         (pppoe_user_id, customer_name, amount, method, cashier_username, or_number, note, extend_months)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        user.id,
+        user.customer_name || user.username,
+        amount,
+        method,
+        body.cashier || null,
+        orNumber,
+        body.note || null,
+        months
+      );
+    const tx = db
+      .prepare(
+        `INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, receipt_json)
+         VALUES (?, ?, ?, 'payment', ?)`
+      )
+      .run(
+        user.id,
+        user.customer_name || user.username,
+        amount,
+        JSON.stringify({ or: orNumber, method, cashier: body.cashier || null, partial: months === 0 })
+      );
+    return { paymentId: Number(info.lastInsertRowid), orNumber, transactionId: Number(tx.lastInsertRowid) };
+  });
+  const { paymentId, orNumber, transactionId } = write();
+
+  // Counter cash clears AR the same way a panel or gateway payment does.
+  settleOpenInvoicesForUser(user.id, amount, {
+    method,
+    note: `OR ${orNumber}`,
+    transactionId,
+  });
+
   if (months > 0) {
     const due = addMonths(user.subscription_due, months);
-    db.prepare(`UPDATE pppoe_users SET subscription_due = ?, status = 'Active' WHERE id = ?`).run(due, user.id);
+    const expirationProfile = String(user.expiration_profile || 'non-payments');
+    db.prepare(
+      `UPDATE pppoe_users SET subscription_due = ?, status = 'Active', online = 1,
+         nonpayment_since = NULL, reminder_sent = NULL WHERE id = ?`
+    ).run(due, user.id);
+    const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(user.id) as Record<string, any>;
+
+    // Moving the due date is not the same as restoring service. Without this
+    // the subscriber stays on the non-payment profile behind the captive
+    // portal, and the grace/disable one-shot armed for the OLD due date still
+    // fires — so they pay at the counter and stay cut off.
+    try {
+      await restoreServiceAfterPayment(user, updated, { previousStatus, expirationProfile });
+    } catch (e: unknown) {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'warning',
+        'billing',
+        `OR ${orNumber}: subscription extended for ${user.username} but the MikroTik restore failed — ${
+          e instanceof Error ? e.message : String(e)
+        }. Queued for retry.`
+      );
+      enqueueRouterSync(user.router_id, Number(user.id), 'Operations desk payment restore failed');
+    }
   }
-  return db.prepare('SELECT * FROM isp_payments WHERE id = ?').get(info.lastInsertRowid);
+
+  return db.prepare('SELECT * FROM isp_payments WHERE id = ?').get(paymentId);
 }
 
 export function reverseIspPayment(id: number, reason: string, cashier: string) {
@@ -325,17 +371,73 @@ export function reverseIspPayment(id: number, reason: string, cashier: string) {
     pppoe_user_id: number;
     customer_name: string;
     or_number: string;
+    extend_months: number | null;
   } | undefined;
   if (!row) throw new Error('not-found');
   if (row.reversed_at) throw new Error('already-reversed');
-  db.prepare(
-    `UPDATE isp_payments SET reversed_at = datetime('now'), reverse_reason = ? WHERE id = ?`
-  ).run(reason || 'reversal', id);
-  db.prepare(
-    `INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, receipt_json)
-     VALUES (?, ?, ?, 'reversal', ?)`
-  ).run(row.pppoe_user_id, row.customer_name, -Math.abs(Number(row.amount) || 0), JSON.stringify({ or: row.or_number, cashier, reason }));
-  return db.prepare('SELECT * FROM isp_payments WHERE id = ?').get(id);
+  const months = Math.max(0, Number(row.extend_months) || 0);
+
+  const out = db.transaction(() => {
+    db.prepare(
+      `UPDATE isp_payments SET reversed_at = datetime('now'), reverse_reason = ? WHERE id = ?`
+    ).run(reason || 'reversal', id);
+    db.prepare(
+      `INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, receipt_json)
+       VALUES (?, ?, ?, 'reversal', ?)`
+    ).run(
+      row.pppoe_user_id,
+      row.customer_name,
+      -Math.abs(Number(row.amount) || 0),
+      JSON.stringify({ or: row.or_number, cashier, reason, months })
+    );
+
+    // Give back whatever the receipt bought. Without this, reversing a
+    // mis-keyed 12-month receipt leaves the subscriber a free year.
+    unapplyInvoicePayments(row.pppoe_user_id, Number(row.amount) || 0, row.or_number);
+    if (months > 0 && row.pppoe_user_id) {
+      const user = db
+        .prepare('SELECT id, subscription_due FROM pppoe_users WHERE id = ?')
+        .get(row.pppoe_user_id) as { id: number; subscription_due: string } | undefined;
+      if (user) {
+        db.prepare('UPDATE pppoe_users SET subscription_due = ? WHERE id = ?').run(
+          addMonths(user.subscription_due, -months),
+          user.id
+        );
+      }
+    }
+    return db.prepare('SELECT * FROM isp_payments WHERE id = ?').get(id);
+  })();
+
+  if (months > 0) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'billing',
+      `OR ${row.or_number} reversed by ${cashier || 'staff'}: rolled back ${months} month(s). Run Recheck Expiry to re-apply the non-payment profile if the account is now past due.`
+    );
+  }
+  return out;
+}
+
+/** Undo the AR allocation a reversed receipt made, newest allocation first. */
+function unapplyInvoicePayments(pppoeUserId: number, amount: number, orNumber: string) {
+  let left = Math.round((Number(amount) || 0) * 100) / 100;
+  if (!pppoeUserId || left <= 0) return;
+  const rows = db
+    .prepare(
+      `SELECT ip.id, ip.invoice_id, ip.amount FROM invoice_payments ip
+       JOIN invoices i ON i.id = ip.invoice_id
+       WHERE i.pppoe_user_id = ? AND ip.note = ?
+       ORDER BY ip.id DESC`
+    )
+    .all(pppoeUserId, `OR ${orNumber}`) as { id: number; invoice_id: number; amount: number }[];
+  for (const r of rows) {
+    if (left <= 0) break;
+    const back = Math.min(Math.round((Number(r.amount) || 0) * 100) / 100, left);
+    db.prepare('UPDATE invoices SET amount_paid = MAX(0, amount_paid - ?) WHERE id = ?').run(back, r.invoice_id);
+    db.prepare('DELETE FROM invoice_payments WHERE id = ?').run(r.id);
+    refreshInvoiceStatus(r.invoice_id);
+    left = Math.round((left - back) * 100) / 100;
+  }
 }
 
 export function agingList() {
@@ -435,6 +537,7 @@ export async function broadcastArea(opts: { napId?: number; pon?: string; messag
     clientIds: ids,
     message: msg,
     subject: 'Area notice',
+    type: 'area-notice',
   });
   return { ...result, targets: ids.length };
 }
@@ -475,19 +578,19 @@ export async function runIspDunning() {
       .replaceAll('{username}', u.username)
       .replaceAll('{days}', String(days))
       .replaceAll('{disconnect}', String(s.dunning_disconnect_day || 7));
-    await sendManual({
+    // Label at insert time. Re-tagging "the newest notification for this
+    // client" mislabelled an unrelated row whenever the SMS send inserted
+    // nothing (channel disabled, no contact), which then suppressed the real
+    // reminder for the rest of the day.
+    const result = await sendManual({
       channel: 'sms',
       target: 'client',
       clientId: u.id,
       message,
       subject: 'Payment reminder',
+      type: 'dunning',
     });
-    db.prepare(
-      `UPDATE notifications SET type = 'dunning' WHERE id = (
-         SELECT id FROM notifications WHERE client_id = ? ORDER BY id DESC LIMIT 1
-       )`
-    ).run(u.id);
-    sent += 1;
+    if (result.sent > 0) sent += 1;
   }
   return { sent };
 }
@@ -613,7 +716,10 @@ export function finalizeJobOrder(id: number, previousStatus: string) {
   if (!job) return;
   if (previousStatus === 'completed' || job.status !== 'completed') return;
   if (job.onu_serial && job.pppoe_user_id) {
-    db.prepare(`UPDATE pppoe_users SET onu_serial = ?, online = 1 WHERE id = ?`).run(job.onu_serial, job.pppoe_user_id);
+    // Record the ONU only. `online` is owned by the router poll — writing it
+    // here made a completed install look connected until the next poll
+    // corrected it, which hid genuinely dead installs from NAP dispatch.
+    db.prepare(`UPDATE pppoe_users SET onu_serial = ? WHERE id = ?`).run(job.onu_serial, job.pppoe_user_id);
   }
   if (job.stock_applied) return;
   let items: { inventoryId?: number; qty?: number }[] = [];
@@ -652,17 +758,9 @@ export async function cpeAction(
   if (body.action === 'reboot') return rebootAcsDevice(id);
   if (body.action === 'refresh') return refreshAcsDevice(id);
   if (body.action === 'wifi') {
-    const values: [string, string, string][] = [];
-    if (body.ssid) values.push(['InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID', body.ssid, 'xsd:string']);
-    if (body.password) {
-      values.push([
-        'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase',
-        body.password,
-        'xsd:string',
-      ]);
-    }
-    if (!values.length) throw new Error('ssid-or-password-required');
-    return setAcsParameterValues(id, values);
+    // Resolves TR-098 vs TR-181 from the device itself — the desk used to
+    // hardcode InternetGatewayDevice paths and fail on TR-181 CPEs.
+    return setAcsWifiCredentials(id, { ssid: body.ssid, password: body.password });
   }
   throw new Error('unknown-action');
 }
@@ -733,11 +831,11 @@ ispDeskRouter.post('/isp/subscribers/:id/cpe', async (req, res) => {
   }
 });
 
-ispDeskRouter.post('/isp/payments', (req, res) => {
+ispDeskRouter.post('/isp/payments', async (req, res) => {
   try {
     const cashier = String((req as express.Request & { user?: { username?: string } }).user?.username || req.body?.cashier || '');
     res.status(201).json(
-      recordIspPayment({
+      await recordIspPayment({
         pppoeUserId: Number(req.body?.pppoeUserId),
         amount: Number(req.body?.amount),
         method: req.body?.method,

@@ -4,6 +4,8 @@ import {
   flattenAcsParameters,
   listAcsDevices,
   addAcsDeviceTags,
+  acsDeviceIdsEquivalent,
+  canonicalAcsDeviceId,
   publicAcsConfig,
 } from './genieacs.js';
 
@@ -132,14 +134,22 @@ function loadSubscribers(onlyId?: number): SubscriberLinkRow[] {
     .all() as SubscriberLinkRow[];
 }
 
+/**
+ * Is this CPE already attached to a different subscriber?
+ *
+ * Compares by equivalence, not string equality: GenieACS reports Huawei ids
+ * part-encoded (`00259E-HG8145X6%2D10-…`) while we store the decoded form, so
+ * an exact match here used to miss every Huawei link and let the same physical
+ * device be attached to a second subscriber.
+ */
 function deviceAlreadyLinkedToOther(deviceId: string, subscriberId: number): boolean {
-  const row = db
+  const rows = db
     .prepare(
-      `SELECT id FROM pppoe_users
-       WHERE acs_device_id = ? COLLATE NOCASE AND id != ? LIMIT 1`
+      `SELECT id, acs_device_id FROM pppoe_users
+       WHERE acs_device_id IS NOT NULL AND trim(acs_device_id) != '' AND id != ?`
     )
-    .get(deviceId, subscriberId) as { id: number } | undefined;
-  return !!row;
+    .all(subscriberId) as { id: number; acs_device_id: string }[];
+  return rows.some((r) => acsDeviceIdsEquivalent(r.acs_device_id, deviceId));
 }
 
 function pickSubscriberForDevice(
@@ -222,7 +232,9 @@ export async function runAcsAutolink(opts?: {
   if (opts?.syncTagsOnly) return result;
 
   for (const device of devices) {
-    const deviceId = String(device._id || '');
+    // Store the same canonical form the TR-069 page writes, so later lookups,
+    // tag syncs and the duplicate guard all compare like with like.
+    const deviceId = canonicalAcsDeviceId(String(device._id || ''));
     if (!deviceId) continue;
     const keys = extractDeviceMatchKeys(device);
     const hit = pickSubscriberForDevice(keys, subs, macToUsername);

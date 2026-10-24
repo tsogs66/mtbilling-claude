@@ -181,6 +181,7 @@ import {
 import { initTwingate, twingateRouter } from './twingate.js';
 import { initGenieacs, startAcsAutolinkScheduler, acsAfterSubscriberUpsert } from './genieacs.js';
 import { acsRouter } from './acsRouter.js';
+import { requiredPermissionsForApiPath } from './apiPermissions.js';
 import { initIspDesk, ispDeskRouter, publicIspRouter, startIspDunningScheduler } from './ispDesk.js';
 import { initNoc, nocRouter, startNocMonitor } from './noc.js';
 import { cashierRouter, publicCashierRouter, cashierLoginExtras } from './cashier.js';
@@ -227,13 +228,18 @@ process.on('unhandledRejection', (reason) => {
 initSchema();
 migrate();
 seed();
-initDbSync();
 initExtra();
 initIspOps();
 initIspDesk();
 initTwingate();
 initGenieacs();
 initNoc();
+initOutageReportTables();
+// Last: ensureSyncTriggers() only installs an outbox trigger for a table that
+// already exists, so every module that CREATEs a synced table must have run
+// first. (It used to run before initIspOps/initIspDesk, which left job_orders
+// and the operations-desk tables without triggers on a fresh database.)
+initDbSync();
 
 /**
  * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
@@ -866,48 +872,16 @@ app.use('/api', requireAuth);
 app.use('/api', (req: AuthedRequest, res, next) => {
   if (!req.user) return next();
   const p = (req.path || '').replace(/^\/api/, '') || req.url.split('?')[0];
-  const method = (req.method || 'GET').toUpperCase();
-  // Admins / * always pass via requirePermission check below
-  const rules: { re: RegExp; perms: string[]; writeOnly?: boolean }[] = [
-    { re: /^\/(roles|panel-users)(\/|$)/, perms: ['roles'] },
-    { re: /^\/(db\/backup|db\/backups|db\/restore)/, perms: ['settings'] },
-    { re: /^\/payment-links(\/|$)/, perms: ['sales'] },
-    { re: /^\/merchant-deposits(\/|$)/, perms: ['sales'] },
-    { re: /^\/merchants(\/|$)/, perms: ['roles'] },
-    { re: /^\/cashiers(\/|$)/, perms: ['roles'] },
-    { re: /^\/job-orders(\/|$)/, perms: ['job-orders'] },
-    { re: /^\/invoices(\/|$)/, perms: ['invoices'] },
-    { re: /^\/finance(\/|$)/, perms: ['finance'] },
-    { re: /^\/notifications(\/|$)/, perms: ['notifications'] },
-    { re: /^\/inventory(\/|$)/, perms: ['inventory'] },
-    { re: /^\/pppoe(\/|$)/, perms: ['pppoe'] },
-    { re: /^\/isp(\/|$)/, perms: ['pppoe', 'sales', 'invoices', 'finance', 'job-orders', 'noc', 'notifications'] },
-    { re: /^\/ipoe(\/|$)/, perms: ['ipoe'] },
-    { re: /^\/hotspot(\/|$)/, perms: ['hotspot'] },
-    { re: /^\/usage(\/|$)/, perms: ['pppoe'] },
-    { re: /^\/license(\/|$)/, perms: ['license'] },
-    { re: /^\/updater(\/|$)/, perms: ['updater'] },
-    { re: /^\/company(\/|$)/, perms: ['company'], writeOnly: true },
-    { re: /^\/settings(\/|$)/, perms: ['settings'], writeOnly: true },
-    { re: /^\/paymongo(\/|$)/, perms: ['settings', 'sales'] },
-    { re: /^\/sync\/(settings|now)/, perms: ['settings'] },
-  ];
-  for (const rule of rules) {
-    if (!rule.re.test(p)) continue;
-    if (rule.writeOnly && (method === 'GET' || method === 'HEAD' || method === 'OPTIONS')) return next();
-    // Merchant partners use /merchant/* with requireCashier — skip staff sales gate
-    if (/^\/merchant(\/|$)/.test(p)) return next();
-    const perms = rule.perms;
-    const role = req.user.role;
-    if (permissionsForRole(role).includes('*')) return next();
-    if (perms.some((x) => userHasPermission(role, x))) return next();
-    return res.status(403).json({
-      error: 'Forbidden',
-      code: 'PERMISSION_DENIED',
-      message: `Requires permission: ${perms.join(' or ')}`,
-    });
-  }
-  return next();
+  const perms = requiredPermissionsForApiPath(p, req.method);
+  if (!perms) return next();
+  const role = req.user.role;
+  if (permissionsForRole(role).includes('*')) return next();
+  if (perms.some((x) => userHasPermission(role, x))) return next();
+  return res.status(403).json({
+    error: 'Forbidden',
+    code: 'PERMISSION_DENIED',
+    message: `Requires permission: ${perms.join(' or ')}`,
+  });
 });
 
 /**
@@ -5478,7 +5452,6 @@ server.listen(PORT, () => {
   // restart, when the box is already under pressure and the dataset just got
   // bigger. Stagger them instead of firing the whole burst at once.
   // On RPi/thin PC, intervals stretch so Cloudflare + panel API stay responsive.
-  initOutageReportTables();
   startStatusHub(ap.intervals.statusHub);
   startOutageMonitor(ap.intervals.outage);
   startUptime(ap.intervals.uptime);

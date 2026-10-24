@@ -25,6 +25,16 @@ export const SYNC_CATEGORIES: Record<string, string[]> = {
     'usage_alerts',
     'cashier_collectibles',
     'cashier_deposits',
+    // Operations desk. Without these a second site keeps its own receipts,
+    // drawer closes and outage board — the desk tells the operator the
+    // existing hub-edge sync covers it.
+    'isp_payments',
+    'cashier_closes',
+    'area_outages',
+    'session_history',
+    // Deliberately NOT synced: `isp_settings` (branch name and the BIR OR
+    // series must stay per-site or two branches issue the same receipt number)
+    // and `cgnat_logs` (high-volume, only meaningful at the site that logged it).
   ],
   portal: [
     'payment_merchants',

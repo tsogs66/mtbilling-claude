@@ -184,7 +184,7 @@ export function computeNapChainDbm(
 ): ChainResult | null {
   const { throughMap, tapMap } = buildLossMaps(splitterRows);
   const chain: ChainNapLike[] = [];
-  let cur: ChainNapLike | undefined = napsById.get(napId);
+  const cur: ChainNapLike | undefined = napsById.get(napId);
   if (!cur) return null;
 
   let originDbm = DEFAULT_ORIGIN_DBM;

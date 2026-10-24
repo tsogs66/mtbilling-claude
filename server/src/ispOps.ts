@@ -18,6 +18,7 @@ import {
   changePppoeUserPlan,
   ensureFreshPayLink,
   openInvoiceBalanceForUser,
+  refreshInvoiceStatus,
   syncPendingPaymentLinkAmount,
 } from './billing.js';
 import { pipePortalSse, publishPortalEvent } from './portalEvents.js';
@@ -425,20 +426,6 @@ export function initIspOps() {
       );
     }
   }
-}
-
-function refreshInvoiceStatus(id: number) {
-  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
-  if (!inv || inv.status === 'void') return;
-  const paid = Number(inv.amount_paid) || 0;
-  const amount = Number(inv.amount) || 0;
-  let status = 'unpaid';
-  if (paid <= 0) status = 'unpaid';
-  else if (paid + 0.001 >= amount) status = 'paid';
-  else status = 'partial';
-  if (status !== 'paid' && inv.due_date && inv.due_date < todayISO()) status = 'overdue';
-  const paidAt = status === 'paid' ? inv.paid_at || new Date().toISOString() : null;
-  db.prepare('UPDATE invoices SET status = ?, paid_at = ? WHERE id = ?').run(status, paidAt, id);
 }
 
 function markOverdueInvoices() {

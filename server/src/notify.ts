@@ -784,6 +784,9 @@ export async function sendManual(opts: {
   service?: string;
   subject?: string;
   message: string;
+  /** Stored on the notifications row. Lets callers (dunning, area notices)
+   *  label their sends at insert time instead of re-tagging the newest row. */
+  type?: string;
 }) {
   const channels: ('email' | 'sms')[] = opts.channel === 'both' ? ['email', 'sms'] : [opts.channel];
   const base = 'SELECT id, username, customer_name, email, contact, subscription_due, account_number, profile, price FROM pppoe_users';
@@ -804,7 +807,7 @@ export async function sendManual(opts: {
       skipped++;
       continue;
     }
-    await notifyClient(c, channels, opts.subject || 'Notice', opts.message, 'manual');
+    await notifyClient(c, channels, opts.subject || 'Notice', opts.message, opts.type || 'manual');
     sent++;
   }
   return { recipients: clients.length, sent, skipped };

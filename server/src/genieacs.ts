@@ -227,7 +227,23 @@ export async function testAcsConnection(): Promise<{ ok: boolean; message: strin
 }
 
 const ACS_DOC_CACHE_MS = 10 * 60 * 1000;
+/** Cap the cache: 3 key variants per device, full GenieACS documents each. */
+const ACS_DOC_CACHE_MAX = 4_000;
 const acsDocCache = new Map<string, { doc: unknown; at: number }>();
+
+/** Drop expired entries, then oldest-first until back under the cap. */
+function pruneAcsDocCache(): void {
+  const now = Date.now();
+  for (const [key, hit] of acsDocCache) {
+    if (now - hit.at >= ACS_DOC_CACHE_MS) acsDocCache.delete(key);
+  }
+  if (acsDocCache.size <= ACS_DOC_CACHE_MAX) return;
+  // Map iterates in insertion order, so this evicts the least recently stored.
+  for (const key of acsDocCache.keys()) {
+    if (acsDocCache.size <= ACS_DOC_CACHE_MAX) break;
+    acsDocCache.delete(key);
+  }
+}
 
 /** Keep full GenieACS documents from a successful device list so detail is instant. */
 export function rememberAcsDeviceDocs(devices: unknown[]): void {
@@ -237,9 +253,11 @@ export function rememberAcsDeviceDocs(devices: unknown[]): void {
     const id = String((doc as { _id?: string })._id || '').trim();
     if (!id) continue;
     for (const key of acsDeviceIdLookupVariants(id)) {
+      acsDocCache.delete(key);
       acsDocCache.set(key, { doc, at: now });
     }
   }
+  pruneAcsDocCache();
 }
 
 function cachedAcsDeviceDoc(deviceId: string): unknown | null {
@@ -304,6 +322,16 @@ export function acsDeviceIdLookupVariants(deviceId: string): string[] {
   const huawei = huaweiEncodedAcsDeviceId(norm);
   if (huawei) out.add(huawei);
   return [...out].filter(Boolean);
+}
+
+/**
+ * The single form a device id is stored in on `pppoe_users.acs_device_id`.
+ * Manual linking and autolink must agree, or equality checks against the
+ * stored value silently miss Huawei ids (`HG8145X6%2D10` vs `HG8145X6-10`).
+ */
+export function canonicalAcsDeviceId(deviceId: string): string {
+  const raw = String(deviceId ?? '').trim();
+  return normalizeAcsDeviceId(raw) || raw;
 }
 
 export function acsDeviceIdsEquivalent(a: string, b: string): boolean {
@@ -497,8 +525,28 @@ export async function addAcsDeviceTag(deviceId: string, tag: string) {
   throw new Error(lastError);
 }
 
+/** Tags already present on a cached device document, if we have one. */
+export function cachedAcsDeviceTags(deviceId: string): Set<string> {
+  const doc = cachedAcsDeviceDoc(deviceId) as { _tags?: unknown } | null;
+  const raw = doc?._tags;
+  const list = Array.isArray(raw)
+    ? raw.map(String)
+    : typeof raw === 'string'
+      ? raw.split(',').map((t) => t.trim())
+      : [];
+  return new Set(list.filter(Boolean));
+}
+
+/**
+ * Apply tags that are missing. The autolink scheduler calls this for every
+ * linked subscriber on every cycle, so re-POSTing tags the device already
+ * carries costs one HTTP round trip per tag per subscriber for nothing —
+ * the cached document already tells us which ones are there.
+ */
 export async function addAcsDeviceTags(deviceId: string, tags: string[]) {
+  const present = cachedAcsDeviceTags(deviceId);
   for (const tag of tags) {
+    if (present.has(tag)) continue;
     try {
       await addAcsDeviceTag(deviceId, tag);
     } catch (e: unknown) {
@@ -538,6 +586,7 @@ export function startAcsAutolinkScheduler() {
       .then((m) => m.runAcsAutolink({ syncTagsOnly: false }))
       .catch((e) => console.error('[acs] autolink scheduler', e));
   }, ms);
+  if (typeof acsSchedulerTimer.unref === 'function') acsSchedulerTimer.unref();
   console.info(`[acs] autolink scheduler every ${cfg.autolinkIntervalMin} min`);
 }
 
@@ -709,6 +758,61 @@ export function pickFirstParam(params: FlatParam[], paths: string[]): FlatParam 
   return undefined;
 }
 
+/** Which TR-069 data model a device document speaks. */
+export function acsDataModel(doc: unknown): 'tr098' | 'tr181' | null {
+  if (!doc || typeof doc !== 'object') return null;
+  const o = doc as Record<string, unknown>;
+  if (o.InternetGatewayDevice && typeof o.InternetGatewayDevice === 'object') return 'tr098';
+  if (o.Device && typeof o.Device === 'object') return 'tr181';
+  return null;
+}
+
+/**
+ * Push SSID / passphrase using the paths the device actually speaks.
+ *
+ * Huawei GPON ONTs are TR-098 (`InternetGatewayDevice.…`) but plenty of CPEs
+ * are TR-181 (`Device.WiFi.…`), so hardcoding one family makes the push fail
+ * silently on the other half of the fleet. Resolve from the cached document
+ * and fall back to TR-098, which is what the ONTs in the field use.
+ */
+export async function setAcsWifiCredentials(
+  deviceId: string,
+  opts: { ssid?: string; password?: string }
+) {
+  const ssid = String(opts.ssid || '').trim();
+  const password = String(opts.password || '');
+  if (!ssid && !password) throw new Error('ssid-or-password-required');
+
+  let doc: unknown = null;
+  try {
+    doc = await getAcsDevice(deviceId);
+  } catch {
+    /* unreadable device — fall through to the TR-098 default */
+  }
+  const model = acsDataModel(doc) ?? 'tr098';
+  const presetFor = (id: string) => ACS_PARAMETER_PRESETS.find((p) => p.id === id);
+  const pickPath = (presetId: string): string | undefined => {
+    const preset = presetFor(presetId);
+    if (!preset?.paths.length) return undefined;
+    // Prefer a path the device has actually reported (handles e.g. PreSharedKey
+    // vs KeyPassphrase); otherwise the preset's first path.
+    const seen = preset.paths.find((path) => doc && readAcsParam(doc, path));
+    return seen || preset.paths[0];
+  };
+
+  const values: [string, string, string][] = [];
+  if (ssid) {
+    const path = pickPath(model === 'tr181' ? 'wifi-ssid-tr181' : 'wifi-ssid-igd');
+    if (path) values.push([path, ssid, 'xsd:string']);
+  }
+  if (password) {
+    const path = pickPath(model === 'tr181' ? 'wifi-pass-tr181' : 'wifi-pass-igd');
+    if (path) values.push([path, password, 'xsd:string']);
+  }
+  if (!values.length) throw new Error('ssid-or-password-required');
+  return setAcsParameterValues(deviceId, values);
+}
+
 export function listSubscriberAcsLinks() {
   return db
     .prepare(
@@ -725,7 +829,7 @@ export function linkSubscriberDevice(pppoeUserId: number, deviceId: string | nul
   const row = db.prepare('SELECT id FROM pppoe_users WHERE id = ?').get(id);
   if (!row) throw new Error('subscriber-not-found');
   let dev = deviceId != null ? String(deviceId).trim() || null : null;
-  if (dev) dev = normalizeAcsDeviceId(dev) || dev;
+  if (dev) dev = canonicalAcsDeviceId(dev);
   db.prepare('UPDATE pppoe_users SET acs_device_id = ? WHERE id = ?').run(dev, id);
   const out = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as Record<string, unknown>;
   if (dev) void acsAfterSubscriberUpsert(out).catch(() => undefined);
