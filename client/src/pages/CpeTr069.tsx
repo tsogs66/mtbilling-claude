@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Router, RefreshCw, Power, Search, ExternalLink, Loader2, Settings2, ChevronRight, Save,
+  Router, RefreshCw, Power, ExternalLink, Loader2, Settings2, ChevronRight, Save,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Flash, FormField, SearchInput, StatusBadge } from '../components/ui';

@@ -8,6 +8,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+/**
+ * The point of this test is the sqlite3 CLI's 63-pair json_object() limit, so
+ * it needs the real CLI. Skip (rather than fail) where it is not installed —
+ * better-sqlite3 does not have the limitation, so there is nothing to assert.
+ */
+function sqlite3CliAvailable(): boolean {
+  try {
+    execSync('sqlite3 -version', { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+if (!sqlite3CliAvailable()) {
+  console.log('dbSync.test.ts: skipped (sqlite3 CLI not installed)');
+  process.exit(0);
+}
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mt-dbsync-'));
 const dbPath = path.join(tmp, 'test.db');
 

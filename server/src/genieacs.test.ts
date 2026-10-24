@@ -7,6 +7,8 @@ import {
   huaweiEncodedAcsDeviceId,
   acsDeviceIdLookupVariants,
   acsDeviceIdsEquivalent,
+  canonicalAcsDeviceId,
+  acsDataModel,
 } from './genieacs.js';
 import {
   buildProvisionTags,
@@ -102,5 +104,21 @@ assert(
   !decodedVariants.includes('00259E-HG8145X6%2D10%2D48575443075EF0B2'),
   'lookup variants do not encode every hyphen'
 );
+
+// Manual linking and autolink must store the SAME form, or the duplicate-link
+// guard compares a decoded id against GenieACS's encoded one and never matches.
+assert.equal(
+  canonicalAcsDeviceId('00259E-HG8145X6%2D10-48575443075EF0B2'),
+  canonicalAcsDeviceId('00259E-HG8145X6-10-48575443075EF0B2'),
+  'canonical id is stable across encodings'
+);
+assert.equal(canonicalAcsDeviceId('  TEST-DEVICE  '), 'TEST-DEVICE', 'canonical id trims');
+assert.equal(canonicalAcsDeviceId(''), '', 'canonical id of blank');
+
+// Wi-Fi pushes pick paths per data model instead of assuming TR-098.
+assert.equal(acsDataModel(sample), 'tr098', 'IGD document is TR-098');
+assert.equal(acsDataModel({ Device: { WiFi: {} } }), 'tr181', 'Device document is TR-181');
+assert.equal(acsDataModel(null), null, 'no document, no model');
+assert.equal(acsDataModel({ _id: 'x' }), null, 'bare document has no model');
 
 console.log('genieacs.test.ts: ok');

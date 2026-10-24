@@ -915,6 +915,102 @@ async function syncReversedSubscriberToRouter(user: any): Promise<{ ok: boolean;
   }
 }
 
+/**
+ * Everything that has to happen on the router once a payment has been written
+ * to the DB: drop the stale grace/disable one-shots, push the restored profile,
+ * re-arm expiry for the new due date and bounce a captive session.
+ *
+ * Shared by every payment channel (panel, cashier portal, operations desk) so
+ * none of them can extend a subscription without actually restoring service.
+ *
+ * @param user    the row as it was BEFORE the payment (for schedule cancellation)
+ * @param updated the row AFTER subscription_due / profile / status were written
+ */
+export async function restoreServiceAfterPayment(
+  user: any,
+  updated: any,
+  opts: { previousStatus: string; expirationProfile: string; refreshSession?: boolean }
+): Promise<{
+  sync: { ok: boolean; error?: string };
+  sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null;
+}> {
+  const previousStatus = opts.previousStatus;
+  const expirationProfile = opts.expirationProfile;
+  const refreshSession =
+    opts.refreshSession !== undefined ? opts.refreshSession : needsSessionRefresh(previousStatus);
+
+  // Drop any pending grace/disable one-shots from the previous due date before
+  // restoring the plan profile — then provision a fresh schedule for the new due.
+  // Await cancel so a stale router scheduler cannot race the restore and flip
+  // the secret back to non-payments after payment.
+  await cancelRouterExpirySchedule(user).catch(() => undefined);
+
+  // The payment itself is already committed by the caller at this point.
+  // A slow/unreachable router must never hold up the HTTP response for it —
+  // that previously took up to ~35s (two sequential router-call timeouts),
+  // long enough to trip an intermediary proxy's own timeout (nginx, Cloudflare
+  // Tunnel, ngrok...), which then shows the admin "payment failed" even though
+  // the subscription was already extended. Bound the wait instead; the router
+  // call keeps running in the background regardless, and its outcome (if it
+  // arrives after we've already responded) is logged for later review.
+  let respondedAlready = false;
+  const syncPromise = syncUserToRouter(updated, 'restore');
+  syncPromise
+    .then((r) => {
+      if (r.ok) {
+        resolveRouterSync(updated.router_id, updated.id);
+      } else {
+        enqueueRouterSync(updated.router_id, updated.id, r.error || 'Payment restore failed');
+      }
+      if (respondedAlready && !r.ok) {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'mikrotik',
+          `Payment for ${updated.username}: MikroTik restore sync finished after the response had already returned (router was slow) — ${r.error || 'failed'}. Queued for automatic retry once the router is reachable.`
+        );
+      }
+    })
+    .catch((e: any) => {
+      enqueueRouterSync(updated.router_id, updated.id, e?.message || String(e));
+      if (respondedAlready) {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+          'warning',
+          'mikrotik',
+          `Payment for ${updated.username}: MikroTik restore sync threw after the response had already returned — ${e?.message || e}. Queued for automatic retry once the router is reachable.`
+        );
+      }
+    });
+  const sync = await withTimeout(syncPromise, ROUTER_CALL_BUDGET_MS, {
+    ok: false,
+    error: 'Router is slow to respond — continuing in the background. Check Logs shortly, or use Recheck Expiry.',
+  });
+  respondedAlready = true;
+
+  // Cancels any pending grace/disable schedule from before this payment and
+  // provisions a fresh one for the new due date — this is what makes "pay
+  // before it fires" work, and covers grace/expiry even if the panel is
+  // offline when they're due. Not awaited: best-effort, and a slow/unreachable
+  // router here shouldn't add latency on top of the sync call above.
+  scheduleRouterExpiry(updated, expirationProfile).catch(() => undefined);
+
+  let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
+  if (refreshSession && sync.ok && updated?.router_id) {
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
+    if (router?.host && router?.api_user) {
+      sessionRefresh = await bouncePppSessionForRefresh(router, updated.username, SESSION_REFRESH_MS);
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        sessionRefresh.bounced ? 'info' : 'warning',
+        'mikrotik',
+        sessionRefresh.bounced
+          ? `Session refresh bounce for ${updated.username} after payment (was ${previousStatus}, ${SESSION_REFRESH_MS}ms)`
+          : `Session refresh bounce failed for ${updated.username}: ${sessionRefresh.error || 'unknown'}`
+      );
+    }
+  }
+
+  return { sync, sessionRefresh };
+}
+
 export async function recordPppoePayment(
   userId: number,
   opts: {
@@ -998,6 +1094,14 @@ export async function recordPppoePayment(
   );
   const transactionId = Number(txInfo.lastInsertRowid);
 
+  // Clear AR too, otherwise Invoices keeps the period overdue and the dunning
+  // run keeps texting a subscriber who has already paid.
+  const settled = settleOpenInvoicesForUser(userId, total, {
+    method: opts.source || 'payment',
+    note: `Payment ${transactionId}`,
+    transactionId,
+  });
+
   const cashierNote = opts.cashierUsername ? ` cashier=${opts.cashierUsername}` : '';
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
@@ -1005,74 +1109,11 @@ export async function recordPppoePayment(
     `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}${cashierNote}`
   );
 
-  // Drop any pending grace/disable one-shots from the previous due date before
-  // restoring the plan profile — then provision a fresh schedule for the new due.
-  // Await cancel so a stale router scheduler cannot race the restore and flip
-  // the secret back to non-payments after payment.
-  await cancelRouterExpirySchedule(user).catch(() => undefined);
-
-  // The payment itself (DB update above) is already committed at this point.
-  // A slow/unreachable router must never hold up the HTTP response for it —
-  // that previously took up to ~35s (two sequential router-call timeouts),
-  // long enough to trip an intermediary proxy's own timeout (nginx, Cloudflare
-  // Tunnel, ngrok...), which then shows the admin "payment failed" even though
-  // the subscription was already extended. Bound the wait instead; the router
-  // call keeps running in the background regardless, and its outcome (if it
-  // arrives after we've already responded) is logged for later review.
-  let respondedAlready = false;
-  const syncPromise = syncUserToRouter(updated, 'restore');
-  syncPromise
-    .then((r) => {
-      if (r.ok) {
-        resolveRouterSync(updated.router_id, updated.id);
-      } else {
-        enqueueRouterSync(updated.router_id, updated.id, r.error || 'Payment restore failed');
-      }
-      if (respondedAlready && !r.ok) {
-        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-          'warning',
-          'mikrotik',
-          `Payment for ${updated.username}: MikroTik restore sync finished after the response had already returned (router was slow) — ${r.error || 'failed'}. Queued for automatic retry once the router is reachable.`
-        );
-      }
-    })
-    .catch((e: any) => {
-      enqueueRouterSync(updated.router_id, updated.id, e?.message || String(e));
-      if (respondedAlready) {
-        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-          'warning',
-          'mikrotik',
-          `Payment for ${updated.username}: MikroTik restore sync threw after the response had already returned — ${e?.message || e}. Queued for automatic retry once the router is reachable.`
-        );
-      }
-    });
-  const sync = await withTimeout(syncPromise, ROUTER_CALL_BUDGET_MS, {
-    ok: false,
-    error: 'Router is slow to respond — continuing in the background. Check Logs shortly, or use Recheck Expiry.',
+  const { sync, sessionRefresh } = await restoreServiceAfterPayment(user, updated, {
+    previousStatus,
+    expirationProfile,
+    refreshSession,
   });
-  respondedAlready = true;
-
-  // Cancels any pending grace/disable schedule from before this payment and
-  // provisions a fresh one for the new due date — this is what makes "pay
-  // before it fires" work, and covers grace/expiry even if the panel is
-  // offline when they're due. Not awaited: best-effort, and a slow/unreachable
-  // router here shouldn't add latency on top of the sync call above.
-  scheduleRouterExpiry(updated, expirationProfile).catch(() => undefined);
-
-  let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
-  if (refreshSession && sync.ok && updated?.router_id) {
-    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
-    if (router?.host && router?.api_user) {
-      sessionRefresh = await bouncePppSessionForRefresh(router, updated.username, SESSION_REFRESH_MS);
-      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-        sessionRefresh.bounced ? 'info' : 'warning',
-        'mikrotik',
-        sessionRefresh.bounced
-          ? `Session refresh bounce for ${updated.username} after payment (was ${previousStatus}, ${SESSION_REFRESH_MS}ms)`
-          : `Session refresh bounce failed for ${updated.username}: ${sessionRefresh.error || 'unknown'}`
-      );
-    }
-  }
 
   return {
     ok: true,
@@ -1086,6 +1127,7 @@ export async function recordPppoePayment(
     total,
     amount: total,
     transactionId,
+    invoicesSettled: settled,
     sync,
     sessionRefresh,
     receipt,
@@ -1142,6 +1184,75 @@ export function openInvoiceBalanceForUser(pppoeUserId: number): number {
     )
     .get(pppoeUserId) as { bal: number };
   return Math.max(0, Number(row?.bal) || 0);
+}
+
+/**
+ * Recompute an invoice's status from what has been paid against it.
+ * Lives here (not in ispOps) so every payment channel settles AR the same way.
+ */
+export function refreshInvoiceStatus(id: number) {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as any;
+  if (!inv || inv.status === 'void') return;
+  const paid = Number(inv.amount_paid) || 0;
+  const amount = Number(inv.amount) || 0;
+  let status = 'unpaid';
+  if (paid <= 0) status = 'unpaid';
+  else if (paid + 0.001 >= amount) status = 'paid';
+  else status = 'partial';
+  const today = new Date().toISOString().slice(0, 10);
+  if (status !== 'paid' && inv.due_date && inv.due_date < today) status = 'overdue';
+  const paidAt = status === 'paid' ? inv.paid_at || new Date().toISOString() : null;
+  db.prepare('UPDATE invoices SET status = ?, paid_at = ? WHERE id = ?').run(status, paidAt, id);
+}
+
+/**
+ * Apply a received amount across a subscriber's open invoices, oldest first.
+ *
+ * Every payment channel calls this so a collection — at the counter, in the
+ * panel, or through a gateway — actually clears AR instead of leaving the
+ * invoice overdue and the subscriber in the dunning run. Writes only
+ * invoice_payments / invoices; the caller owns the `transactions` row.
+ */
+export function settleOpenInvoicesForUser(
+  pppoeUserId: number | null | undefined,
+  amount: number,
+  opts: { method?: string | null; note?: string | null; transactionId?: number | null } = {}
+): { applied: number; invoices: number } {
+  const userId = Number(pppoeUserId) || 0;
+  let left = Math.round((Number(amount) || 0) * 100) / 100;
+  if (!userId || left <= 0) return { applied: 0, invoices: 0 };
+
+  const open = db
+    .prepare(
+      `SELECT id, amount, amount_paid FROM invoices
+       WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')
+       ORDER BY COALESCE(due_date, period_start, created_at), id`
+    )
+    .all(userId) as { id: number; amount: number; amount_paid: number }[];
+  if (!open.length) return { applied: 0, invoices: 0 };
+
+  let applied = 0;
+  let touched = 0;
+  const ins = db.prepare(
+    `INSERT INTO invoice_payments (invoice_id, amount, method, transaction_id, note) VALUES (?, ?, ?, ?, ?)`
+  );
+  const bump = db.prepare('UPDATE invoices SET amount_paid = amount_paid + ? WHERE id = ?');
+  const tx = db.transaction(() => {
+    for (const inv of open) {
+      if (left <= 0) break;
+      const balance = Math.round(((Number(inv.amount) || 0) - (Number(inv.amount_paid) || 0)) * 100) / 100;
+      if (balance <= 0) continue;
+      const pay = Math.min(balance, left);
+      ins.run(inv.id, pay, opts.method || 'cash', opts.transactionId ?? null, opts.note ?? null);
+      bump.run(pay, inv.id);
+      refreshInvoiceStatus(inv.id);
+      left = Math.round((left - pay) * 100) / 100;
+      applied = Math.round((applied + pay) * 100) / 100;
+      touched += 1;
+    }
+  });
+  tx();
+  return { applied, invoices: touched };
 }
 
 /** Keep pending pay links aligned with current amount due (e.g. after prorated plan change). */
