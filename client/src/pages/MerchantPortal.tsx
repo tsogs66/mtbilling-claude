@@ -51,6 +51,32 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+const MAX_PAY_MONTHS = 24;
+const PAY_MONTH_OPTIONS = Array.from({ length: MAX_PAY_MONTHS }, (_, i) => i + 1);
+
+function clampPayMonths(raw: number) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(MAX_PAY_MONTHS, n);
+}
+
+/** Same day-of-month rule as the server's addMonthsPreserveDay. */
+function addMonthsPreserveDay(iso: string, months: number): string {
+  const raw = String(iso || '').slice(0, 10);
+  const [y, m, d] = raw.split('-').map(Number);
+  if (!y || !m || !d) {
+    const dt = new Date();
+    dt.setUTCMonth(dt.getUTCMonth() + months);
+    return dt.toISOString().slice(0, 10);
+  }
+  const targetMonth = m - 1 + months;
+  const ny = y + Math.floor(targetMonth / 12);
+  const nm = ((targetMonth % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDay);
+  return `${ny}-${String(nm + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 export default function MerchantPortal() {
   const { user, loading, login, logout, refresh } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -258,9 +284,15 @@ export default function MerchantPortal() {
     return () => clearTimeout(t);
   }, [reassignQ, reassignId, signedIn]);
 
+  const monthlyRate = Number(selected?.price) || 0;
   const amountPreview = useMemo(() => {
-    if (!selected) return 0;
-    return (Number(selected.price) || 0) * Math.max(1, months);
+    return Math.round(monthlyRate * clampPayMonths(months) * 100) / 100;
+  }, [monthlyRate, months]);
+  const duePreview = useMemo(() => {
+    if (!selected) return { previous: '', next: '' };
+    const previous =
+      String(selected.subscriptionDue || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+    return { previous, next: addMonthsPreserveDay(previous, clampPayMonths(months)) };
   }, [selected, months]);
 
   const doLogin = async (e: React.FormEvent) => {
@@ -349,10 +381,11 @@ export default function MerchantPortal() {
     };
     try {
       const r = await api.post('/merchant/collect', payload);
+      const nextDue = String(r.data.subscriptionDue || r.data.payment?.subscriptionDue || '').slice(0, 10);
+      const prevDue = String(r.data.previousDue || r.data.payment?.previousDue || '').slice(0, 10);
+      const postedMonths = Number(r.data.months) || months;
       show(
-        collectionType === 'online'
-          ? `Payment posted (online): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Online funds settle to the ISP (no remittance).`
-          : `Payment posted (cash): ${peso(r.data.amount)} · ${r.data.months}mo for ${selected.username}. Subscriber activated — SMS sent if phone is on file. Queued for cash remittance.`
+        `Payment posted (${collectionType === 'online' ? 'online' : 'cash'}): ${peso(r.data.amount)} · ${postedMonths} mo for ${selected.username}. Next due ${nextDue || 'updated'}${prevDue ? ` (was ${prevDue})` : ''}.`
       );
       setSelected(null);
       setQ('');
@@ -777,20 +810,50 @@ export default function MerchantPortal() {
                       {selected.customer} · {selected.account} · {selected.profile} · {peso(selected.price)}/mo
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="text-sm">
-                      <span className="text-xs text-slate-400">Months</span>
-                      <input
-                        type="number"
-                        min={1}
-                        className="input mt-1 bg-black/30 border-white/10 text-white"
-                        value={months}
-                        onChange={(e) => setMonths(Math.max(1, Number(e.target.value) || 1))}
-                      />
+                  <div className="space-y-2">
+                    <label className="text-sm block">
+                      <span className="text-xs text-slate-400">Duration (months)</span>
+                      <div className="mt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="h-11 w-11 shrink-0 rounded-xl bg-white/10 text-lg font-bold disabled:opacity-40"
+                          aria-label="Fewer months"
+                          disabled={months <= 1}
+                          onClick={() => setMonths((n) => clampPayMonths(n - 1))}
+                        >
+                          −
+                        </button>
+                        <select
+                          className="input relative z-10 bg-black/30 border-white/10 text-white"
+                          aria-label="Months paid"
+                          value={months}
+                          onChange={(e) => setMonths(clampPayMonths(Number(e.target.value)))}
+                        >
+                          {PAY_MONTH_OPTIONS.map((n) => (
+                            <option key={n} value={n} style={{ color: '#0f172a', background: '#fff' }}>
+                              {n} {n === 1 ? 'month' : 'months'}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="h-11 w-11 shrink-0 rounded-xl bg-white/10 text-lg font-bold disabled:opacity-40"
+                          aria-label="More months"
+                          disabled={months >= MAX_PAY_MONTHS}
+                          onClick={() => setMonths((n) => clampPayMonths(n + 1))}
+                        >
+                          +
+                        </button>
+                      </div>
                     </label>
-                    <div className="text-sm">
-                      <span className="text-xs text-slate-400">Amount</span>
-                      <div className="mt-1 font-bold text-lg">{peso(amountPreview)}</div>
+                    <div className="rounded-xl bg-black/25 px-3 py-2 text-sm">
+                      <div className="text-xs text-slate-400">
+                        {peso(monthlyRate)} × {months} {months === 1 ? 'month' : 'months'}
+                      </div>
+                      <div className="font-bold text-lg">{peso(amountPreview)} to collect</div>
+                      <div className="text-xs text-emerald-200/90 mt-1">
+                        Next due {duePreview.previous || 'today'} → {duePreview.next}
+                      </div>
                     </div>
                   </div>
                   <div>
@@ -923,7 +986,7 @@ export default function MerchantPortal() {
                       </label>
                       <button type="submit" className="btn-primary w-full justify-center" disabled={collectBusy}>
                         {collectBusy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                        {collectBusy ? 'Posting…' : 'Post payment & activate'}
+                        {collectBusy ? 'Posting…' : `Post ${peso(amountPreview)} · ${months} mo`}
                       </button>
                     </>
                   )}

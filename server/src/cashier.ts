@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { type AuthedRequest, sessionPayload } from './auth.js';
-import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment, cancelCashierCashPayment, isMerchantCashCancellable } from './billing.js';
+import { cashierCollectPayment, cashierStartPaymongoCheckout, reassignCashierPayment, cancelCashierCashPayment, isMerchantCashCancellable, subscriptionMonthlyRate } from './billing.js';
 import { listPaymentMerchants } from './paymentMerchants.js';
 import {
   listCashierCollectibles,
@@ -334,7 +334,12 @@ cashierRouter.get('/merchant/subscribers', requireCashier, (req: AuthedRequest, 
        LIMIT 40`
     )
     .all(like, like, like, like.replace(/\D/g, '') ? `%${q.replace(/\D/g, '')}%` : like, like);
-  res.json({ subscribers: rows });
+  res.json({
+    subscribers: (rows as any[]).map((row) => ({
+      ...row,
+      price: subscriptionMonthlyRate({ profile: row.profile, price: row.price }),
+    })),
+  });
 });
 
 cashierRouter.get('/merchant/payment-merchants', requireCashier, (_req, res) => {

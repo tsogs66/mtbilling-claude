@@ -441,6 +441,27 @@ export function mikrotikProfileForPlan(planName: string): string {
   return getBillingPlan(planName)?.pppProfile || '';
 }
 
+/** Months a merchant or pay link may apply in one payment. */
+export const MAX_PAY_MONTHS = 24;
+
+/** Whole months in 1..MAX_PAY_MONTHS. Blank or invalid input stays at 1. */
+export function normalizePayMonths(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(MAX_PAY_MONTHS, n);
+}
+
+/**
+ * Rate posted to the subscriber account. The billing plan price wins so the
+ * merchant preview, the payment link, and the account transaction match.
+ */
+export function subscriptionMonthlyRate(user: { profile?: string | null; price?: number | null }): number {
+  const plan = user.profile ? getBillingPlan(String(user.profile)) : null;
+  const planPrice = Number(plan?.price) || 0;
+  if (planPrice > 0) return planPrice;
+  return Number(user.price) || 0;
+}
+
 /**
  * Change a user's billing plan: update DB, rewrite PPP secret comment + profile
  * on MikroTik, then briefly disable/enable so the active session picks up the plan.
@@ -1031,7 +1052,7 @@ export async function recordPppoePayment(
   const previousStatus = String(user.status || '');
   const refreshSession = needsSessionRefresh(previousStatus);
 
-  const months = Math.max(1, Math.floor(Number(opts.months) || 1));
+  const months = normalizePayMonths(opts.months);
   const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const newDue = addMonthsPreserveDay(previousDue, months);
   const plan = opts.plan || user.profile;
@@ -1042,7 +1063,7 @@ export async function recordPppoePayment(
       `Billing plan "${plan}" has no linked MikroTik PPP profile. Edit the plan and select an existing profile.`
     );
   }
-  const unit = planMeta.price || Number(user.price) || 0;
+  const unit = subscriptionMonthlyRate({ profile: plan, price: user.price });
   const subtotal = unit * months;
   const discountDays = Math.max(0, Math.floor(Number(opts.discount_days) || 0));
   const discount = Math.round((unit / 30) * discountDays * 100) / 100;
@@ -1285,9 +1306,11 @@ export function createPaymentLink(opts: {
 }) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(opts.pppoeUserId) as any;
   if (!user) throw new Error('User not found');
-  const months = Math.max(1, Math.floor(Number(opts.months) || 1));
-  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(user.profile) as { price: number } | undefined;
-  const amount = opts.amount != null ? Number(opts.amount) : (Number(user.price) || prof?.price || 0) * months;
+  const months = normalizePayMonths(opts.months);
+  const unit = subscriptionMonthlyRate(user);
+  const computed = Math.round(unit * months * 100) / 100;
+  const explicit = opts.amount != null ? Number(opts.amount) : NaN;
+  const amount = Number.isFinite(explicit) && explicit > 0 ? Math.round(explicit * 100) / 100 : computed;
   const token = randomToken();
   // Default validity: 15 days (360 hours)
   const ttl = Math.max(1, Math.floor(Number(opts.ttlHours) || 15 * 24));
@@ -1851,7 +1874,6 @@ export async function cashierCollectPayment(opts: {
   const link = createPaymentLink({
     pppoeUserId: opts.pppoeUserId,
     months: opts.months,
-    amount: opts.amount,
     createdBy: 'cashier',
     cashierUserId: opts.cashier.id,
     cashierUsername: opts.cashier.username,
@@ -1961,6 +1983,8 @@ export async function cashierCollectPayment(opts: {
     token: link.token,
     amount: link.amount,
     months: link.months,
+    previousDue: (payment as any)?.previousDue || null,
+    subscriptionDue: (payment as any)?.subscriptionDue || null,
     channel,
     collectionType,
     reference,
@@ -1990,7 +2014,6 @@ export async function cashierStartPaymongoCheckout(opts: {
   const link = createPaymentLink({
     pppoeUserId: opts.pppoeUserId,
     months: opts.months,
-    amount: opts.amount,
     createdBy: 'cashier',
     cashierUserId: opts.cashier.id,
     cashierUsername: opts.cashier.username,
