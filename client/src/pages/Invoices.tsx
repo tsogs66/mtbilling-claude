@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Pie, PieChart, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts';
@@ -12,6 +12,8 @@ import { openInvoicePrint } from '../lib/invoicePrint';
 const AGING_COLORS = ['#10b981', '#f59e0b', '#f97316', '#f43f5e'];
 
 export default function Invoices() {
+  const [params] = useSearchParams();
+  const statusFilter = (params.get('status') || '').toLowerCase();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [aging, setAging] = useState<any>({});
   const [createOpen, setCreateOpen] = useState(false);
@@ -187,7 +189,11 @@ export default function Invoices() {
             { key: 'status', label: 'Status' },
             { key: 'actions', label: '', align: 'right' },
           ]}
-          rows={invoices.map((inv) => ({
+          rows={invoices.filter((inv) => {
+            if (!statusFilter) return true;
+            if (statusFilter === 'open') return ['unpaid', 'partial', 'overdue'].includes(String(inv.status));
+            return String(inv.status) === statusFilter;
+          }).map((inv) => ({
             key: inv.id,
             cells: [
               <span className="font-mono text-sm font-medium">{inv.number}</span>,

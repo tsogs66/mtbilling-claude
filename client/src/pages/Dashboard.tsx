@@ -11,6 +11,7 @@ import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { useAuth } from '../context/AuthContext';
 import InterfaceTraffic from '../components/InterfaceTraffic';
+import HudHome from '../components/HudHome';
 import { copyText } from '../lib/clipboard';
 
 interface Host {
@@ -270,14 +271,12 @@ function DashboardLicensed() {
   const [sales, setSales] = useState<Sales | null>(null);
   const [queues, setQueues] = useState<{ name: string; avgRate: number }[]>([]);
   const [statusCounts, setStatusCounts] = useState<any>(null);
-  const [finance, setFinance] = useState<any>(null);
   const [nocSummary, setNocSummary] = useState<any>(null);
   const [range, setRange] = useState('7d');
   const [queueSearch, setQueueSearch] = useState('');
 
   useEffect(() => {
     api.get('/dashboard/host').then((r) => setHost(r.data));
-    api.get('/finance/summary').then((r) => setFinance(r.data)).catch(() => setFinance(null));
     api.get('/noc/summary').then((r) => setNocSummary(r.data)).catch(() => setNocSummary(null));
   }, []);
 
@@ -321,41 +320,7 @@ function DashboardLicensed() {
 
   return (
     <Layout title="Dashboard">
-      <div className="snap-dash-hero mb-6 animate-fade-in-up">
-        <div className="snap-dash-hero-inner">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300/90 mb-1.5">Live operations</p>
-            <h2 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
-              Account Status{current ? <span className="text-orange-300"> — {current.name}</span> : ''}
-            </h2>
-            <p className="mt-1.5 text-sm text-slate-400 max-w-xl">
-              Subscriber health, cashflow, and host vitals in one glass cockpit.
-            </p>
-          </div>
-          <div className="snap-dash-hero-badge hidden sm:flex">
-            <Activity size={16} className="text-orange-300" />
-            Snapshot UI
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 mb-6">
-        <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-400" icon={CircleDot} accent="from-emerald-500/25 to-transparent" delay={0} />
-        <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-300" icon={WifiOff} accent="from-amber-500/25 to-transparent" delay={50} />
-        <StatTile label="Active" value={statusCounts?.active ?? '—'} dot="bg-sky-500" tone="text-sky-300" icon={Users} accent="from-sky-500/25 to-transparent" delay={100} />
-        <StatTile label="Expired" value={statusCounts?.expired ?? '—'} dot="bg-rose-500" tone="text-rose-300" icon={AlertTriangle} accent="from-rose-500/25 to-transparent" delay={150} />
-        <StatTile label="Non-payment" value={statusCounts?.nonPayment ?? '—'} dot="bg-orange-500" tone="text-orange-300" icon={Wallet} accent="from-orange-500/25 to-transparent" delay={200} />
-        <StatTile label="Inactive" value={statusCounts?.inactive ?? '—'} dot="bg-slate-400" tone="text-slate-300" icon={CircleDot} accent="from-slate-500/20 to-transparent" delay={250} />
-      </div>
-
-      {finance && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <StatTile label="Projected MRR" value={peso(finance.mrr)} icon={TrendingUp} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
-          <StatTile label="Income MTD" value={peso(finance.incomeThisMonth)} icon={Wallet} tone="text-emerald-600" delay={40} />
-          <StatTile label="Expenses MTD" value={peso(finance.expensesThisMonth)} icon={Wallet} tone="text-rose-600" delay={80} />
-          <StatTile label="Open AR" value={peso(finance.accountsReceivable)} icon={AlertTriangle} tone="text-amber-600" delay={120} />
-        </div>
-      )}
+      <HudHome routerId={current?.id} routerName={current?.name} statusCounts={statusCounts} />
 
       {nocSummary && (
         <div className="mb-8">
