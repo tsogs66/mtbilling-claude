@@ -122,6 +122,7 @@ import {
   bulkChangePppoeUserPlans,
   getBillingPlan,
   mikrotikProfileForPlan,
+  openInvoiceSummaryForUser,
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
   scheduleRouterExpiry,
@@ -1810,9 +1811,11 @@ app.get('/api/pppoe/users/export.csv', (req, res) => {
 
 // Full record for the edit form.
 app.get('/api/pppoe/users/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id));
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  res.json(row);
+  const open = openInvoiceSummaryForUser(id);
+  res.json({ ...row, openInvoiceBalance: open.balance, openInvoiceCount: open.count });
 });
 
 // Generate a unique 12-digit numeric account number.

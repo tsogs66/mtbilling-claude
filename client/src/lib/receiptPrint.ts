@@ -30,6 +30,8 @@ export type PaymentReceipt = {
   discountDays?: number;
   subtotal?: number;
   discount?: number;
+  /** Plan-change proration: amount paid minus the catalog plan charge. */
+  adjustment?: number;
   total?: number;
   transactionAt?: string;
   paymentDate?: string;
@@ -127,6 +129,12 @@ function amountLineText(label: string, amount: string): string {
   return `${label}${' '.repeat(Math.max(1, gap))}${amount}`;
 }
 
+function signedMoney(n: number): string {
+  const v = Number(n) || 0;
+  if (v < 0) return `-${money(Math.abs(v))}`;
+  return money(v);
+}
+
 /** Plain-text receipt for Android Share → printer apps. */
 export function buildReceiptText(receipt: PaymentReceipt): string {
   const company = (receipt.company || 'ISP Billing').toUpperCase();
@@ -134,6 +142,7 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   const extension = extensionLabel(months);
   const subtotal = Number(receipt.subtotal) || 0;
   const discount = Number(receipt.discount) || 0;
+  const adjustment = Number(receipt.adjustment) || 0;
   const total = Number(receipt.total) || 0;
   const discountDays = Number(receipt.discountDays) || 0;
   const when = receiptWhen(receipt);
@@ -157,7 +166,8 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   lines.push(RULE_TEXT);
   lines.push(amountLineText('Subtotal:', money(subtotal)));
   if (discount > 0) lines.push(amountLineText(`Discount (${discountDays}d):`, `-${money(discount)}`));
-  lines.push(amountLineText('TOTAL:', money(total)));
+  if (Math.abs(adjustment) > 0.009) lines.push(amountLineText('Adjustment:', signedMoney(adjustment)));
+  lines.push(amountLineText('Amount paid:', money(total)));
   lines.push(RULE_TEXT);
   lines.push('Thank you for your payment.');
   lines.push(RULE_TEXT);
@@ -199,6 +209,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   const discountDays = Number(receipt.discountDays) || 0;
   const subtotal = Number(receipt.subtotal) || 0;
   const discount = Number(receipt.discount) || 0;
+  const adjustment = Number(receipt.adjustment) || 0;
   const total = Number(receipt.total) || 0;
   const when = escapeReceiptHtml(receiptWhen(receipt));
   const addressLines = headerAddressLines(receipt.companyAddress);
@@ -214,6 +225,10 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   const discountBlock =
     discount > 0
       ? amountRowHtml(`Discount (${discountDays}d):`, `-${money(discount)}`)
+      : '';
+  const adjustmentBlock =
+    Math.abs(adjustment) > 0.009
+      ? amountRowHtml('Adjustment:', signedMoney(adjustment))
       : '';
 
   const printScript = autoPrint
@@ -379,7 +394,8 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
     <div class="rule">${rule}</div>
     ${amountRowHtml('Subtotal:', money(subtotal))}
     ${discountBlock}
-    ${amountRowHtml('TOTAL:', money(total), true)}
+    ${adjustmentBlock}
+    ${amountRowHtml('Amount paid:', money(total), true)}
     <div class="rule">${rule}</div>
     <div class="thanks">Thank you for your payment.</div>
     <div class="rule">${rule}</div>

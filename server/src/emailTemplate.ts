@@ -202,7 +202,12 @@ export function buildReceiptEmailBody(receipt: any): { bodyHtml: string; plainTe
   if (Number(receipt.discount) > 0) {
     rows.push([`Discount (${Number(receipt.discountDays) || 0} day/s)`, `- ${money(Number(receipt.discount))}`]);
   }
-  rows.push(['TOTAL', money(Number(receipt.total) || 0)]);
+  const adjustment = Number(receipt.adjustment) || 0;
+  if (Math.abs(adjustment) > 0.009) {
+    const signed = adjustment < 0 ? `- ${money(Math.abs(adjustment))}` : money(adjustment);
+    rows.push(['Adjustment', signed]);
+  }
+  rows.push(['Amount paid', money(Number(receipt.total) || 0)]);
 
   const rowHtml = rows
     .map(
