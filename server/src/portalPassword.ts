@@ -68,9 +68,14 @@ export function portalPasswordCandidates(plain: string): string[] {
 }
 
 export function phonesEquivalent(a: string | null | undefined, b: string | null | undefined): boolean {
-  const na = normalizePhMobile(String(a || ''));
-  const nb = normalizePhMobile(String(b || ''));
-  return !!na && !!nb && na === nb;
+  const left = String(a || '');
+  const right = String(b || '');
+  // Digits alone are not enough. "secret42" and a short contact must not
+  // compare equal, or a chosen password is treated as the mobile default.
+  if (!looksLikePhonePassword(left) || !looksLikePhonePassword(right)) return false;
+  const na = normalizePhMobile(left);
+  const nb = normalizePhMobile(right);
+  return na.startsWith('63') && na.length >= 12 && na === nb;
 }
 
 /** True when the typed password is the account's default (phone) password. */
@@ -91,6 +96,32 @@ function bcryptCompare(plain: string, hash: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Exact bcrypt of the trimmed string. Phone variants do not count. */
+export function portalPasswordExactMatch(plain: string, hash: string | null | undefined): boolean {
+  if (!hash) return false;
+  const raw = String(plain || '').trim();
+  if (!raw) return false;
+  return bcryptCompare(raw, String(hash));
+}
+
+/**
+ * Accept every field name the portal, the admin editor, and older clients send.
+ * A typed password always wins over "keep current".
+ */
+export function readPortalPasswordChange(body: Record<string, unknown> | null | undefined): {
+  password: string;
+  confirm: string;
+  keepCurrent: boolean;
+} {
+  const b = body || {};
+  const password = String(b.password || b.newPassword || b.new_password || b.pin || '').trim();
+  const confirm = String(
+    b.confirm || b.confirmPassword || b.confirm_password || b.confirmPin || ''
+  ).trim();
+  const keepFlag = b.keepCurrent === true || b.keep_current === true || b.keepDefault === true;
+  return { password, confirm, keepCurrent: keepFlag && !password };
 }
 
 /**

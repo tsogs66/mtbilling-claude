@@ -21,6 +21,7 @@ const serverRoot = path.resolve(here, '..');
 const SUITES = {
   unit: [
     'src/portalPassword.test.ts',
+    'src/portalPasswordSave.test.ts',
     'src/merchantPayMonths.test.ts',
     'src/planChangePayment.test.ts',
     'src/genieacs.test.ts',

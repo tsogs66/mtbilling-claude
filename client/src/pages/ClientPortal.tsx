@@ -203,6 +203,108 @@ function statusTone(status?: string | null) {
   return 'bg-white/10 text-slate-300 ring-1 ring-white/20';
 }
 
+function PortalPasswordCard() {
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg('');
+    const chosen = next.trim();
+    if (chosen !== confirm.trim()) {
+      setMsg('Passwords do not match');
+      return;
+    }
+    if (chosen.length < 6) {
+      setMsg('Password must be at least 6 characters');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await portalFetch('/public/portal/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          password: chosen,
+          newPassword: chosen,
+          confirm: confirm.trim(),
+          confirmPassword: confirm.trim(),
+        }),
+      });
+      if (!result?.passwordVerified) {
+        setMsg('Password was not saved. Please try again.');
+        return;
+      }
+      setNext('');
+      setConfirm('');
+      setMsg(
+        result.keptExisting
+          ? 'That password is already the one on your account.'
+          : 'Password saved. Use it the next time you sign in.'
+      );
+    } catch (err: any) {
+      setMsg(err.message || 'Could not update password');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-4 text-sm font-semibold text-orange-200 hover:text-white"
+      >
+        Change portal password
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 space-y-2 border-t border-white/15 pt-4">
+      <p className="text-sm font-semibold text-white">Change portal password</p>
+      <input
+        className="portal-field w-full px-3 py-2.5"
+        name="portal-change-password"
+        type="password"
+        value={next}
+        onChange={(e) => setNext(e.target.value)}
+        autoComplete="new-password"
+        autoCapitalize="off"
+        spellCheck={false}
+        placeholder="New password"
+        minLength={6}
+        maxLength={64}
+      />
+      <input
+        className="portal-field w-full px-3 py-2.5"
+        name="portal-change-confirm"
+        type="password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+        autoComplete="new-password"
+        autoCapitalize="off"
+        spellCheck={false}
+        placeholder="Confirm password"
+        minLength={6}
+        maxLength={64}
+      />
+      {msg && <p className="text-sm text-orange-100">{msg}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={busy} className="portal-cta rounded-xl px-4 py-2 text-sm font-semibold">
+          {busy ? 'Saving…' : 'Save password'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="text-sm text-portal-muted px-2">
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function ClientPortal() {
   const { company: brandCompany } = useCompany();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '');
@@ -387,20 +489,24 @@ export default function ClientPortal() {
     try {
       const result = await portalFetch('/public/portal/change-password', {
         method: 'POST',
-        body: JSON.stringify({ password: chosen, confirm: confirmPassword.trim() }),
+        body: JSON.stringify({
+          password: chosen,
+          newPassword: chosen,
+          confirm: confirmPassword.trim(),
+          confirmPassword: confirmPassword.trim(),
+        }),
       });
-      if (result?.mustChangePassword) {
+      if (!result?.passwordVerified || result?.mustChangePassword) {
         setPwMsg('Password was not saved. Please try again.');
         return;
       }
       setNewPassword('');
       setConfirmPassword('');
-      // Remember what they chose so login autofill can use it after sign-out.
       setPassword(chosen);
       setPwMsg(
         result?.keptExisting
-          ? 'Current password kept. Welcome to your portal.'
-          : 'Password updated. Welcome to your portal.'
+          ? 'That password is already saved. You can sign in with it.'
+          : 'Password saved. Next time, sign in with the password you just entered.'
       );
       // Optimistically clear the gate even if /me is briefly stale.
       setMe((prev: any) => (prev ? { ...prev, mustChangePassword: false } : prev));
@@ -424,7 +530,7 @@ export default function ClientPortal() {
         method: 'POST',
         body: JSON.stringify({ keepCurrent: true }),
       });
-      if (result?.mustChangePassword) {
+      if (!result?.passwordVerified || result?.mustChangePassword) {
         setPwMsg('Could not keep the current password. Please try again.');
         return;
       }
@@ -863,12 +969,15 @@ export default function ClientPortal() {
             <div className="relative mt-1.5">
               <input
                 className="portal-field w-full px-3 py-2.5 pr-11"
+                name="portal-new-password"
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 minLength={6}
                 maxLength={64}
                 autoComplete="new-password"
+                autoCapitalize="off"
+                spellCheck={false}
                 placeholder="At least 6 characters, or your phone number"
               />
               <button
@@ -885,15 +994,19 @@ export default function ClientPortal() {
             Confirm password
             <input
               className="portal-field mt-1.5 w-full px-3 py-2.5"
+              name="portal-confirm-password"
               type={showNewPassword ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               minLength={6}
               maxLength={64}
               autoComplete="new-password"
+              autoCapitalize="off"
+              spellCheck={false}
             />
           </label>
           <button
+            type="submit"
             className="portal-cta w-full inline-flex items-center justify-center gap-2 rounded-xl py-3 min-h-[48px]"
             disabled={pwBusy}
           >
@@ -967,6 +1080,7 @@ export default function ClientPortal() {
                 {s.welcomeText}
               </p>
             )}
+            <PortalPasswordCard />
           </div>
 
           {showBalance && (
