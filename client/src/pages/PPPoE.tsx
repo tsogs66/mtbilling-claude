@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -125,7 +125,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [active, setActive] = useState<any[]>([]);
   const [servers, setServers] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
-  const [search, setSearch] = useState('');
+  const [urlParams] = useSearchParams();
+  const urlSearch = urlParams.get('q') || '';
+  const [search, setSearch] = useState(urlSearch);
   const [showAdd, setShowAdd] = useState(false);
   const [payFor, setPayFor] = useState<PUser | null>(null);
   const [resendFor, setResendFor] = useState<PUser | null>(null);
@@ -609,7 +611,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     setServers([]);
     setProfiles([]);
     setTab('users');
-    setSearch('');
+    setSearch(urlSearch);
     setSelected(new Set());
     setTabError('');
     loadUsers();
