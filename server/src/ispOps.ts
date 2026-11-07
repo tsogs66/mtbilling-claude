@@ -39,8 +39,9 @@ import { initPortalExtras, pushPortalActivity, registerPortalExtraRoutes } from 
 import { loginRateLimitCheck, loginRateLimitFail, loginRateLimitSuccess } from './loginRateLimit.js';
 import {
   defaultPortalPasswordFromContact,
-  isDefaultPortalPassword,
+  portalPasswordExactMatch,
   portalPasswordMatches,
+  readPortalPasswordChange,
   validateChosenPortalPassword,
 } from './portalPassword.js';
 
@@ -165,6 +166,99 @@ export function ensureDefaultPortalCredentials(
     db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
   }
   return { ok: true, provisioned: true };
+}
+
+/**
+ * Persist a subscriber portal password and do not report success unless the
+ * exact typed string matches the hash that was just read back.
+ * A failed write rolls back, including the must-change flag.
+ */
+export function commitSubscriberPortalPassword(
+  userId: number,
+  body: Record<string, unknown> | null | undefined,
+  keepSessionToken = ''
+):
+  | { ok: true; keptExisting: boolean; passwordVerified: true; saved: boolean }
+  | { ok: false; status: number; error: string } {
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user || !user.portal_enabled) {
+    return { ok: false, status: 404, error: 'Portal account not found' };
+  }
+
+  const { password, confirm, keepCurrent } = readPortalPasswordChange(body);
+  const prevHash = user.portal_pin_hash || null;
+
+  const apply = (hashToStore: string | null, keptExisting: boolean) => {
+    const tx = db.transaction(() => {
+      const upd = hashToStore
+        ? db
+            .prepare(
+              `UPDATE pppoe_users
+               SET portal_pin_hash = ?, portal_must_change_password = 0, portal_enabled = 1
+               WHERE id = ?`
+            )
+            .run(hashToStore, userId)
+        : db
+            .prepare(
+              `UPDATE pppoe_users
+               SET portal_must_change_password = 0, portal_enabled = 1
+               WHERE id = ?`
+            )
+            .run(userId);
+      if (!upd.changes) throw new Error('Could not save password — please try again');
+      const verify = db
+        .prepare(`SELECT portal_pin_hash, portal_must_change_password FROM pppoe_users WHERE id = ?`)
+        .get(userId) as any;
+      if (!verify || Number(verify.portal_must_change_password) === 1) {
+        throw new Error('Password could not be verified after save — please try again');
+      }
+      if (hashToStore && !portalPasswordExactMatch(password, verify.portal_pin_hash)) {
+        throw new Error('Password could not be verified after save — please try again');
+      }
+      if (!hashToStore && password && !portalPasswordExactMatch(password, verify.portal_pin_hash)) {
+        throw new Error('Password could not be verified after save — please try again');
+      }
+    });
+    try {
+      tx();
+    } catch (e: any) {
+      return {
+        ok: false as const,
+        status: 500,
+        error: e?.message || 'Password could not be verified after save — please try again',
+      };
+    }
+    try {
+      db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ? AND token != ?').run(
+        userId,
+        keepSessionToken
+      );
+    } catch {
+      /* session table is created with the portal; a missing table must not undo a verified save */
+    }
+    return {
+      ok: true as const,
+      keptExisting,
+      passwordVerified: true as const,
+      saved: !keptExisting,
+    };
+  };
+
+  if (keepCurrent) {
+    if (!prevHash) return { ok: false, status: 400, error: 'No password is saved yet' };
+    return apply(null, true);
+  }
+  if (!password) return { ok: false, status: 400, error: 'Password required' };
+  if (password !== confirm) return { ok: false, status: 400, error: 'Passwords do not match' };
+  const err = validateChosenPortalPassword(password);
+  if (err) return { ok: false, status: 400, error: err };
+
+  // Phone-shaped variants used to skip the write and leave the old mobile hash.
+  // Store the exact string they typed unless that exact string is already the hash.
+  if (portalPasswordExactMatch(password, prevHash)) {
+    return apply(null, true);
+  }
+  return apply(bcrypt.hashSync(password, 10), false);
 }
 
 /** After newly provisioning portal creds, SMS the activation template (account + default password + link). */
@@ -1021,7 +1115,9 @@ ispOpsRouter.post('/client-portal/enable', (req, res) => {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   if (!user) return res.status(404).json({ error: 'subscriber not found' });
 
-  const password = String(req.body?.password || req.body?.pin || '').trim();
+  const password = String(
+    req.body?.password || req.body?.newPassword || req.body?.new_password || req.body?.pin || ''
+  ).trim();
   const useDefault =
     req.body?.useDefaultPassword === true ||
     req.body?.use_default_password === true ||
@@ -1140,11 +1236,13 @@ ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
 
   let pinHash = user.portal_pin_hash;
   let mustChange = Number(user.portal_must_change_password) === 1 ? 1 : 0;
-  const password = String(b.password ?? b.pin ?? '').trim();
+  const password = String(b.password ?? b.newPassword ?? b.new_password ?? b.pin ?? '').trim();
+  // A typed password wins. The phone default is only used when no password was sent.
   const useDefault =
-    b.useDefaultPassword === true ||
-    b.use_default_password === true ||
-    b.resetDefaultPassword === true;
+    !password &&
+    (b.useDefaultPassword === true ||
+      b.use_default_password === true ||
+      b.resetDefaultPassword === true);
 
   if (useDefault) {
     const phone = defaultPortalPasswordFromContact(contact);
@@ -1180,12 +1278,25 @@ ispOpsRouter.put('/client-portal/accounts/:id', (req, res) => {
   }
 
   const hadCreds = !!(user.portal_enabled && user.portal_pin_hash);
-  db.prepare(
-    `UPDATE pppoe_users SET
-       customer_name = ?, account_number = ?, contact = ?, email = ?,
-       portal_enabled = ?, portal_pin_hash = ?, portal_must_change_password = ?
-     WHERE id = ?`
-  ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, mustChange, id);
+  try {
+    const saveAccount = db.transaction(() => {
+      db.prepare(
+        `UPDATE pppoe_users SET
+           customer_name = ?, account_number = ?, contact = ?, email = ?,
+           portal_enabled = ?, portal_pin_hash = ?, portal_must_change_password = ?
+         WHERE id = ?`
+      ).run(customer_name, account_number, contact, email, portal_enabled, pinHash, mustChange, id);
+      if (password) {
+        const check = db.prepare('SELECT portal_pin_hash FROM pppoe_users WHERE id = ?').get(id) as any;
+        if (!portalPasswordExactMatch(password, check?.portal_pin_hash)) {
+          throw new Error('Portal password could not be verified after save');
+        }
+      }
+    });
+    saveAccount();
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message || 'Portal password could not be verified after save' });
+  }
 
   // SMS portal activation when staff newly enables with default (phone) password.
   if (portal_enabled && pinHash && mustChange === 1 && (useDefault || !hadCreds)) {
@@ -1590,15 +1701,8 @@ publicPortalRouter.post('/public/portal/forgot-password', async (req, res) => {
     return res.status(400).json({ error: 'No mobile number on file — contact your ISP' });
   }
 
-  const prevHash = user.portal_pin_hash;
-  const prevMust = Number(user.portal_must_change_password) === 1 ? 1 : 0;
+  const prevHash = user.portal_pin_hash ?? null;
   const tempPassword = generateTempPortalPassword();
-  const hash = bcrypt.hashSync(tempPassword, 10);
-  db.prepare(
-    `UPDATE pppoe_users
-     SET portal_pin_hash = ?, portal_must_change_password = 1, portal_enabled = 1
-     WHERE id = ?`
-  ).run(hash, user.id);
 
   const name = user.customer_name || user.username || 'subscriber';
   const acct = user.account_number || account;
@@ -1607,25 +1711,21 @@ publicPortalRouter.post('/public/portal/forgot-password', async (req, res) => {
     `Hi ${name}, your temporary subscriber portal password is: ${tempPassword}. ` +
     `Account: ${acct}. Sign in at /portal and set a new password right away.`;
 
-  const revert = () => {
-    db.prepare(
-      `UPDATE pppoe_users SET portal_pin_hash = ?, portal_must_change_password = ? WHERE id = ?`
-    ).run(prevHash, prevMust, user.id);
-  };
-
+  // Do not replace the saved password until the SMS is actually sent.
+  // Writing first, then reverting, wiped a password the subscriber had just chosen
+  // whenever the SMS failed or arrived after they saved a new one.
+  let status = '';
   try {
     const results = await notifyClientChannels(user, ['sms'], subject, message, 'portal_password_reset');
     const smsResult = results.find((r) => r.startsWith('sms:')) || '';
-    const status = smsResult.split(':')[1] || '';
-    if (status === 'sent') {
-      db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(user.id);
-      return res.json({
-        ok: true,
-        sent: true,
-        message: 'A temporary password was sent to your mobile number. Sign in and set a new password.',
-      });
-    }
-    revert();
+    status = smsResult.split(':')[1] || '';
+  } catch (e: any) {
+    return res.status(502).json({
+      error: e?.message || 'Could not send the SMS. Try again later or contact your ISP.',
+      sent: false,
+    });
+  }
+  if (status !== 'sent') {
     if (status === 'simulated') {
       return res.status(503).json({
         error:
@@ -1634,16 +1734,42 @@ publicPortalRouter.post('/public/portal/forgot-password', async (req, res) => {
       });
     }
     return res.status(502).json({
-      error: 'Could not send the SMS. Try again later or contact your ISP.',
-      sent: false,
-    });
-  } catch (e: any) {
-    revert();
-    return res.status(502).json({
-      error: e?.message || 'Could not send the SMS. Try again later or contact your ISP.',
+      error: 'Could not send the SMS. Your current password was not changed.',
       sent: false,
     });
   }
+
+  const hash = bcrypt.hashSync(tempPassword, 10);
+  const upd = db
+    .prepare(
+      `UPDATE pppoe_users
+       SET portal_pin_hash = ?, portal_must_change_password = 1, portal_enabled = 1
+       WHERE id = ? AND portal_pin_hash IS ?`
+    )
+    .run(hash, user.id, prevHash);
+  if (!upd.changes) {
+    return res.status(409).json({
+      error:
+        'Your password changed while the reset SMS was sending. The temporary password was not applied. Sign in with your current password.',
+      sent: true,
+    });
+  }
+  const verify = db.prepare('SELECT portal_pin_hash FROM pppoe_users WHERE id = ?').get(user.id) as any;
+  if (!portalPasswordExactMatch(tempPassword, verify?.portal_pin_hash)) {
+    db.prepare(
+      `UPDATE pppoe_users SET portal_pin_hash = ? WHERE id = ? AND portal_pin_hash = ?`
+    ).run(prevHash, user.id, hash);
+    return res.status(500).json({
+      error: 'Temporary password could not be verified after save. Your previous password is unchanged.',
+      sent: true,
+    });
+  }
+  db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(user.id);
+  return res.json({
+    ok: true,
+    sent: true,
+    message: 'A temporary password was sent to your mobile number. Sign in and set a new password.',
+  });
 });
 
 /**
@@ -1658,75 +1784,9 @@ publicPortalRouter.post('/public/portal/change-password', (req, res) => {
   const userId = portalSubscriberId(sess);
   if (!userId) return res.status(401).json({ error: 'Session expired' });
 
-  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
-  if (!user || !user.portal_enabled) {
-    return res.status(404).json({ error: 'Portal account not found' });
-  }
-
-  const keepCurrent =
-    req.body?.keepCurrent === true ||
-    req.body?.keep_current === true ||
-    req.body?.keepDefault === true;
-  const password = String(req.body?.password || '').trim();
-  const confirm = String(req.body?.confirm || req.body?.confirmPassword || '').trim();
-
-  const finish = (hashToStore: string | null, keptExisting: boolean) => {
-    const upd = hashToStore
-      ? db
-          .prepare(
-            `UPDATE pppoe_users
-             SET portal_pin_hash = ?, portal_must_change_password = 0, portal_enabled = 1
-             WHERE id = ?`
-          )
-          .run(hashToStore, userId)
-      : db
-          .prepare(
-            `UPDATE pppoe_users
-             SET portal_must_change_password = 0, portal_enabled = 1
-             WHERE id = ?`
-          )
-          .run(userId);
-    if (!upd.changes) {
-      return res.status(500).json({ error: 'Could not save password — please try again' });
-    }
-    const verify = db
-      .prepare(`SELECT portal_pin_hash, portal_must_change_password FROM pppoe_users WHERE id = ?`)
-      .get(userId) as any;
-    if (!verify || Number(verify.portal_must_change_password) === 1) {
-      return res.status(500).json({ error: 'Password could not be verified after save — please try again' });
-    }
-    if (hashToStore && password && !portalPasswordMatches(password, verify.portal_pin_hash, user.contact)) {
-      return res.status(500).json({ error: 'Password could not be verified after save — please try again' });
-    }
-    db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ? AND token != ?').run(userId, token);
-    return res.json({ ok: true, mustChangePassword: false, keptExisting });
-  };
-
-  if (keepCurrent) {
-    return finish(null, true);
-  }
-
-  if (!password) {
-    return res.status(400).json({ error: 'Password required' });
-  }
-  if (password !== confirm) return res.status(400).json({ error: 'Passwords do not match' });
-
-  const sameAsCurrent = portalPasswordMatches(password, user.portal_pin_hash, user.contact);
-  const usingDefault = isDefaultPortalPassword(password, user.contact);
-
-  // Keeping the phone number (or the password they already signed in with) is allowed.
-  if (sameAsCurrent) {
-    return finish(null, true);
-  }
-  if (usingDefault) {
-    const storedDefault = defaultPortalPasswordFromContact(user.contact);
-    return finish(bcrypt.hashSync(storedDefault || password, 10), true);
-  }
-
-  const err = validateChosenPortalPassword(password);
-  if (err) return res.status(400).json({ error: err });
-
-  return finish(bcrypt.hashSync(password, 10), false);
+  const result = commitSubscriberPortalPassword(userId, req.body || {}, token);
+  if (!result.ok) return res.status(result.status).json({ error: result.error, passwordVerified: false });
+  return res.json({ ...result, mustChangePassword: false });
 });
 
 publicPortalRouter.get('/public/portal/me', (req, res) => {

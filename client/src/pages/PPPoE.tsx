@@ -1,5 +1,5 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck, FileDown, FileUp, Send, Mail, MessageSquare } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -118,14 +118,16 @@ function isSystemPppName(name: string | null | undefined): boolean {
 const SYSTEM_EXPIRE_PROFILES = ['non-payments', 'default'];
 
 export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; title: string }) {
-  const [tab, setTab] = useState('users');
+  const [params] = useSearchParams();
+  const view = (params.get('view') || '').toLowerCase();
+  const [tab, setTab] = useState(() => (params.get('view') === 'offline' ? 'offline' : 'users'));
   const [currency, setCurrency] = useState('PHP');
   const [users, setUsers] = useState<PUser[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [active, setActive] = useState<any[]>([]);
   const [servers, setServers] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => params.get('q') || '');
   const [showAdd, setShowAdd] = useState(false);
   const [payFor, setPayFor] = useState<PUser | null>(null);
   const [resendFor, setResendFor] = useState<PUser | null>(null);
@@ -715,16 +717,36 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id, service]);
 
+  useEffect(() => {
+    const q = params.get('q');
+    if (q != null) setSearch(q);
+    if (view === 'offline') setTab('offline');
+    else if (view === 'sessions') setTab('active');
+    else if (view) setTab('users');
+  }, [params, view]);
+
   const searchLower = search.toLowerCase();
   const filtered = useMemo(
     () =>
-      users.filter(
-        (u) =>
+      users.filter((u) => {
+        const text =
           u.username.toLowerCase().includes(searchLower) ||
           (u.customer || '').toLowerCase().includes(searchLower) ||
-          (u.account || '').includes(search)
-      ),
-    [users, search, searchLower]
+          (u.account || '').includes(search);
+        if (!text) return false;
+        if (!view || view === 'sessions') return true;
+        const panel = String(u.panelStatus || u.status || '').toLowerCase().replace(/\s+/g, '-');
+        const live = String(u.status || '').toLowerCase();
+        const online = !!(u.sessionOnline || u.online === 1 || u.online === true);
+        if (view === 'online') return online && (panel === 'active' || live === 'active');
+        if (view === 'offline') return (panel === 'active' || live === 'active') && !online;
+        if (view === 'active') return panel === 'active' || live === 'active';
+        if (view === 'non-payment') return panel.includes('non') || live.includes('non');
+        if (view === 'expired') return panel === 'expired' || live === 'expired';
+        if (view === 'disabled') return panel === 'disabled' || live === 'disabled';
+        return true;
+      }),
+    [users, search, searchLower, view]
   );
   const offline = useMemo(
     () =>
@@ -1095,6 +1117,15 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       <Card noPadding interactive className="overflow-hidden">
         <TabBar tabs={TABS} active={tab} onChange={setTab} className="px-2" />
 
+        {(view || params.get('q')) && (tab === 'users' || tab === 'offline') && (
+          <p className="mx-3 mb-2 flex items-center justify-between gap-2 text-sm text-slate-600">
+            <span>
+              Showing <strong className="text-slate-800">{view || 'search'}</strong>
+              {params.get('q') ? ` · ${params.get('q')}` : ''}
+            </span>
+            <Link to="/pppoe" className="font-semibold text-brand-700">Clear</Link>
+          </p>
+        )}
         {(tab === 'users' || tab === 'offline') && (
           <>
             <Toolbar

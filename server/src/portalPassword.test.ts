@@ -8,7 +8,9 @@ import {
   looksLikePhonePassword,
   phonesEquivalent,
   portalPasswordCandidates,
+  portalPasswordExactMatch,
   portalPasswordMatches,
+  readPortalPasswordChange,
   validateChosenPortalPassword,
 } from './portalPassword.js';
 
@@ -57,6 +59,25 @@ assert(!portalPasswordMatches('09181234567', hashDashed, contactDashed), 'other 
 assert(validateChosenPortalPassword('abcdef') === null, 'valid new password');
 assert(validateChosenPortalPassword('abc') !== null, 'too short');
 assert(validateChosenPortalPassword('abc def') !== null, 'spaces rejected for new passwords');
+
+assert(!phonesEquivalent('secret42', 'secret42'), 'non-phone strings are not phone equivalents');
+assert(!phonesEquivalent('hello123456', '123456'), 'short digit strings are not mobiles');
+assert(portalPasswordExactMatch('secret42', hashCustom), 'exact custom hash matches');
+assert(!portalPasswordExactMatch('09171234567', hashCustom), 'mobile is not the custom password');
+assert(!portalPasswordMatches('09171234567', hashCustom, contactDashed), 'mobile does not open a custom password');
+
+const fromNewPassword = readPortalPasswordChange({
+  newPassword: 'Harbor9',
+  confirmPassword: 'Harbor9',
+  keepCurrent: true,
+});
+assert(fromNewPassword.password === 'Harbor9', 'newPassword is accepted');
+assert(fromNewPassword.confirm === 'Harbor9', 'confirmPassword is accepted');
+assert(fromNewPassword.keepCurrent === false, 'a typed password is not treated as keep-current');
+assert(
+  readPortalPasswordChange({ keepCurrent: true }).keepCurrent === true,
+  'keep current only when no new password was sent'
+);
 
 if (failed) {
   console.error(`\n${failed} assertion(s) failed`);

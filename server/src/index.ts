@@ -168,6 +168,7 @@ import {
   pollUsageAndFairUse,
 } from './usage.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
+import { buildCollectionReport } from './collectionReport.js';
 import { settingsRouter } from './settings.js';
 import { aiRouter } from './ai.js';
 import { terminalRouter, initTerminalWs } from './terminal.js';
@@ -1417,6 +1418,11 @@ app.get('/api/dashboard/status', async (req, res) => {
     disabled: rows.filter((r) => liveOf(r) === 'disabled' || panelOf(r) === 'disabled').length,
     live,
   });
+});
+
+app.get('/api/dashboard/collection', (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  res.json(buildCollectionReport(routerId && Number.isFinite(routerId) ? routerId : null));
 });
 
 // ---- Sales ----
