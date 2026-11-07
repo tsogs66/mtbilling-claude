@@ -2473,6 +2473,10 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   const [contactLoaded, setContactLoaded] = useState(false);
   const [openInvoiceBalance, setOpenInvoiceBalance] = useState(0);
   const [openInvoiceCount, setOpenInvoiceCount] = useState(0);
+  const [creditAmount, setCreditAmount] = useState('');
+  const [creditNote, setCreditNote] = useState('Already collected on a previous payment');
+  const [crediting, setCrediting] = useState(false);
+  const [collectOverride, setCollectOverride] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [receiptPreview, setReceiptPreview] = useState<any | null>(null);
@@ -2491,8 +2495,10 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         setSmsPhone(contact);
         setSendReceipt(!!email);
         setSendSms(!!contact);
-        setOpenInvoiceBalance(Number(row.openInvoiceBalance) || 0);
+        const balance = Number(row.openInvoiceBalance) || 0;
+        setOpenInvoiceBalance(balance);
         setOpenInvoiceCount(Number(row.openInvoiceCount) || 0);
+        setCreditAmount(balance > 0 ? balance.toFixed(2) : '');
         setContactLoaded(true);
       })
       .catch(() => {
@@ -2511,7 +2517,11 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
     openInvoiceCount === 1 && openInvoiceBalance > planTotal + 0.009
       ? Math.round((openInvoiceBalance - planTotal) * 100) / 100
       : 0;
-  const total = Math.round((planTotal + adjustment) * 100) / 100;
+  const calculatedTotal = Math.round((planTotal + adjustment) * 100) / 100;
+  const overrideRaw = collectOverride.trim();
+  const overrideAmount = overrideRaw === '' ? NaN : Number(overrideRaw);
+  const amountOverridden = Number.isFinite(overrideAmount) && overrideAmount > 0;
+  const total = amountOverridden ? Math.round(overrideAmount * 100) / 100 : calculatedTotal;
   const emailOk = !!receiptEmail.trim();
   const phoneOk = !!smsPhone.trim();
   const willRefreshSession = /non.?pay|expired|disabled/i.test(String(user.status || ''));
@@ -2536,6 +2546,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         expiration_profile: nonPaymentProfile,
         payment_date: paymentDate,
         discount_days: discountDays,
+        amount: amountOverridden ? total : undefined,
         send_receipt: sendReceipt && emailOk,
         send_sms: sendSms && phoneOk,
         receipt_email: sendReceipt ? receiptEmail.trim() : undefined,
@@ -2555,6 +2566,34 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
       setError(e?.response?.data?.error || 'Payment failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const creditBalance = async () => {
+    const amount = Number(creditAmount);
+    if (!(amount > 0)) {
+      setError('Enter the amount already paid that is still on the bill.');
+      return;
+    }
+    setCrediting(true);
+    setError('');
+    try {
+      const r = await api.post(`/pppoe/users/${user.id}/billing-correction`, {
+        amount,
+        note: creditNote.trim() || undefined,
+      });
+      const left = Number(r.data.balance) || 0;
+      setOpenInvoiceBalance(left);
+      setOpenInvoiceCount(Number(r.data.openInvoiceCount) || 0);
+      setCreditAmount(left > 0 ? left.toFixed(2) : '');
+      openReceiptForPrint(r.data.receipt, setReceiptPreview);
+      onPaid(
+        `Credited ${peso(r.data.total)} already paid for ${user.username}. Open balance is now ${peso(left)}. Due date unchanged.`
+      );
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not credit this balance');
+    } finally {
+      setCrediting(false);
     }
   };
 
@@ -2620,6 +2659,36 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         <FormField label="Discount for Downtime (Days)">
           <input className="input" type="number" min={0} value={discountDays} onChange={(e) => setDiscountDays(Math.max(0, Number(e.target.value)))} />
         </FormField>
+
+        {openInvoiceBalance > 0.009 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+            <div className="text-sm font-semibold text-amber-900">Open balance {peso(openInvoiceBalance)}</div>
+            <p className="text-xs text-amber-800 leading-relaxed">
+              Use this when a previous payment posted only the plan price. Example: the subscriber paid ₱887 after a plan change and only ₱700 was credited, so ₱187 is still open. Crediting that amount marks it paid and does not extend the due date.
+            </p>
+            <FormField label="Amount already paid">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={creditAmount}
+                onChange={(e) => setCreditAmount(e.target.value)}
+              />
+            </FormField>
+            <FormField label="Correction note">
+              <input className="input" value={creditNote} onChange={(e) => setCreditNote(e.target.value)} />
+            </FormField>
+            <button
+              type="button"
+              className="btn-secondary w-full"
+              disabled={crediting || saving}
+              onClick={() => void creditBalance()}
+            >
+              {crediting ? 'Crediting…' : `Credit ${peso(Number(creditAmount) || 0)} already paid`}
+            </button>
+          </div>
+        )}
 
         <div className="border-t border-slate-100 pt-3 space-y-3">
           <p className="text-xs text-slate-500">
@@ -2691,9 +2760,20 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
             </div>
           )}
           <div className="flex justify-between items-center pt-1">
-            <span className="font-bold text-slate-800">Amount paid</span>
+            <span className="font-bold text-slate-800">Amount to collect</span>
             <span className="font-bold text-slate-900 text-lg">{peso(total)}</span>
           </div>
+          <FormField label="Override next amount" hint="Leave blank to charge the calculated total. Type a different amount when this collection should not follow the plan math. This still extends the due date.">
+            <input
+              className="input"
+              type="number"
+              min={0}
+              step="0.01"
+              placeholder={calculatedTotal.toFixed(2)}
+              value={collectOverride}
+              onChange={(e) => setCollectOverride(e.target.value)}
+            />
+          </FormField>
         </div>
       </div>
     </Modal>

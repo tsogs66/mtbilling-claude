@@ -40,7 +40,13 @@ db.exec(`
   );
 `);
 
-import { createPaymentLink, markPaymentLinkPaid, openInvoiceBalanceForUser, recordPppoePayment } from './billing.js';
+import {
+  createPaymentLink,
+  creditAlreadyPaid,
+  markPaymentLinkPaid,
+  openInvoiceBalanceForUser,
+  recordPppoePayment,
+} from './billing.js';
 
 db.prepare(
   `INSERT INTO profiles (name, rate_limit, price, type, ppp_profile)
@@ -137,5 +143,45 @@ addInvoice(arrearsUser, 'INV-A2', 117);
 const arrearsPaid = await recordPppoePayment(arrearsUser, { months: 1, source: 'test' });
 assert.equal(arrearsPaid.total, 700);
 assert.equal(openInvoiceBalanceForUser(arrearsUser), 117);
+
+// Already paid ₱887 on a ₱900 → ₱700 change; only ₱700 was posted, so ₱187 remains.
+// Crediting that remainder clears the bill and leaves the due date where it is.
+const magno = addUser('magno.sangalang', 'PLAN700', 700);
+db.prepare(
+  `INSERT INTO invoices (number, pppoe_user_id, amount, amount_paid, status, due_date)
+   VALUES ('INV-MAGNO', ?, 887, 700, 'partial', '2026-11-20')`
+).run(magno);
+const before = db.prepare('SELECT subscription_due, price FROM pppoe_users WHERE id = ?').get(magno) as {
+  subscription_due: string;
+  price: number;
+};
+const credited = creditAlreadyPaid(magno, {
+  amount: 187,
+  note: 'Already paid 887; only 700 was posted',
+});
+assert.equal(credited.total, 187);
+assert.equal(credited.balance, 0);
+assert.equal(credited.receipt.correction, true);
+assert.equal(credited.receipt.total, 187);
+assert.equal(openInvoiceBalanceForUser(magno), 0);
+const magnoInv = db.prepare(`SELECT status, amount_paid FROM invoices WHERE number = 'INV-MAGNO'`).get() as {
+  status: string;
+  amount_paid: number;
+};
+assert.equal(magnoInv.status, 'paid');
+assert.equal(Number(magnoInv.amount_paid), 887);
+const after = db.prepare('SELECT subscription_due, price FROM pppoe_users WHERE id = ?').get(magno) as {
+  subscription_due: string;
+  price: number;
+};
+assert.equal(String(after.subscription_due).slice(0, 10), String(before.subscription_due).slice(0, 10));
+assert.equal(Number(after.price), Number(before.price));
+assert.throws(() => creditAlreadyPaid(magno, { amount: 50 }), /no open balance/);
+
+// Staff can override the next collection amount. That payment still extends service.
+const overrideUser = addUser('override.next', 'PLAN700', 700);
+const overridden = await recordPppoePayment(overrideUser, { months: 1, amount: 500, source: 'test' });
+assert.equal(overridden.total, 500);
+assert.equal(overridden.subscriptionDue, '2026-12-20');
 
 console.log('planChangePayment.test.ts: ok');

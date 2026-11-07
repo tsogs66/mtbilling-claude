@@ -1174,6 +1174,87 @@ export async function recordPppoePayment(
   };
 }
 
+/**
+ * Apply cash that was already collected but not credited (a plan-change
+ * payment that posted only the catalog price). Settles open invoices and
+ * records the missing amount. Does not move the due date or the plan price.
+ */
+export function creditAlreadyPaid(
+  userId: number,
+  opts: { amount?: number | null; note?: string | null } = {}
+) {
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) throw new Error('User not found');
+  const open = openInvoiceSummaryForUser(userId);
+  if (open.balance <= 0.009) throw new Error('This subscriber has no open balance to credit');
+  const requested = opts.amount == null || opts.amount === ('' as any) ? open.balance : Number(opts.amount);
+  if (!Number.isFinite(requested) || requested <= 0) throw new Error('Enter the amount already paid');
+  const amount = roundMoney(requested);
+  if (amount > open.balance + 0.009) {
+    throw new Error(`Credit cannot exceed the open balance of ${open.balance.toFixed(2)}`);
+  }
+  const note = String(opts.note || '').trim() || 'Already collected on a previous payment';
+  const due = String(user.subscription_due || '').slice(0, 10);
+  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const transactionAt = new Date().toISOString();
+  const receipt = {
+    company: company?.name || 'ISP Billing',
+    companyAddress: company?.address || null,
+    companyPhone: company?.phone || null,
+    companyEmail: company?.email || null,
+    account: user.account_number,
+    customer: user.customer_name || user.username,
+    plan: user.profile || '',
+    months: 0,
+    paymentDate: transactionAt.slice(0, 10),
+    transactionAt,
+    previousDue: due,
+    newDue: due,
+    subtotal: 0,
+    discount: 0,
+    discountDays: 0,
+    adjustment: amount,
+    total: amount,
+    correction: true,
+    note,
+  };
+  const txInfo = db
+    .prepare(
+      'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    .run(
+      userId,
+      user.customer_name || user.username,
+      amount,
+      'payment',
+      transactionAt,
+      JSON.stringify(receipt)
+    );
+  const transactionId = Number(txInfo.lastInsertRowid);
+  const settled = settleOpenInvoicesForUser(userId, amount, {
+    method: 'correction',
+    note,
+    transactionId,
+  });
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'billing',
+    `Billing correction for ${user.username}: credited ${amount.toFixed(2)} already paid. ${note}`
+  );
+  const after = openInvoiceSummaryForUser(userId);
+  return {
+    ok: true,
+    total: amount,
+    amount,
+    balance: after.balance,
+    openInvoiceCount: after.count,
+    invoicesSettled: settled,
+    subscriptionDue: due,
+    receipt,
+    transactionId,
+  };
+}
+
 /** Load a stored receipt snapshot, or rebuild a best-effort receipt for older transactions. */
 export function getTransactionReceipt(txId: number) {
   const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txId) as any;

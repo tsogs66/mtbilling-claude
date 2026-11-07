@@ -33,6 +33,9 @@ export type PaymentReceipt = {
   /** Plan-change proration: amount paid minus the catalog plan charge. */
   adjustment?: number;
   total?: number;
+  /** Credit for cash already collected. Does not extend service. */
+  correction?: boolean;
+  note?: string;
   transactionAt?: string;
   paymentDate?: string;
 };
@@ -49,7 +52,8 @@ function money(n: number): string {
   return `\u20b1${Number(n || 0).toFixed(2)}`;
 }
 
-function extensionLabel(months: number): string {
+function extensionLabel(months: number, correction?: boolean): string {
+  if (correction) return 'Billing correction';
   return months === 1 ? '1 month' : `${months} months`;
 }
 
@@ -138,8 +142,8 @@ function signedMoney(n: number): string {
 /** Plain-text receipt for Android Share → printer apps. */
 export function buildReceiptText(receipt: PaymentReceipt): string {
   const company = (receipt.company || 'ISP Billing').toUpperCase();
-  const months = Number(receipt.months) || 1;
-  const extension = extensionLabel(months);
+  const months = Number(receipt.months) || 0;
+  const extension = extensionLabel(receipt.correction ? 0 : months || 1, !!receipt.correction);
   const subtotal = Number(receipt.subtotal) || 0;
   const discount = Number(receipt.discount) || 0;
   const adjustment = Number(receipt.adjustment) || 0;
@@ -162,6 +166,7 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   lines.push(...stackedFieldText('Extension:', extension));
   lines.push(...stackedFieldText('Plan:', String(receipt.plan || '')));
   lines.push(...stackedFieldText('Next due:', String(receipt.newDue || '')));
+  if (receipt.note) lines.push(...stackedFieldText('Note:', String(receipt.note)));
 
   lines.push(RULE_TEXT);
   lines.push(amountLineText('Subtotal:', money(subtotal)));
@@ -204,8 +209,8 @@ function centerHtml(text: string, cls = 'line'): string {
 export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: boolean }): string {
   const autoPrint = opts?.autoPrint !== false;
   const companyRaw = (receipt.company || 'ISP Billing').toUpperCase();
-  const months = Number(receipt.months) || 1;
-  const extension = extensionLabel(months);
+  const months = Number(receipt.months) || 0;
+  const extension = extensionLabel(receipt.correction ? 0 : months || 1, !!receipt.correction);
   const discountDays = Number(receipt.discountDays) || 0;
   const subtotal = Number(receipt.subtotal) || 0;
   const discount = Number(receipt.discount) || 0;
@@ -391,6 +396,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
     ${fieldHtml('Extension:', extension)}
     ${fieldHtml('Plan:', String(receipt.plan || ''))}
     ${fieldHtml('Next due:', String(receipt.newDue || ''))}
+    ${receipt.note ? fieldHtml('Note:', String(receipt.note)) : ''}
     <div class="rule">${rule}</div>
     ${amountRowHtml('Subtotal:', money(subtotal))}
     ${discountBlock}

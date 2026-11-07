@@ -102,6 +102,7 @@ import {
 } from './outageMonitor.js';
 import {
   recordPppoePayment,
+  creditAlreadyPaid,
   getTransactionReceipt,
   createPaymentLink,
   resendPaymentLink,
@@ -2364,12 +2365,18 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
       }
     }
 
+    const rawAmount = b.amount;
+    const amount =
+      rawAmount != null && rawAmount !== '' && Number.isFinite(Number(rawAmount)) && Number(rawAmount) > 0
+        ? Number(rawAmount)
+        : undefined;
     const result = await recordPppoePayment(id, {
       months: b.months,
       plan: b.plan,
       expiration_profile: b.expiration_profile,
       payment_date: b.payment_date,
       discount_days: b.discount_days,
+      amount,
       source: 'admin',
     });
     // Email/SMS are notifications, not part of the transaction, so they must
@@ -2410,6 +2417,23 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   } catch (e: any) {
     const code = /not found/i.test(e?.message || '') ? 404 : 400;
     res.status(code).json({ error: e?.message || 'Payment failed' });
+  }
+});
+
+// Credit cash already collected (for example a plan-change payment that only
+// posted the catalog price). Does not extend the due date.
+app.post('/api/pppoe/users/:id/billing-correction', (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body || {};
+  try {
+    const result = creditAlreadyPaid(id, {
+      amount: b.amount,
+      note: b.note,
+    });
+    res.json(result);
+  } catch (e: any) {
+    const code = /not found/i.test(e?.message || '') ? 404 : 400;
+    res.status(code).json({ error: e?.message || 'Could not credit this balance' });
   }
 });
 
