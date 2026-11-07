@@ -12,6 +12,7 @@ import { useRouterDevice } from '../context/RouterContext';
 import { useAuth } from '../context/AuthContext';
 import InterfaceTraffic from '../components/InterfaceTraffic';
 import { copyText } from '../lib/clipboard';
+import CommandCenter from './CommandCenter';
 
 interface Host {
   hostname?: string;
@@ -79,7 +80,22 @@ export default function Dashboard() {
     return <SystemOverviewUnlicensed />;
   }
 
-  return <DashboardLicensed />;
+  return <LicensedHome />;
+}
+
+const HOME_VIEW_KEY = 'mt.home.view';
+
+/** Command Center is the default home; the original dashboard stays one click away. */
+function LicensedHome() {
+  const [view, setView] = useState<'command' | 'classic'>(() =>
+    localStorage.getItem(HOME_VIEW_KEY) === 'classic' ? 'classic' : 'command'
+  );
+  const choose = (next: 'command' | 'classic') => {
+    localStorage.setItem(HOME_VIEW_KEY, next);
+    setView(next);
+  };
+  if (view === 'command') return <CommandCenter onClassic={() => choose('classic')} />;
+  return <DashboardLicensed onCommand={() => choose('command')} />;
 }
 
 /** Shown on `/` when no license key has been activated. */
@@ -263,7 +279,7 @@ function SystemOverviewUnlicensed() {
   );
 }
 
-function DashboardLicensed() {
+function DashboardLicensed({ onCommand }: { onCommand: () => void }) {
   const { current } = useRouterDevice();
   const [host, setHost] = useState<Host | null>(null);
   const [router, setRouter] = useState<RouterStat | null>(null);
@@ -332,10 +348,10 @@ function DashboardLicensed() {
               Subscriber health, cashflow, and host vitals in one glass cockpit.
             </p>
           </div>
-          <div className="snap-dash-hero-badge hidden sm:flex">
+          <button type="button" onClick={onCommand} className="snap-dash-hero-badge flex cursor-pointer">
             <Activity size={16} className="text-orange-300" />
-            Snapshot UI
-          </div>
+            Open Command Center
+          </button>
         </div>
       </div>
 

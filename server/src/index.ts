@@ -92,6 +92,7 @@ import {
   prometheusMetrics,
   setStatusHubRouterId,
 } from './statusHub.js';
+import { buildCommandCenterFeed } from './commandCenter.js';
 import {
   startOutageMonitor,
   listOutageOverview,
@@ -1417,6 +1418,10 @@ app.get('/api/dashboard/status', async (req, res) => {
     disabled: rows.filter((r) => liveOf(r) === 'disabled' || panelOf(r) === 'disabled').length,
     live,
   });
+});
+
+app.get('/api/dashboard/command', (_req, res) => {
+  res.json(buildCommandCenterFeed());
 });
 
 // ---- Sales ----
