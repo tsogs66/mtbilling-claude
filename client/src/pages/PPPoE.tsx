@@ -1118,13 +1118,13 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         <TabBar tabs={TABS} active={tab} onChange={setTab} className="px-2" />
 
         {(view || params.get('q')) && (tab === 'users' || tab === 'offline') && (
-          <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          <p className="mx-3 mb-2 flex items-center justify-between gap-2 text-sm text-slate-600">
             <span>
-              Showing <strong>{view || 'search'}</strong>
-              {params.get('q') ? ` · ${params.get('q')}` : ''} from the home HUD
+              Showing <strong className="text-slate-800">{view || 'search'}</strong>
+              {params.get('q') ? ` · ${params.get('q')}` : ''}
             </span>
             <Link to="/pppoe" className="font-semibold text-brand-700">Clear</Link>
-          </div>
+          </p>
         )}
         {(tab === 'users' || tab === 'offline') && (
           <>

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
-  Cpu, HardDrive, MemoryStick, Server, Users, WifiOff, AlertTriangle, Search,
-  Activity, CircleDot, TrendingUp, Wallet, Calendar, KeyRound, ShieldAlert, Copy, CheckCircle2,
+  Cpu, HardDrive, MemoryStick, Server, Search,
+  Activity, TrendingUp, Wallet, Calendar, KeyRound, ShieldAlert, Copy, CheckCircle2,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Progress, Stat, StatTile, SectionTitle, TabPills } from '../components/ui';
@@ -323,30 +323,13 @@ function DashboardLicensed() {
       <HudHome routerId={current?.id} routerName={current?.name} statusCounts={statusCounts} />
 
       {nocSummary && (
-        <div className="mb-8">
-          <SectionTitle icon={Activity}>
-            <Link to="/noc" className="hover:text-brand-600">NOC devices</Link>
-          </SectionTitle>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatTile
-              label="Custom online"
-              value={`${nocSummary.customOnline ?? 0}/${nocSummary.customTotal ?? 0}`}
-              icon={CircleDot}
-              tone="text-emerald-600"
-              accent="from-emerald-500/15 to-transparent"
-              delay={0}
-            />
-            <StatTile
-              label="Custom offline"
-              value={String(nocSummary.customOffline ?? 0)}
-              icon={WifiOff}
-              tone="text-rose-600"
-              delay={40}
-            />
-            <StatTile label="Linked routers" value={String(nocSummary.linkedRouters ?? 0)} icon={Server} tone="text-sky-600" delay={80} />
-            <StatTile label="Linked OLTs" value={String(nocSummary.linkedOlts ?? 0)} icon={Server} tone="text-brand-600" delay={120} />
-          </div>
-        </div>
+        <p className="hud-noc">
+          <Link to="/noc">NOC</Link>
+          <span>{nocSummary.customOnline ?? 0}/{nocSummary.customTotal ?? 0} online</span>
+          <span>{nocSummary.customOffline ?? 0} offline</span>
+          <span>{nocSummary.linkedRouters ?? 0} routers</span>
+          <span>{nocSummary.linkedOlts ?? 0} OLTs</span>
+        </p>
       )}
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
@@ -413,11 +396,9 @@ function DashboardLicensed() {
               </div>
               <Progress value={router?.memPct ?? 0} color="bg-gradient-to-r from-emerald-400 to-emerald-500" />
             </div>
-            <div className="grid grid-cols-3 gap-3 pt-2">
-              <MiniStat icon={<Users size={16} />} label="Active" value={router?.activePPPoE ?? 0} tone="text-sky-600" bg="bg-sky-50 border-sky-100" />
-              <MiniStat icon={<WifiOff size={16} />} label="Offline" value={router?.offline ?? 0} tone="text-amber-600" bg="bg-amber-50 border-amber-100" />
-              <MiniStat icon={<AlertTriangle size={16} />} label="Expired" value={router?.expired ?? 0} tone="text-rose-600" bg="bg-rose-50 border-rose-100" />
-            </div>
+            <Row label="Active sessions" value={router?.activePPPoE ?? 0} />
+            <Row label="Offline" value={router?.offline ?? 0} />
+            <Row label="Expired" value={router?.expired ?? 0} />
           </div>
           )}
         </Card>
@@ -516,11 +497,3 @@ function Row({ label, value }: { label: React.ReactNode; value: React.ReactNode 
   );
 }
 
-function MiniStat({ icon, label, value, tone, bg }: { icon: React.ReactNode; label: string; value: number; tone: string; bg: string }) {
-  return (
-    <div className={`rounded-xl border px-3 py-2.5 text-center ${bg} transition-transform hover:scale-[1.02]`}>
-      <div className={`flex items-center justify-center gap-1 ${tone}`}>{icon}<span className="text-lg font-bold">{value}</span></div>
-      <div className="text-[11px] text-slate-500 mt-0.5 font-medium">{label}</div>
-    </div>
-  );
-}

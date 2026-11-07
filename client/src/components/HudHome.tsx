@@ -144,193 +144,188 @@ export default function HudHome({
     suppressClick.current = false;
   };
 
+  const readings = [
+    { label: 'Active', value: counts.active, to: '/pppoe?view=active' },
+    { label: 'Online', value: counts.online, to: '/pppoe?view=online' },
+    { label: 'Offline', value: counts.offline, to: '/pppoe?view=offline' },
+    { label: 'Non-payment', value: counts.nonPayment, to: '/pppoe?view=non-payment' },
+    { label: 'Total', value: counts.total, to: '/pppoe' },
+    { label: 'Paid', value: report?.paidCount ?? 0, to: '/sales' },
+    { label: 'On time', value: report?.onTimeCount ?? 0, to: '/sales' },
+    { label: 'Not paid', value: report?.unpaidCount ?? 0, to: '/invoices?status=open' },
+    { label: 'After due', value: report?.lateCount ?? 0, to: '/sales' },
+    { label: 'Covered', value: report?.coveredCount ?? 0, to: '/pppoe' },
+  ];
+
   return (
-    <section className="hud-home mb-8" aria-label="Operations HUD">
-      <div className="hud-frame">
-        <header className="hud-head">
-          <div>
-            <p className="hud-kicker">Command home</p>
-            <h2 className="hud-title">Subscriber HUD{routerName ? ` — ${routerName}` : ''}</h2>
-            <p className="hud-lead">
-              Drag the core. Each reading opens the page that holds that data.
-            </p>
-          </div>
-          <div className="hud-live" title={statusCounts?.live ? 'Counts include the live router' : 'Counts from the panel database'}>
-            <span className={`hud-live-dot ${statusCounts?.live ? 'is-on' : ''}`} />
-            {statusCounts?.live ? 'Live router' : 'Panel data'}
-          </div>
-        </header>
+    <section className="hud-home" aria-label="Operations HUD">
+      <header className="hud-head">
+        <div>
+          <p className="hud-kicker">Command home</p>
+          <h2 className="hud-title">Subscriber HUD{routerName ? ` — ${routerName}` : ''}</h2>
+        </div>
+        <p className="hud-live" title={statusCounts?.live ? 'Counts include the live router' : 'Counts from the panel database'}>
+          <span className={`hud-live-dot ${statusCounts?.live ? 'is-on' : ''}`} />
+          {statusCounts?.live ? 'Live router' : 'Panel data'}
+          <span className="hud-lead">Drag the core. A reading opens its page.</span>
+        </p>
+      </header>
 
-        <div className="hud-grid">
-          <div
-            className="hud-stage"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-          >
-            <div className="hud-scene" ref={sceneRef}>
-              <div className="hud-ring" />
-              <div className="hud-ring hud-ring-b" />
-              <Link to="/pppoe" className="hud-core" onClick={keepClick}>
-                <span>Total subs</span>
-                <strong>{counts.total}</strong>
+      <div className="hud-stage-row">
+        <div
+          className="hud-stage"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          <div className="hud-scene" ref={sceneRef}>
+            <div className="hud-ring" />
+            <div className="hud-ring hud-ring-b" />
+            <Link to="/pppoe" className="hud-core" onClick={keepClick}>
+              <span>Total</span>
+              <strong>{counts.total}</strong>
+            </Link>
+            {NODES.filter((n) => n.key !== 'total').map((node, i) => (
+              <Link
+                key={node.key}
+                to={`/pppoe?view=${node.view}`}
+                className="hud-node"
+                style={{ transform: `rotateY(${i * 72}deg) translateZ(132px)` }}
+                onClick={keepClick}
+              >
+                <span>{node.label}</span>
+                <strong>{valueOf(node.key)}</strong>
               </Link>
-              {NODES.filter((n) => n.key !== 'total').map((node, i) => (
-                <Link
-                  key={node.key}
-                  to={node.view ? `/pppoe?view=${node.view}` : '/pppoe'}
-                  className="hud-node"
-                  style={{ transform: `rotateY(${i * 72}deg) translateZ(148px)` }}
-                  onClick={keepClick}
-                >
-                  <span>{node.label}</span>
-                  <strong>{valueOf(node.key)}</strong>
-                </Link>
-              ))}
-            </div>
+            ))}
           </div>
+        </div>
 
-          <div className="hud-panel">
-            <div className="hud-panel-title">
-              <span>Subscriber mix</span>
-              <Link to="/pppoe">Open PPPoE</Link>
-            </div>
-            <div className="h-52">
-              {pie.length ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pie}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={48}
-                      outerRadius={74}
-                      paddingAngle={2}
-                      stroke="var(--page-fg)"
-                      strokeWidth={1}
-                      onClick={(_, index) => {
-                        const key = pie[index]?.key;
-                        if (key) navigate(`/pppoe?view=${key}`);
-                      }}
-                    >
-                      {pie.map((slice) => (
-                        <Cell key={slice.key} fill={SLICE_COLOR[slice.key] || '#38bdf8'} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <p className="hud-empty">No subscribers yet.</p>
-              )}
-            </div>
-            <div className="hud-legend">
-              {pie.map((slice) => (
-                <Link key={slice.key} to={`/pppoe?view=${slice.key}`}>
-                  <i style={{ background: SLICE_COLOR[slice.key] || '#38bdf8' }} />
-                  {slice.name} <b>{slice.value}</b>
-                </Link>
-              ))}
-            </div>
+        <div className="hud-chart">
+          <div className="hud-chart-label">
+            <span>Mix</span>
+            <Link to="/pppoe">PPPoE</Link>
           </div>
-
-          <div className="hud-panel">
-            <div className="hud-panel-title">
-              <span>This month collection</span>
-              <Link to="/finance">Finance</Link>
-            </div>
-            <div className="hud-money">
-              <Link to="/finance">
-                <span>Target</span>
-                <strong>{peso(report?.target ?? 0)}</strong>
-              </Link>
-              <Link to="/sales">
-                <span>Collected</span>
-                <strong>{peso(report?.collected ?? 0)}</strong>
-              </Link>
-              <Link to="/invoices?status=open">
-                <span>Open AR</span>
-                <strong>{peso(report?.openBalance ?? 0)}</strong>
-              </Link>
-            </div>
-            <div className="h-36 mt-2">
+          <div className="hud-pie">
+            {pie.length ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={money} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--page-fg)' }} />
-                  <YAxis hide />
-                  <Tooltip formatter={(v: number) => peso(Number(v) || 0)} />
-                  <Bar
+                <PieChart>
+                  <Pie
+                    data={pie}
                     dataKey="value"
-                    radius={[6, 6, 0, 0]}
-                    fill="var(--brand)"
+                    nameKey="name"
+                    innerRadius={46}
+                    outerRadius={70}
+                    paddingAngle={2}
+                    stroke="transparent"
                     onClick={(_, index) => {
-                      const to = money[index]?.to;
-                      if (to) navigate(to);
+                      const key = pie[index]?.key;
+                      if (key) navigate(`/pppoe?view=${key}`);
                     }}
-                  />
-                </BarChart>
+                  >
+                    {pie.map((slice) => (
+                      <Cell key={slice.key} fill={SLICE_COLOR[slice.key] || '#38bdf8'} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
               </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        <div className="hud-tiles">
-          <Link className="hud-tile" to="/pppoe?view=active"><span>Active</span><strong>{counts.active}</strong></Link>
-          <Link className="hud-tile" to="/pppoe?view=online"><span>Online</span><strong>{counts.online}</strong></Link>
-          <Link className="hud-tile" to="/pppoe?view=offline"><span>Offline</span><strong>{counts.offline}</strong></Link>
-          <Link className="hud-tile" to="/pppoe?view=non-payment"><span>Non-payment</span><strong>{counts.nonPayment}</strong></Link>
-          <Link className="hud-tile" to="/pppoe"><span>Total subs</span><strong>{counts.total}</strong></Link>
-          <Link className="hud-tile" to="/sales"><span>Paid this month</span><strong>{report?.paidCount ?? 0}</strong></Link>
-          <Link className="hud-tile" to="/sales"><span>Paid on time</span><strong>{report?.onTimeCount ?? 0}</strong></Link>
-          <Link className="hud-tile" to="/invoices?status=open"><span>Not yet paid</span><strong>{report?.unpaidCount ?? 0}</strong></Link>
-          <Link className="hud-tile" to="/sales"><span>Paid after due</span><strong>{report?.lateCount ?? 0}</strong></Link>
-          <Link className="hud-tile" to="/pppoe"><span>Already covered</span><strong>{report?.coveredCount ?? 0}</strong></Link>
-        </div>
-
-        <div className="hud-lists">
-          <div className="hud-panel">
-            <div className="hud-panel-title">
-              <span>Not paid</span>
-              <Link to="/invoices?status=open">Invoices</Link>
-            </div>
-            {report?.unpaid?.length ? (
-              <ul className="hud-people">
-                {report.unpaid.map((row) => (
-                  <li key={row.id}>
-                    <Link to={`/pppoe?q=${encodeURIComponent(row.account)}`}>
-                      <b>{row.name}</b>
-                      <span>{row.account} · due {row.due || '—'}</span>
-                    </Link>
-                    <em>{peso(row.balance || row.price || 0)}</em>
-                  </li>
-                ))}
-              </ul>
             ) : (
-              <p className="hud-empty">No unpaid subscribers in this cycle.</p>
+              <p className="hud-empty">No subscribers yet.</p>
             )}
           </div>
-          <div className="hud-panel">
-            <div className="hud-panel-title">
-              <span>Paid only after expiration</span>
-              <Link to="/sales">Sales</Link>
-            </div>
-            {report?.late?.length ? (
-              <ul className="hud-people">
-                {report.late.map((row) => (
-                  <li key={`${row.id}-${row.paidOn}`}>
-                    <Link to={`/pppoe?q=${encodeURIComponent(row.account)}`}>
-                      <b>{row.name}</b>
-                      <span>due {row.previousDue} · paid {row.paidOn}</span>
-                    </Link>
-                    <em>{peso(row.amount)}</em>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hud-empty">No after-due payments recorded this month.</p>
-            )}
+          <p className="hud-legend">
+            {pie.map((slice) => (
+              <Link key={slice.key} to={`/pppoe?view=${slice.key}`}>
+                <i style={{ background: SLICE_COLOR[slice.key] || '#38bdf8' }} />
+                {slice.name} {slice.value}
+              </Link>
+            ))}
+          </p>
+        </div>
+
+        <div className="hud-chart">
+          <div className="hud-chart-label">
+            <span>This month</span>
+            <Link to="/finance">Finance</Link>
           </div>
+          <p className="hud-money">
+            <Link to="/finance"><span>Target</span> {peso(report?.target ?? 0)}</Link>
+            <Link to="/sales"><span>Collected</span> {peso(report?.collected ?? 0)}</Link>
+            <Link to="/invoices?status=open"><span>Open</span> {peso(report?.openBalance ?? 0)}</Link>
+          </p>
+          <div className="hud-bars">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={money} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--page-fg)' }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip formatter={(v: number) => peso(Number(v) || 0)} />
+                <Bar
+                  dataKey="value"
+                  radius={[4, 4, 0, 0]}
+                  fill="var(--brand)"
+                  onClick={(_, index) => {
+                    const to = money[index]?.to;
+                    if (to) navigate(to);
+                  }}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <nav className="hud-readout" aria-label="Subscriber readings">
+        {readings.map((item) => (
+          <Link key={item.label} to={item.to}>
+            <strong>{item.value}</strong>
+            <span>{item.label}</span>
+          </Link>
+        ))}
+      </nav>
+
+      <div className="hud-names">
+        <div>
+          <p className="hud-chart-label">
+            <span>Not paid</span>
+            <Link to="/invoices?status=open">Invoices</Link>
+          </p>
+          {report?.unpaid?.length ? (
+            <ul>
+              {report.unpaid.map((row) => (
+                <li key={row.id}>
+                  <Link to={`/pppoe?q=${encodeURIComponent(row.account)}`}>
+                    {row.name}
+                    <span>{row.account} · due {row.due || '—'}</span>
+                  </Link>
+                  <em>{peso(row.balance || row.price || 0)}</em>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="hud-empty">None this cycle.</p>
+          )}
+        </div>
+        <div>
+          <p className="hud-chart-label">
+            <span>Paid after expiration</span>
+            <Link to="/sales">Sales</Link>
+          </p>
+          {report?.late?.length ? (
+            <ul>
+              {report.late.map((row) => (
+                <li key={`${row.id}-${row.paidOn}`}>
+                  <Link to={`/pppoe?q=${encodeURIComponent(row.account)}`}>
+                    {row.name}
+                    <span>due {row.previousDue} · paid {row.paidOn}</span>
+                  </Link>
+                  <em>{peso(row.amount)}</em>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="hud-empty">None this month.</p>
+          )}
         </div>
       </div>
     </section>
