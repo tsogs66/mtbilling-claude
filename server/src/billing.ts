@@ -1044,6 +1044,12 @@ export async function recordPppoePayment(
     source?: string;
     cashierUserId?: number | null;
     cashierUsername?: string | null;
+    /**
+     * Cash actually collected (pay-link amount, including a mid-cycle
+     * plan-change proration). When set, this is the receipt total and the
+     * amount applied to open invoices — not the catalog plan price.
+     */
+    amount?: number | null;
   } = {}
 ) {
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
@@ -1067,7 +1073,17 @@ export async function recordPppoePayment(
   const subtotal = unit * months;
   const discountDays = Math.max(0, Math.floor(Number(opts.discount_days) || 0));
   const discount = Math.round((unit / 30) * discountDays * 100) / 100;
-  const total = Math.max(0, Math.round((subtotal - discount) * 100) / 100);
+  const planTotal = Math.max(0, roundMoney(subtotal - discount));
+  const explicit = opts.amount != null ? Number(opts.amount) : NaN;
+  // A pay link already shows the prorated total (for example ₱817). Post that,
+  // not the catalog plan (₱700), or the difference stays on the next cycle.
+  // With no explicit amount, one open invoice above the plan charge is that
+  // same proration and has to be covered in full.
+  const total =
+    Number.isFinite(explicit) && explicit > 0
+      ? roundMoney(explicit)
+      : chargeCoveringOpenBill(userId, planTotal);
+  const adjustment = roundMoney(total - planTotal);
   const expirationProfile = opts.expiration_profile || user.expiration_profile || 'non-payments';
   const paymentDate = opts.payment_date
     ? new Date(`${String(opts.payment_date).slice(0, 10)}T00:00:00Z`).toISOString()
@@ -1098,6 +1114,7 @@ export async function recordPppoePayment(
     subtotal,
     discount,
     discountDays,
+    adjustment,
     total,
   };
 
@@ -1145,6 +1162,7 @@ export async function recordPppoePayment(
     subscriptionDue: newDue,
     subtotal,
     discount,
+    adjustment,
     total,
     amount: total,
     transactionId,
@@ -1153,6 +1171,87 @@ export async function recordPppoePayment(
     sessionRefresh,
     receipt,
     user: updated,
+  };
+}
+
+/**
+ * Apply cash that was already collected but not credited (a plan-change
+ * payment that posted only the catalog price). Settles open invoices and
+ * records the missing amount. Does not move the due date or the plan price.
+ */
+export function creditAlreadyPaid(
+  userId: number,
+  opts: { amount?: number | null; note?: string | null } = {}
+) {
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) throw new Error('User not found');
+  const open = openInvoiceSummaryForUser(userId);
+  if (open.balance <= 0.009) throw new Error('This subscriber has no open balance to credit');
+  const requested = opts.amount == null || opts.amount === ('' as any) ? open.balance : Number(opts.amount);
+  if (!Number.isFinite(requested) || requested <= 0) throw new Error('Enter the amount already paid');
+  const amount = roundMoney(requested);
+  if (amount > open.balance + 0.009) {
+    throw new Error(`Credit cannot exceed the open balance of ${open.balance.toFixed(2)}`);
+  }
+  const note = String(opts.note || '').trim() || 'Already collected on a previous payment';
+  const due = String(user.subscription_due || '').slice(0, 10);
+  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const transactionAt = new Date().toISOString();
+  const receipt = {
+    company: company?.name || 'ISP Billing',
+    companyAddress: company?.address || null,
+    companyPhone: company?.phone || null,
+    companyEmail: company?.email || null,
+    account: user.account_number,
+    customer: user.customer_name || user.username,
+    plan: user.profile || '',
+    months: 0,
+    paymentDate: transactionAt.slice(0, 10),
+    transactionAt,
+    previousDue: due,
+    newDue: due,
+    subtotal: 0,
+    discount: 0,
+    discountDays: 0,
+    adjustment: amount,
+    total: amount,
+    correction: true,
+    note,
+  };
+  const txInfo = db
+    .prepare(
+      'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    .run(
+      userId,
+      user.customer_name || user.username,
+      amount,
+      'payment',
+      transactionAt,
+      JSON.stringify(receipt)
+    );
+  const transactionId = Number(txInfo.lastInsertRowid);
+  const settled = settleOpenInvoicesForUser(userId, amount, {
+    method: 'correction',
+    note,
+    transactionId,
+  });
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'billing',
+    `Billing correction for ${user.username}: credited ${amount.toFixed(2)} already paid. ${note}`
+  );
+  const after = openInvoiceSummaryForUser(userId);
+  return {
+    ok: true,
+    total: amount,
+    amount,
+    balance: after.balance,
+    openInvoiceCount: after.count,
+    invoicesSettled: settled,
+    subscriptionDue: due,
+    receipt,
+    transactionId,
   };
 }
 
@@ -1205,6 +1304,49 @@ export function openInvoiceBalanceForUser(pppoeUserId: number): number {
     )
     .get(pppoeUserId) as { bal: number };
   return Math.max(0, Number(row?.bal) || 0);
+}
+
+function roundMoney(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/** Open invoice count plus remaining balance. */
+export function openInvoiceSummaryForUser(pppoeUserId: number): { balance: number; count: number } {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount - amount_paid), 0) AS bal, COUNT(*) AS n
+       FROM invoices
+       WHERE pppoe_user_id = ? AND status IN ('unpaid','partial','overdue')`
+    )
+    .get(pppoeUserId) as { bal: number; n: number };
+  return {
+    balance: Math.max(0, roundMoney(row?.bal)),
+    count: Number(row?.n) || 0,
+  };
+}
+
+/**
+ * Catalog plan charge, raised to a single open invoice when that invoice is
+ * higher. That invoice is the mid-cycle plan-change bill: paying only the
+ * old plan price (₱700 of an ₱817 bill) left the ₱117 on the next cycle.
+ * Several open invoices are separate arrears and are not folded into one payment.
+ */
+export function chargeCoveringOpenBill(pppoeUserId: number, planTotal: number): number {
+  const due = Math.max(0, roundMoney(planTotal));
+  const open = openInvoiceSummaryForUser(pppoeUserId);
+  if (open.count === 1 && open.balance > due + 0.009) return open.balance;
+  return due;
+}
+
+/** Catalog plan × months, raised when one open prorated invoice is higher. */
+function amountForPlanPayment(pppoeUserId: number, monthsRaw: unknown): { months: number; amount: number } {
+  const payer = db.prepare('SELECT profile, price FROM pppoe_users WHERE id = ?').get(pppoeUserId) as
+    | { profile?: string | null; price?: number | null }
+    | undefined;
+  if (!payer) throw new Error('User not found');
+  const months = normalizePayMonths(monthsRaw);
+  const planTotal = roundMoney(subscriptionMonthlyRate(payer) * months);
+  return { months, amount: chargeCoveringOpenBill(pppoeUserId, planTotal) };
 }
 
 /**
@@ -1576,8 +1718,10 @@ export async function markPaymentLinkPaid(token: string, externalRef?: string) {
       throw new Error('Payment link expired');
     }
   }
+  const collected = Number(link.amount);
   const result = await recordPppoePayment(link.pppoe_user_id, {
     months: link.months || 1,
+    amount: Number.isFinite(collected) && collected > 0 ? collected : undefined,
     source: 'pay-link',
     external_ref: externalRef || link.external_ref || undefined,
   });
@@ -1871,9 +2015,12 @@ export async function cashierCollectPayment(opts: {
     throw new Error('Enter the transaction / reference number from the receipt');
   }
 
+  const priced = amountForPlanPayment(opts.pppoeUserId, opts.months);
+  const amount = priced.amount;
   const link = createPaymentLink({
     pppoeUserId: opts.pppoeUserId,
-    months: opts.months,
+    months: priced.months,
+    amount,
     createdBy: 'cashier',
     cashierUserId: opts.cashier.id,
     cashierUsername: opts.cashier.username,
@@ -1911,6 +2058,7 @@ export async function cashierCollectPayment(opts: {
 
   const payment = await recordPppoePayment(opts.pppoeUserId, {
     months: link.months || 1,
+    amount,
     source: `cashier:${opts.cashier.username}`,
     external_ref: reference,
     cashierUserId: opts.cashier.id,
@@ -2011,9 +2159,11 @@ export async function cashierStartPaymongoCheckout(opts: {
   const optsPub = getPublicPayOptions();
   if (!optsPub.paymongo) throw new Error('PayMongo is not enabled on this panel');
 
+  const priced = amountForPlanPayment(opts.pppoeUserId, opts.months);
   const link = createPaymentLink({
     pppoeUserId: opts.pppoeUserId,
-    months: opts.months,
+    months: priced.months,
+    amount: priced.amount,
     createdBy: 'cashier',
     cashierUserId: opts.cashier.id,
     cashierUsername: opts.cashier.username,
@@ -2296,8 +2446,10 @@ export async function reassignCashierPayment(opts: {
     error: 'Router is slow — continuing in the background',
   });
 
+  const reassignedAmount = Number(link.amount);
   const payment = await recordPppoePayment(newUserId, {
     months,
+    amount: Number.isFinite(reassignedAmount) && reassignedAmount > 0 ? reassignedAmount : undefined,
     source: `cashier-reassign:${opts.cashier.username}:link:${link.id}`,
     external_ref: link.external_ref || undefined,
     cashierUserId: opts.cashier.id,

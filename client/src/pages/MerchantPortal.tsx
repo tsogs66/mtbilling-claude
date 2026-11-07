@@ -286,8 +286,12 @@ export default function MerchantPortal() {
 
   const monthlyRate = Number(selected?.price) || 0;
   const amountPreview = useMemo(() => {
-    return Math.round(monthlyRate * clampPayMonths(months) * 100) / 100;
-  }, [monthlyRate, months]);
+    const catalog = Math.round(monthlyRate * clampPayMonths(months) * 100) / 100;
+    const openBalance = Number(selected?.openBalance) || 0;
+    const openCount = Number(selected?.openInvoiceCount) || 0;
+    if (openCount === 1 && openBalance > catalog + 0.009) return Math.round(openBalance * 100) / 100;
+    return catalog;
+  }, [monthlyRate, months, selected]);
   const duePreview = useMemo(() => {
     if (!selected) return { previous: '', next: '' };
     const previous =
@@ -849,6 +853,11 @@ export default function MerchantPortal() {
                     <div className="rounded-xl bg-black/25 px-3 py-2 text-sm">
                       <div className="text-xs text-slate-400">
                         {peso(monthlyRate)} × {months} {months === 1 ? 'month' : 'months'}
+                        {amountPreview > monthlyRate * clampPayMonths(months) + 0.009 && (
+                          <span className="block text-amber-200">
+                            Includes {peso(amountPreview - monthlyRate * clampPayMonths(months))} plan adjustment
+                          </span>
+                        )}
                       </div>
                       <div className="font-bold text-lg">{peso(amountPreview)} to collect</div>
                       <div className="text-xs text-emerald-200/90 mt-1">

@@ -176,8 +176,8 @@ function money(n: number): string {
 
 /** HTML body for a payment receipt (placed inside branded wrapper). */
 export function buildReceiptEmailBody(receipt: any): { bodyHtml: string; plainText: string } {
-  const months = Number(receipt.months) || 1;
-  const extension = months === 1 ? '1 month' : `${months} months`;
+  const months = Number(receipt.months) || 0;
+  const extension = receipt.correction ? 'Billing correction' : months === 1 ? '1 month' : `${months} months`;
   const txRaw = receipt.transactionAt || receipt.paymentDate || new Date().toISOString();
   const txDate = new Date(txRaw);
   const when = Number.isFinite(txDate.getTime())
@@ -197,12 +197,18 @@ export function buildReceiptEmailBody(receipt: any): { bodyHtml: string; plainTe
     ['Extension Availed', extension],
     ['Plan', String(receipt.plan ?? '')],
     ['Next Due Date', String(receipt.newDue ?? '')],
-    ['Subtotal', money(Number(receipt.subtotal) || 0)],
   ];
+  if (receipt.note) rows.push(['Note', String(receipt.note)]);
+  rows.push(['Subtotal', money(Number(receipt.subtotal) || 0)]);
   if (Number(receipt.discount) > 0) {
     rows.push([`Discount (${Number(receipt.discountDays) || 0} day/s)`, `- ${money(Number(receipt.discount))}`]);
   }
-  rows.push(['TOTAL', money(Number(receipt.total) || 0)]);
+  const adjustment = Number(receipt.adjustment) || 0;
+  if (Math.abs(adjustment) > 0.009) {
+    const signed = adjustment < 0 ? `- ${money(Math.abs(adjustment))}` : money(adjustment);
+    rows.push(['Adjustment', signed]);
+  }
+  rows.push(['Amount paid', money(Number(receipt.total) || 0)]);
 
   const rowHtml = rows
     .map(

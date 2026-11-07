@@ -1277,7 +1277,8 @@ ispOpsRouter.post('/client-portal/plan-changes/:id/accept', async (req, res) => 
 
   try {
     db.prepare(
-      `UPDATE payment_links SET amount = ? WHERE pppoe_user_id = ? AND status = 'pending'`
+      `UPDATE payment_links SET amount = ?, months = 1
+       WHERE pppoe_user_id = ? AND status IN ('pending', 'submitted', 'rejected')`
     ).run(proration.proratedBalance, user.id);
   } catch {
     /* payment_links may be absent on older DBs */

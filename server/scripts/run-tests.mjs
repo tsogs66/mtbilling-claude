@@ -22,6 +22,7 @@ const SUITES = {
   unit: [
     'src/portalPassword.test.ts',
     'src/merchantPayMonths.test.ts',
+    'src/planChangePayment.test.ts',
     'src/genieacs.test.ts',
     'src/ispDesk.test.ts',
     'src/apiPermissions.test.ts',
