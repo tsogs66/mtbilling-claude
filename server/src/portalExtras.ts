@@ -12,6 +12,12 @@ import { notifyClientChannels } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 import { publishPortalEvent } from './portalEvents.js';
 import { getSubscriberUsageDetail } from './usage.js';
+import {
+  EXTENSION_DAYS,
+  EXTENSION_MAX_USES,
+  extensionsExhausted,
+  extensionsUsed,
+} from './extensions.js';
 
 function columnExists(table: string, col: string): boolean {
   try {
@@ -24,8 +30,6 @@ function columnExists(table: string, col: string): boolean {
 
 /** How far ahead of the due date the extension request opens. */
 const EXTENSION_WINDOW_DAYS = 7;
-/** Ceiling on a single request, so nobody asks for a free month. */
-const EXTENSION_MAX_DAYS = 14;
 
 function daysUntil(due?: string | null): number | null {
   if (!due) return null;
@@ -44,6 +48,18 @@ function addDaysIso(due: string | null | undefined, days: number): string {
   return new Date(t + days * 86400000).toISOString().slice(0, 10);
 }
 
+/**
+ * A line counts as lapsed when billing has cut it off. `disabled` / `suspended`
+ * only count when billing did it (nonpayment_since set): an extension must not
+ * switch a line back on that staff turned off for some other reason.
+ */
+function isLapsedForExtension(sess: any): boolean {
+  const st = String(sess?.status || '').toLowerCase();
+  if (st.includes('non') || st === 'expired') return true;
+  if (st === 'disabled' || st === 'suspended') return !!sess?.nonpayment_since;
+  return false;
+}
+
 /** Eligible when the line has lapsed, or the due date is within the window. */
 function extensionEligibility(sess: any): {
   eligible: boolean;
@@ -51,9 +67,7 @@ function extensionEligibility(sess: any): {
   due: string | null;
   reasonCode: 'lapsed' | 'due-soon' | 'not-yet';
 } {
-  const st = String(sess?.status || '').toLowerCase();
-  const lapsed =
-    st.includes('non') || st === 'disabled' || st === 'expired' || st === 'suspended';
+  const lapsed = isLapsedForExtension(sess);
   const d = daysUntil(sess?.subscription_due);
   const dueSoon = d != null && d <= EXTENSION_WINDOW_DAYS;
   return {
@@ -62,6 +76,127 @@ function extensionEligibility(sess: any): {
     due: sess?.subscription_due || null,
     reasonCode: lapsed ? 'lapsed' : dueSoon ? 'due-soon' : 'not-yet',
   };
+}
+
+type ExtensionGrant =
+  | { ok: true; requestId: number; grantedDays: number; previousDue: string | null; newDue: string; used: number }
+  | { ok: false; reason: 'exhausted' | 'no-subscriber' };
+
+/**
+ * The only place a due date is extended. Count check and write share one
+ * transaction (better-sqlite3 is synchronous, so two requests cannot both pass
+ * the check), which is what keeps the cap at EXTENSION_MAX_USES. If the
+ * counter cannot be read this throws and nothing is granted.
+ */
+export function grantExtension(
+  userId: number,
+  opts: { requestId?: number | null; reason?: string | null; note: string }
+): ExtensionGrant {
+  return db.transaction((): ExtensionGrant => {
+    const user = db.prepare('SELECT subscription_due FROM pppoe_users WHERE id = ?').get(userId) as any;
+    if (!user) return { ok: false, reason: 'no-subscriber' };
+    const used = extensionsUsed(userId);
+    if (used >= EXTENSION_MAX_USES) return { ok: false, reason: 'exhausted' };
+
+    const previousDue: string | null = user.subscription_due || null;
+    const newDue = addDaysIso(previousDue, EXTENSION_DAYS);
+    // Clearing nonpayment_since matters: the overdue clock in notify.ts reads
+    // it, so leaving it set would re-disable the line the extension just
+    // restored.
+    db.prepare(
+      `UPDATE pppoe_users
+       SET subscription_due = ?, status = 'Active', nonpayment_since = NULL, reminder_sent = NULL
+       WHERE id = ?`
+    ).run(newDue, userId);
+
+    let requestId = opts.requestId ?? null;
+    if (requestId != null) {
+      db.prepare(
+        `UPDATE portal_extension_requests
+         SET status = 'accepted', review_note = ?, granted_days = ?, previous_due = ?, new_due = ?,
+             reviewed_at = datetime('now')
+         WHERE id = ?`
+      ).run(opts.note, EXTENSION_DAYS, previousDue, newDue, requestId);
+    } else {
+      const info = db
+        .prepare(
+          `INSERT INTO portal_extension_requests
+             (pppoe_user_id, days_requested, granted_days, previous_due, new_due, reason, status, review_note, reviewed_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'accepted', ?, datetime('now'))`
+        )
+        .run(userId, EXTENSION_DAYS, EXTENSION_DAYS, previousDue, newDue, opts.reason || null, opts.note);
+      requestId = Number(info.lastInsertRowid);
+    }
+    return { ok: true, requestId, grantedDays: EXTENSION_DAYS, previousDue, newDue, used: used + 1 };
+  })();
+}
+
+/**
+ * Put the line back on its normal profile and re-arm the router-side
+ * grace/disable schedule against the NEW due date. Best-effort: the DB is
+ * already the source of truth, and a router that is unreachable right now gets
+ * picked up by the sync queue.
+ */
+async function syncRouterAfterExtension(userId: number): Promise<void> {
+  const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!updated) return;
+  // Imported lazily: billing.ts already imports pushPortalActivity from this
+  // module, and a static import back would make the cycle load-order
+  // sensitive for no benefit.
+  const billing = await import('./billing.js');
+  try {
+    await billing.syncUserToRouter(updated, 'restore');
+    await billing.scheduleRouterExpiry(updated);
+  } catch {
+    try {
+      billing.enqueueRouterSync(updated.router_id, userId, 'portal-extension-granted');
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/**
+ * Every extension is spent and the subscriber still has not paid: non-payment
+ * and disabled, with no further grace. Idempotent, so it is safe to call from
+ * the request path and from the overdue scheduler.
+ */
+export async function disableAfterExtensionsExhausted(userId: number, why: string): Promise<boolean> {
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) return false;
+  const st = String(user.status || '').toLowerCase();
+  if (st === 'disabled') {
+    if (!user.nonpayment_since) return false;
+    return true;
+  }
+  db.prepare(
+    `UPDATE pppoe_users
+     SET nonpayment_since = COALESCE(nonpayment_since, ?), status = 'disabled', online = 0
+     WHERE id = ?`
+  ).run(new Date().toISOString(), userId);
+  const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  const billing = await import('./billing.js');
+  try {
+    const sync = await billing.syncUserToRouter(full, 'disable');
+    if (sync.ok) billing.resolveRouterSync(full.router_id, userId);
+    else billing.enqueueRouterSync(full.router_id, userId, sync.error || 'Disable after extensions failed');
+  } catch (e: any) {
+    billing.enqueueRouterSync(full.router_id, userId, e?.message || 'Disable after extensions failed');
+  }
+  await billing.cancelRouterExpirySchedule(full).catch(() => undefined);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'billing',
+    `Disabled ${user.username}: all ${EXTENSION_MAX_USES} extensions used and the balance is still unpaid (${why})`
+  );
+  pushPortalActivity({
+    pppoeUserId: userId,
+    type: 'extension_request',
+    title: 'Service disabled',
+    body: `All ${EXTENSION_MAX_USES} extensions were used. Pay your balance to restore your connection.`,
+    entityType: 'portal_extension_request',
+  });
+  return true;
 }
 
 function portalUserFromToken(token: string): any | null {
@@ -794,10 +929,28 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
   });
 
   // ── Service extension ─────────────────────────────────────────────────────
+  // Automatic: a request is approved on the spot for EXTENSION_DAYS, at most
+  // EXTENSION_MAX_USES times between payments. See extensions.ts for the rule.
+  const extensionState = (uid: number) => {
+    let used = EXTENSION_MAX_USES;
+    try {
+      used = extensionsUsed(uid);
+    } catch {
+      /* unreadable counter: report nothing left rather than offer a grant */
+    }
+    return {
+      days: EXTENSION_DAYS,
+      maxUses: EXTENSION_MAX_USES,
+      used: Math.min(used, EXTENSION_MAX_USES),
+      remaining: Math.max(0, EXTENSION_MAX_USES - used),
+    };
+  };
+
   publicPortalRouter.get('/public/portal/extension-request', (req, res) => {
     const sess = requirePortal(req, res);
     if (!sess) return;
     const el = extensionEligibility(sess);
+    const state = extensionState(sess.uid);
     const row = db
       .prepare(
         `SELECT id, days_requested AS daysRequested, granted_days AS grantedDays,
@@ -808,54 +961,99 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
          ORDER BY id DESC LIMIT 1`
       )
       .get(sess.uid);
-    res.json({ request: row || null, ...el, maxDays: EXTENSION_MAX_DAYS });
+    res.json({
+      request: row || null,
+      ...el,
+      eligible: el.eligible && state.remaining > 0,
+      ...state,
+    });
   });
 
   publicPortalRouter.post('/public/portal/extension-request', (req, res) => {
-    const sess = requirePortal(req, res);
-    if (!sess) return;
-    const el = extensionEligibility(sess);
-    if (!el.eligible) {
-      return res.status(400).json({
-        error: `Extensions open ${EXTENSION_WINDOW_DAYS} days before your due date, or any time after it has passed`,
-      });
-    }
-    const pending = db
-      .prepare(
-        `SELECT id FROM portal_extension_requests
+    void (async () => {
+      const sess = requirePortal(req, res);
+      if (!sess) return;
+      const el = extensionEligibility(sess);
+      const overdue = el.daysUntilDue != null && el.daysUntilDue < 0;
+
+      let exhausted = true;
+      try {
+        exhausted = extensionsExhausted(sess.uid);
+      } catch {
+        /* unreadable counter: treated as exhausted, nothing is granted */
+      }
+      if (exhausted) {
+        // Fail safe: a spent allowance on a line that is already past due must
+        // end up disabled, even if the overdue scheduler has not run yet.
+        let disabled = false;
+        if (overdue || isLapsedForExtension(sess)) {
+          disabled = await disableAfterExtensionsExhausted(sess.uid, 'extension requested with none left');
+        }
+        return res.status(409).json({
+          error: disabled
+            ? `All ${EXTENSION_MAX_USES} extensions have been used. Your service is disabled until the balance is paid.`
+            : `All ${EXTENSION_MAX_USES} extensions have been used. Please pay your balance.`,
+          ...extensionState(sess.uid),
+          disabled,
+        });
+      }
+      if (!el.eligible) {
+        return res.status(400).json({
+          error: `Extensions open ${EXTENSION_WINDOW_DAYS} days before your due date, or any time after it has passed`,
+        });
+      }
+
+      // A request left pending from the manual-review days is superseded by
+      // this one; leaving it would let staff grant a second extension later.
+      db.prepare(
+        `UPDATE portal_extension_requests
+         SET status = 'rejected', review_note = 'Replaced by an automatic extension', reviewed_at = datetime('now')
          WHERE pppoe_user_id = ? AND status = 'pending'`
-      )
-      .get(sess.uid);
-    if (pending) return res.status(409).json({ error: 'You already have a pending extension request' });
-    const days = Math.min(
-      EXTENSION_MAX_DAYS,
-      Math.max(1, Math.floor(Number(req.body?.days) || 3))
-    );
-    const reason = String(req.body?.reason || '').trim() || null;
-    const info = db
-      .prepare(
-        `INSERT INTO portal_extension_requests (pppoe_user_id, days_requested, previous_due, reason, status)
-         VALUES (?, ?, ?, ?, 'pending')`
-      )
-      .run(sess.uid, days, sess.subscription_due || null, reason);
-    notifyStaff({
-      type: 'ticket',
-      title: 'Service extension request',
-      body: `${subscriberLabel(sess.uid)} asked for ${days} more day${days === 1 ? '' : 's'}${reason ? `: ${reason}` : ''}`,
-      entityType: 'portal_extension_request',
-      entityId: Number(info.lastInsertRowid),
-      pppoeUserId: sess.uid,
-      status: 'pending',
+      ).run(sess.uid);
+
+      const reason = String(req.body?.reason || '').trim() || null;
+      let grant: ExtensionGrant;
+      try {
+        grant = grantExtension(sess.uid, { reason, note: 'Approved automatically' });
+      } catch (e: any) {
+        return res.status(500).json({ error: 'Could not apply the extension. Nothing was changed.' });
+      }
+      if (!grant.ok) {
+        return res.status(409).json({ error: `All ${EXTENSION_MAX_USES} extensions have been used.`, ...extensionState(sess.uid) });
+      }
+
+      const left = EXTENSION_MAX_USES - grant.used;
+      notifyStaff({
+        type: 'ticket',
+        title: 'Service extended automatically',
+        body: `${subscriberLabel(sess.uid)} got ${EXTENSION_DAYS} more days (${grant.used} of ${EXTENSION_MAX_USES} used), new due ${grant.newDue}${reason ? `: ${reason}` : ''}`,
+        entityType: 'portal_extension_request',
+        entityId: grant.requestId,
+        pppoeUserId: sess.uid,
+        status: 'accepted',
+      });
+      pushPortalActivity({
+        pppoeUserId: sess.uid,
+        type: 'extension_request',
+        title: 'Extension approved',
+        body: `${EXTENSION_DAYS} days added, new due date ${grant.newDue}. ${
+          left > 0 ? `${left} extension${left === 1 ? '' : 's'} left.` : 'That was your last extension. Pay before the new due date to keep your service.'
+        }`,
+        entityType: 'portal_extension_request',
+        entityId: grant.requestId,
+      });
+      await syncRouterAfterExtension(sess.uid).catch(() => undefined);
+      res.status(201).json({
+        ok: true,
+        id: grant.requestId,
+        grantedDays: grant.grantedDays,
+        previousDue: grant.previousDue,
+        newDue: grant.newDue,
+        ...extensionState(sess.uid),
+      });
+    })().catch((e: any) => {
+      if (!res.headersSent) res.status(500).json({ error: e?.message || 'Could not apply extension' });
     });
-    pushPortalActivity({
-      pppoeUserId: sess.uid,
-      type: 'extension_request',
-      title: 'Extension requested',
-      body: `${days} day${days === 1 ? '' : 's'} — awaiting ISP review.`,
-      entityType: 'portal_extension_request',
-      entityId: Number(info.lastInsertRowid),
-    });
-    res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
   });
 
   // ── Ticket thread ─────────────────────────────────────────────────────────
@@ -1334,51 +1532,26 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
         return res.json({ ok: true });
       }
 
-      // Staff may grant fewer days than asked for.
-      const granted = Math.min(
-        EXTENSION_MAX_DAYS,
-        Math.max(1, Math.floor(Number(req.body?.days) || Number(row.days_requested) || 1))
-      );
-      const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(row.pppoe_user_id) as any;
-      if (!user) return res.status(404).json({ error: 'Subscriber not found' });
-
-      const previousDue = user.subscription_due || null;
-      const newDue = addDaysIso(previousDue, granted);
-      // Clearing nonpayment_since matters: the overdue clock in notify.ts reads
-      // it, so leaving it set would re-disable the line the extension just
-      // restored.
-      db.prepare(
-        `UPDATE pppoe_users
-         SET subscription_due = ?, status = 'Active', nonpayment_since = NULL, reminder_sent = NULL
-         WHERE id = ?`
-      ).run(newDue, row.pppoe_user_id);
-      db.prepare(
-        `UPDATE portal_extension_requests
-         SET status = 'accepted', review_note = ?, granted_days = ?, previous_due = ?, new_due = ?,
-             reviewed_at = datetime('now')
-         WHERE id = ?`
-      ).run(reviewNote, granted, previousDue, newDue, id);
-
-      // Put the line back on its normal profile and re-arm the router-side
-      // grace/disable schedule against the NEW due date. Best-effort: the DB is
-      // already the source of truth, and a router that is unreachable right now
-      // gets picked up by the sync queue.
-      const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(row.pppoe_user_id) as any;
-      // Imported lazily: billing.ts already imports pushPortalActivity from this
-      // module, and a static import back would make the cycle load-order
-      // sensitive for no benefit — this only runs inside a request.
+      // Same rule as the portal: fixed days, capped uses. A request left over
+      // from the manual-review days cannot be used to go past the cap.
+      let grant: ExtensionGrant;
       try {
-        const billing = await import('./billing.js');
-        await billing.syncUserToRouter(updated, 'restore');
-        await billing.scheduleRouterExpiry(updated);
+        grant = grantExtension(row.pppoe_user_id, { requestId: id, note: reviewNote || 'Approved by staff' });
       } catch {
-        try {
-          const billing = await import('./billing.js');
-          billing.enqueueRouterSync(updated?.router_id, row.pppoe_user_id, 'portal-extension-granted');
-        } catch {
-          /* best-effort */
-        }
+        return res.status(500).json({ error: 'Could not apply the extension. Nothing was changed.' });
       }
+      if (!grant.ok) {
+        if (grant.reason === 'no-subscriber') return res.status(404).json({ error: 'Subscriber not found' });
+        db.prepare(
+          `UPDATE portal_extension_requests
+           SET status = 'rejected', review_note = ?, reviewed_at = datetime('now') WHERE id = ?`
+        ).run(`All ${EXTENSION_MAX_USES} extensions already used`, id);
+        return res.status(409).json({ error: `This subscriber has already used all ${EXTENSION_MAX_USES} extensions` });
+      }
+      const granted = grant.grantedDays;
+      const previousDue = grant.previousDue;
+      const newDue = grant.newDue;
+      await syncRouterAfterExtension(row.pppoe_user_id).catch(() => undefined);
 
       pushPortalActivity({
         pppoeUserId: row.pppoe_user_id,

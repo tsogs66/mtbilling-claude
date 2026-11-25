@@ -94,7 +94,6 @@ function PortalRequestsPanel() {
   const [referrals, setReferrals] = useState<any[]>([]);
   const [msg, setMsg] = useState('');
   /** Staff may grant fewer days than asked; keyed by request id. */
-  const [grantDays, setGrantDays] = useState<Record<number, number>>({});
 
   const load = () => {
     void api.get('/portal-requests/addons').then((r) => setAddons(r.data.items || [])).catch(() => setAddons([]));
@@ -126,13 +125,17 @@ function PortalRequestsPanel() {
     setMsg(`Reconnect ${decision}ed`);
     load();
   };
-  const decideExtension = async (id: number, decision: 'accept' | 'reject', days?: number) => {
-    const r = await api.post(`/portal-requests/extensions/${id}/decide`, { decision, days });
-    setMsg(
-      decision === 'accept'
-        ? `Extension granted — ${r.data?.grantedDays} day(s), new due ${r.data?.newDue}`
-        : 'Extension rejected'
-    );
+  const decideExtension = async (id: number, decision: 'accept' | 'reject') => {
+    try {
+      const r = await api.post(`/portal-requests/extensions/${id}/decide`, { decision });
+      setMsg(
+        decision === 'accept'
+          ? `Extension granted — ${r.data?.grantedDays} day(s), new due ${r.data?.newDue}`
+          : 'Extension rejected'
+      );
+    } catch (e: any) {
+      setMsg(e?.response?.data?.error || 'Could not decide this extension');
+    }
     load();
   };
 
@@ -207,7 +210,6 @@ function PortalRequestsPanel() {
       <Card title="Service extension requests" icon={CalendarClock}>
         <ul className="divide-y divide-slate-100">
           {extensions.map((e) => {
-            const days = grantDays[e.id] ?? e.daysRequested ?? 3;
             return (
               <li key={e.id} className="py-2.5 flex flex-wrap items-center gap-2 justify-between">
                 <div className="text-sm">
@@ -222,24 +224,10 @@ function PortalRequestsPanel() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <label className="text-xs text-slate-500 flex items-center gap-1">
-                    Grant
-                    <input
-                      type="number"
-                      min={1}
-                      max={14}
-                      className="input w-16 text-xs py-1"
-                      value={days}
-                      onChange={(ev) =>
-                        setGrantDays((g) => ({ ...g, [e.id]: Number(ev.target.value) || 1 }))
-                      }
-                    />
-                    d
-                  </label>
                   <button
                     type="button"
                     className="btn-primary text-xs"
-                    onClick={() => void decideExtension(e.id, 'accept', days)}
+                    onClick={() => void decideExtension(e.id, 'accept')}
                   >
                     <Check size={14} /> Accept
                   </button>
@@ -259,8 +247,9 @@ function PortalRequestsPanel() {
           )}
         </ul>
         <p className="text-xs text-slate-400 pt-2 border-t border-slate-100">
-          Accepting moves the subscriber&rsquo;s due date forward, sets the account back to Active,
-          and re-arms the router grace/disable schedule against the new date.
+          New requests are approved automatically: 3 days each, up to 3 times until the subscriber
+          pays. After the third, an unpaid account goes non-payment and is disabled. Only requests
+          left over from before that rule appear here; accepting one follows the same 3-day, 3-use limit.
         </p>
       </Card>
       <Card title="Referral leads" icon={Users}>

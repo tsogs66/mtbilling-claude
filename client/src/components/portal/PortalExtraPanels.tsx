@@ -666,7 +666,6 @@ export function PortalRequestTabs({
   const [reconMsg, setReconMsg] = useState('');
   const [reconBusy, setReconBusy] = useState(false);
 
-  const [extDays, setExtDays] = useState(3);
   const [extReason, setExtReason] = useState('');
   const [extMsg, setExtMsg] = useState('');
   const [extBusy, setExtBusy] = useState(false);
@@ -699,7 +698,7 @@ export function PortalRequestTabs({
   if (lapsed || reconPending) {
     tabs.push({ id: 'reconnect', label: 'Reconnect', icon: ShieldAlert, pending: reconPending });
   }
-  if (ext?.eligible || extPending) {
+  if (ext?.eligible || extPending || (ext && ext.remaining === 0 && (ext.daysUntilDue ?? 1) <= 7)) {
     tabs.push({ id: 'extension', label: 'Extend service', icon: CalendarPlus, pending: extPending });
   }
   if (!tabs.length) return null;
@@ -727,9 +726,10 @@ export function PortalRequestTabs({
     try {
       await portalFetch('/public/portal/extension-request', {
         method: 'POST',
-        body: JSON.stringify({ days: extDays, reason: extReason }),
+        body: JSON.stringify({ reason: extReason }),
       });
-      setExtMsg('Request sent — your ISP will review it.');
+      setExtMsg('Done. Your due date has been moved.');
+      setExtReason('');
       loadExt();
     } catch (e: any) {
       setExtMsg(e.message || 'Could not send request');
@@ -824,7 +824,7 @@ export function PortalRequestTabs({
         <div id="request-panel-extension" role="tabpanel" className="mt-3 pt-3 border-t border-white/10">
           <p className="text-sm font-semibold text-white mb-1">Extend my service</p>
           <p className="text-sm text-portal-muted mb-2 leading-relaxed">
-            Need a few more days before you can pay? Ask your ISP to move your due date.
+            Need a few more days before you can pay? Move your due date yourself, no waiting.
           </p>
           <p className="text-sm text-portal-muted mb-3">
             {dueLine}
@@ -832,51 +832,32 @@ export function PortalRequestTabs({
               <span className="text-portal-dim"> Due date {String(ext.due).slice(0, 10)}.</span>
             ) : null}
           </p>
-          {extPending ? (
-            <div className="rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
-              Pending review — you asked for{' '}
-              <b>
-                {last.daysRequested} day{last.daysRequested === 1 ? '' : 's'}
-              </b>
-              {last.reason ? `: ${last.reason}` : ''}.
+          {extPending && (
+            <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2.5 text-sm text-amber-100">
+              An older request is still waiting for review. Sending a new one replaces it.
             </div>
-          ) : (
+          )}
+          {last?.status === 'accepted' && (
+            <div className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2.5 text-sm text-emerald-100">
+              Last extension approved — {last.grantedDays} day{last.grantedDays === 1 ? '' : 's'} added
+              {last.newDue ? `, new due date ${String(last.newDue).slice(0, 10)}` : ''}.
+            </div>
+          )}
+          <p className="text-sm text-portal-muted mb-3">
+            Extensions are approved right away: <b className="text-white">{ext?.days ?? 3} days</b> each.
+            You have <b className="text-white">{ext?.remaining ?? 0} of {ext?.maxUses ?? 3}</b> left.
+          </p>
+          {(ext?.remaining ?? 0) > 0 ? (
             <>
-              {last?.status === 'accepted' && (
-                <div className="mb-3 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-3 py-2.5 text-sm text-emerald-100">
-                  Last request approved — {last.grantedDays} day{last.grantedDays === 1 ? '' : 's'} added
-                  {last.newDue ? `, new due date ${String(last.newDue).slice(0, 10)}` : ''}.
-                </div>
-              )}
-              {last?.status === 'rejected' && (
+              {(ext?.remaining ?? 0) === 1 && (
                 <div className="mb-3 rounded-xl border border-rose-400/30 bg-rose-500/15 px-3 py-2.5 text-sm text-rose-100">
-                  Last request was declined{last.reviewNote ? `: ${last.reviewNote}` : ''}.
+                  This is your last extension. If the balance is still unpaid when it ends, your account goes to
+                  non-payment and is disabled.
                 </div>
               )}
-              <label className="block text-xs text-portal-dim mb-2">
-                How many extra days?
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {[3, 5, 7, 14]
-                    .filter((n) => n <= (ext?.maxDays || 14))
-                    .map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => setExtDays(n)}
-                        className={`text-sm px-3 py-2 min-h-[40px] rounded-lg border transition ${
-                          extDays === n
-                            ? 'bg-orange-500/25 border-orange-400/45 text-orange-100 font-semibold'
-                            : 'border-white/12 text-portal-muted hover:text-white'
-                        }`}
-                      >
-                        {n} days
-                      </button>
-                    ))}
-                </div>
-              </label>
               <textarea
                 className="portal-field w-full px-3 py-2.5 mt-1"
-                placeholder="Reason (optional) — e.g. salary comes in on Friday"
+                placeholder="Reason (optional), e.g. salary comes in on Friday"
                 value={extReason}
                 onChange={(e) => setExtReason(e.target.value)}
               />
@@ -886,12 +867,16 @@ export function PortalRequestTabs({
                 disabled={extBusy}
                 onClick={() => void submitExt()}
               >
-                {extBusy ? 'Sending…' : `Request ${extDays} more days`}
+                {extBusy ? 'Extending…' : `Extend ${ext?.days ?? 3} days now`}
               </button>
               <p className="text-[11px] text-portal-dim mt-2 leading-relaxed">
-                An extension moves your due date — it does not clear your balance.
+                An extension moves your due date. It does not clear your balance.
               </p>
             </>
+          ) : (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/15 px-3 py-2.5 text-sm text-rose-100">
+              You have used all your extensions. Please pay your balance to keep or restore your service.
+            </div>
           )}
           {extMsg && <p className="text-xs text-portal-muted mt-2">{extMsg}</p>}
         </div>
