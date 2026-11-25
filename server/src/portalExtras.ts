@@ -12,6 +12,16 @@ import { notifyClientChannels } from './notify.js';
 import { notifyStaff, subscriberLabel } from './staffNotifications.js';
 import { publishPortalEvent } from './portalEvents.js';
 import { getSubscriberUsageDetail } from './usage.js';
+import { getAcsDevice, publicAcsConfig, setAcsWifiCredentials } from './genieacs.js';
+import {
+  currentSsid,
+  ensureWifiTable,
+  lastWifiChangeAt,
+  recentWifiChanges,
+  recordWifiChange,
+  validateWifiInput,
+  WIFI_MAX_CHANGES_PER_HOUR,
+} from './portalWifi.js';
 
 function columnExists(table: string, col: string): boolean {
   try {
@@ -143,6 +153,7 @@ export function pushPortalActivity(opts: {
 }
 
 export function initPortalExtras() {
+  ensureWifiTable();
   db.exec(`
     CREATE TABLE IF NOT EXISTS portal_activity (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -856,6 +867,89 @@ export function registerPortalExtraRoutes(publicPortalRouter: Router, ispOpsRout
       entityId: Number(info.lastInsertRowid),
     });
     res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
+  });
+
+  // ── Wi-Fi name and password (TR-069) ──────────────────────────────────────
+  // Pushes through the same ACS path the Operations Desk uses. The credentials
+  // are never stored here or logged: staff read the saved Wi-Fi password from
+  // the device record on the CPE / TR-069 page.
+  const wifiDeviceFor = (uid: number): string | null => {
+    const row = db.prepare('SELECT acs_device_id FROM pppoe_users WHERE id = ?').get(uid) as any;
+    const id = String(row?.acs_device_id || '').trim();
+    return id || null;
+  };
+
+  publicPortalRouter.get('/public/portal/wifi', (req, res) => {
+    void (async () => {
+      const sess = requirePortal(req, res);
+      if (!sess) return;
+      const base = { maxPerHour: WIFI_MAX_CHANGES_PER_HOUR, lastChangedAt: lastWifiChangeAt(sess.uid) };
+      let enabled = false;
+      try {
+        enabled = !!publicAcsConfig().enabled;
+      } catch {
+        /* treated as unavailable */
+      }
+      const deviceId = wifiDeviceFor(sess.uid);
+      if (!enabled || !deviceId) {
+        return res.json({ ...base, available: false, reason: !enabled ? 'acs-disabled' : 'not-linked', ssid: null });
+      }
+      let ssid: string | null = null;
+      try {
+        ssid = currentSsid(await getAcsDevice(deviceId));
+      } catch {
+        /* the device may be offline; changing is still possible, it just queues */
+      }
+      res.json({ ...base, available: true, ssid });
+    })().catch(() => {
+      if (!res.headersSent) res.status(500).json({ error: 'Could not load Wi-Fi settings' });
+    });
+  });
+
+  publicPortalRouter.post('/public/portal/wifi', (req, res) => {
+    void (async () => {
+      const sess = requirePortal(req, res);
+      if (!sess) return;
+      const input = validateWifiInput(req.body);
+      if (!input.ok) return res.status(400).json({ error: input.error });
+
+      let enabled = false;
+      try {
+        enabled = !!publicAcsConfig().enabled;
+      } catch {
+        /* treated as unavailable */
+      }
+      const deviceId = wifiDeviceFor(sess.uid);
+      if (!enabled || !deviceId) {
+        return res.status(409).json({ error: 'Wi-Fi changes are not available for your account yet. Please contact your ISP.' });
+      }
+      if (recentWifiChanges(sess.uid) >= WIFI_MAX_CHANGES_PER_HOUR) {
+        return res.status(429).json({ error: 'You have changed your Wi-Fi several times in the last hour. Please try again later.' });
+      }
+
+      try {
+        await setAcsWifiCredentials(deviceId, { ssid: input.ssid, password: input.password });
+      } catch (e: any) {
+        const msg = String(e?.message || '');
+        console.warn('[portal wifi] push failed for', sess.uid, msg.slice(0, 160));
+        return res.status(502).json({ error: 'We could not reach your router right now. Please try again in a few minutes.' });
+      }
+      recordWifiChange(sess.uid, !!input.ssid, !!input.password);
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'portal',
+        `${sess.username} changed ${[input.ssid ? 'Wi-Fi name' : '', input.password ? 'Wi-Fi password' : ''].filter(Boolean).join(' and ')} from the portal`
+      );
+      pushPortalActivity({
+        pppoeUserId: sess.uid,
+        type: 'wifi_change',
+        title: 'Wi-Fi updated',
+        body: `${[input.ssid ? 'Name' : '', input.password ? 'Password' : ''].filter(Boolean).join(' and ')} change sent to your router.`,
+      });
+      res.json({ ok: true, ssid: input.ssid ?? null, passwordChanged: !!input.password });
+    })().catch(() => {
+      if (!res.headersSent) res.status(500).json({ error: 'Could not change Wi-Fi settings' });
+    });
   });
 
   // ── Ticket thread ─────────────────────────────────────────────────────────

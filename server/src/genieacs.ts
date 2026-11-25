@@ -260,6 +260,15 @@ export function rememberAcsDeviceDocs(devices: unknown[]): void {
   pruneAcsDocCache();
 }
 
+/**
+ * Forget a device's cached document so the next read goes back to GenieACS.
+ * Used after a Wi-Fi push: staff read the saved password from this document,
+ * and the 10-minute cache would otherwise keep showing the old one.
+ */
+export function forgetAcsDeviceDoc(deviceId: string): void {
+  for (const key of acsDeviceIdLookupVariants(deviceId)) acsDocCache.delete(key);
+}
+
 function cachedAcsDeviceDoc(deviceId: string): unknown | null {
   const now = Date.now();
   for (const key of acsDeviceIdLookupVariants(deviceId)) {
@@ -810,7 +819,9 @@ export async function setAcsWifiCredentials(
     if (path) values.push([path, password, 'xsd:string']);
   }
   if (!values.length) throw new Error('ssid-or-password-required');
-  return setAcsParameterValues(deviceId, values);
+  const out = await setAcsParameterValues(deviceId, values);
+  forgetAcsDeviceDoc(deviceId);
+  return out;
 }
 
 export function listSubscriberAcsLinks() {
