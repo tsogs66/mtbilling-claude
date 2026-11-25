@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react';
-import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, LabelList } from 'recharts';
-import { Wallet, Receipt, TrendingUp, CalendarDays, Trash2, Printer, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Download, Eraser, Loader2, Printer, RefreshCw, Trash2, X } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatTile, TabPills, DataTable, Flash } from '../components/ui';
+import { Flash } from '../components/ui';
 import ReceiptPrintModal from '../components/ReceiptPrintModal';
+import {
+  Col, compactMoney, downloadCsv, money, moneyExact, num, PageBar, PanelHead, Popover, Reading, Readings, SearchBox, Seg, Table, TONE_VAR,
+} from '../components/command/kit';
 import { api, peso } from '../api';
 import { openReceiptForPrint, type PaymentReceipt } from '../lib/receiptPrint';
 import { openSalesReportPrint } from '../lib/invoicePrint';
 import { useCompany } from '../context/CompanyContext';
 
-const GROUPS = [
+type Group = 'month' | 'year';
+
+const GROUPS: { key: Group; label: string }[] = [
   { key: 'month', label: 'Monthly' },
   { key: 'year', label: 'Yearly' },
 ];
@@ -23,9 +28,12 @@ function defaultTo() {
   return new Date().toISOString().slice(0, 10);
 }
 
+const isCancel = (t: any) => String(t.type || '').includes('cancel');
+const typeLabel = (t: any) => String(t.type || 'other').replace(/_/g, ' ');
+
 export default function SalesReport() {
   const { company } = useCompany();
-  const [range, setRange] = useState('month');
+  const [range, setRange] = useState<Group>('month');
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [useCustom, setUseCustom] = useState(false);
@@ -38,28 +46,28 @@ export default function SalesReport() {
   const [busy, setBusy] = useState(false);
   const [reprintId, setReprintId] = useState<number | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<PaymentReceipt | null>(null);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
 
-  const loadSales = () => {
-    const params = useCustom
-      ? { from, to, group: range }
-      : { group: range };
+  const loadSales = useCallback(() => {
+    const params = useCustom ? { from, to, group: range } : { group: range };
     return api.get('/sales', { params }).then((r) => setSales(r.data));
-  };
-  const loadTx = () => {
+  }, [useCustom, from, to, range]);
+  const loadTx = useCallback(() => {
     const params = useCustom ? { from, to } : {};
     return api.get('/sales/transactions', { params }).then((r) => setTx(r.data));
-  };
+  }, [useCustom, from, to]);
 
   useEffect(() => {
     loadSales();
     loadTx();
     setPeriodTx(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, useCustom, from, to]);
+  }, [loadSales, loadTx]);
 
   const refresh = () => {
     loadSales();
     loadTx();
+    if (periodTx) void openPeriod(periodLabel);
   };
 
   const openPeriod = async (label: string) => {
@@ -78,7 +86,9 @@ export default function SalesReport() {
     try {
       const r = await api.delete('/sales/transactions');
       setFlash({ type: 'success', msg: `Cleared ${r.data.deleted} transaction(s).` });
-      refresh();
+      setPeriodTx(null);
+      loadSales();
+      loadTx();
     } catch (e: any) {
       setFlash({ type: 'error', msg: e?.response?.data?.error || 'Clear failed' });
     } finally {
@@ -96,19 +106,14 @@ export default function SalesReport() {
     try {
       const r = await api.delete('/sales/transactions', { params: { month: clearMonth } });
       setFlash({ type: 'success', msg: `Cleared ${r.data.deleted} transaction(s) for ${clearMonth}.` });
-      refresh();
+      setPeriodTx(null);
+      loadSales();
+      loadTx();
     } catch (e: any) {
       setFlash({ type: 'error', msg: e?.response?.data?.error || 'Clear failed' });
     } finally {
       setBusy(false);
     }
-  };
-
-  const formatBarAmount = (v: number) => {
-    const n = Number(v) || 0;
-    if (n >= 1_000_000) return `₱${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1000) return `₱${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
-    return peso(n);
   };
 
   const reprintReceipt = async (txId: number) => {
@@ -127,242 +132,249 @@ export default function SalesReport() {
     ? { name: company.name, address: company.address, phone: company.phone, email: company.email, logo: company.logo }
     : null;
 
-  const rangeLabel = useCustom
-    ? `${from} → ${to}`
-    : range === 'year'
-      ? 'Yearly'
-      : 'Monthly';
+  const rangeLabel = useCustom ? `${from} \u2192 ${to}` : range === 'year' ? 'Yearly' : 'Monthly';
+
+  const series = useMemo<{ label: string; value: number }[]>(() => sales?.series ?? [], [sales]);
+  const bestPoint = useMemo(
+    () => series.reduce<{ label: string; value: number } | null>((b, s) => (s.value > (b?.value ?? 0) ? s : b), null),
+    [series],
+  );
+
+  const ledger = periodTx ?? tx;
+  const typeMix = useMemo(() => {
+    const map = new Map<string, { type: string; amount: number; count: number; cancel: boolean }>();
+    for (const t of ledger) {
+      const key = typeLabel(t);
+      const cur = map.get(key) || { type: key, amount: 0, count: 0, cancel: isCancel(t) };
+      cur.amount += Number(t.amount || 0);
+      cur.count += 1;
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  }, [ledger]);
+  const mixMax = Math.max(1, ...typeMix.map((m) => Math.abs(m.amount)));
+
+  const term = search.trim().toLowerCase();
+  const shown = useMemo(
+    () =>
+      ledger.filter(
+        (t) =>
+          (!typeFilter || typeLabel(t) === typeFilter) &&
+          (!term || String(t.customer || '').toLowerCase().includes(term) || typeLabel(t).includes(term)),
+      ),
+    [ledger, typeFilter, term],
+  );
+  const shownTotal = shown.reduce((s, t) => s + Number(t.amount || 0), 0);
+
+  const columns: Col<any>[] = [
+    { key: 'date', label: 'Date', render: (t) => <span className="text-xs opacity-65">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span> },
+    { key: 'customer', label: 'Customer', render: (t) => <span className="font-medium">{t.customer || '\u2014'}</span> },
+    {
+      key: 'type',
+      label: 'Type',
+      render: (t) => <span className="capitalize" style={isCancel(t) ? { color: TONE_VAR.bad } : { opacity: 0.75 }}>{typeLabel(t)}</span>,
+    },
+    { key: 'amount', label: 'Amount', align: 'right', render: (t) => <span className="font-semibold">{peso(t.amount)}</span> },
+    {
+      key: 'actions',
+      label: '',
+      align: 'right',
+      render: (t) => (
+        <button type="button" className="cc-link" disabled={reprintId === t.id} onClick={() => reprintReceipt(t.id)}>
+          {reprintId === t.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+          Receipt
+        </button>
+      ),
+    },
+  ];
+
+  const printReport = () =>
+    openSalesReportPrint({
+      title: 'Sales Report',
+      company: companyPrint,
+      rangeLabel,
+      total: Number(sales?.total || 0),
+      rows: series.map((s) => ({ label: s.label, value: Number(s.value || 0) })),
+      meta: `${sales?.transactions ?? 0} transactions \u00b7 avg/day ${peso(sales?.avgPerDay ?? 0)} \u00b7 best ${peso(sales?.best ?? 0)}`,
+      transactions: ledger.slice(0, 200).map((t: any) => ({ date: t.date, customer: t.customer, amount: t.amount, type: t.type })),
+    });
+
+  const printPeriod = () => {
+    if (!periodTx) return;
+    const total = periodTx.reduce((s, t) => s + Number(t.amount || 0), 0);
+    openSalesReportPrint({
+      title: `Sales \u00b7 ${periodLabel}`,
+      company: companyPrint,
+      rangeLabel: periodLabel,
+      total,
+      rows: [{ label: periodLabel, value: total }],
+      transactions: periodTx.map((t) => ({ date: t.date, customer: t.customer, amount: t.amount, type: t.type })),
+    });
+  };
+
+  const exportCsv = () =>
+    downloadCsv(
+      `sales-${periodLabel || rangeLabel.replace(/\s/g, '')}.csv`,
+      ['Date', 'Customer', 'Type', 'Amount'],
+      shown.map((t) => [t.date, t.customer, typeLabel(t), t.amount]),
+    );
 
   return (
     <Layout title="Sales Report">
-      {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
-      {receiptPreview && (
-        <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
-      )}
+      <div className="cc space-y-5 pb-10">
+        {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
+        {receiptPreview && <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />}
 
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
-        <div className="flex flex-wrap items-end gap-3">
-          <TabPills tabs={GROUPS} active={range} onChange={(k) => { setRange(k); setUseCustom(false); }} />
-          <label className="text-sm">
-            <span className="text-xs text-slate-500">From</span>
-            <input
-              type="date"
-              className="input mt-1"
-              value={from}
-              onChange={(e) => {
-                setFrom(e.target.value);
-                setUseCustom(true);
-              }}
-            />
-          </label>
-          <label className="text-sm">
-            <span className="text-xs text-slate-500">To</span>
-            <input
-              type="date"
-              className="input mt-1"
-              value={to}
-              onChange={(e) => {
-                setTo(e.target.value);
-                setUseCustom(true);
-              }}
-            />
-          </label>
-          {useCustom && (
-            <button type="button" className="btn-secondary text-sm" onClick={() => setUseCustom(false)}>
-              Clear range
+        <header className="space-y-3">
+          <PageBar title="Sales report" subtitle={`${rangeLabel} \u00b7 collected payments and what they were for`}>
+            <Seg label="Grouping" options={GROUPS} value={range} onChange={(k) => { setRange(k); setUseCustom(false); }} />
+            <label className="flex items-center gap-1.5 text-xs opacity-80">
+              From
+              <input type="date" className="cc-input" value={from} onChange={(e) => { setFrom(e.target.value); setUseCustom(true); }} />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs opacity-80">
+              To
+              <input type="date" className="cc-input" value={to} onChange={(e) => { setTo(e.target.value); setUseCustom(true); }} />
+            </label>
+            {useCustom && (
+              <button type="button" className="cc-btn" onClick={() => setUseCustom(false)}>
+                <X size={13} /> Clear range
+              </button>
+            )}
+            <button type="button" className="cc-btn" onClick={refresh} title="Refresh"><RefreshCw size={14} /></button>
+            <button type="button" className="cc-btn is-on" onClick={printReport} disabled={!sales}>
+              <Printer size={14} /> Print report
             </button>
-          )}
-        </div>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() =>
-            openSalesReportPrint({
-              title: 'Sales Report',
-              company: companyPrint,
-              rangeLabel,
-              total: Number(sales?.total || 0),
-              rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),
-              meta: `${sales?.transactions ?? 0} transactions · avg/day ${peso(sales?.avgPerDay ?? 0)} · best ${peso(sales?.best ?? 0)}`,
-              transactions: (periodTx || tx).slice(0, 200).map((t: any) => ({
-                date: t.date,
-                customer: t.customer,
-                amount: t.amount,
-                type: t.type,
-              })),
-            })
-          }
-          disabled={!sales}
-        >
-          <Printer size={16} /> Print sales report
-        </button>
-      </div>
+          </PageBar>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
-        <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
-        <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
-        <StatTile label="Average / day" value={peso(sales?.avgPerDay ?? 0)} icon={TrendingUp} accent="from-sky-500/15 to-transparent" delay={100} />
-        <StatTile label="Best period" value={peso(sales?.best ?? 0)} icon={CalendarDays} accent="from-emerald-500/15 to-transparent" tone="text-emerald-600" delay={150} />
-      </div>
+          <Readings count={4}>
+            <Reading label="Net revenue" tone="good" value={money(sales?.total ?? 0)} sub={rangeLabel} />
+            <Reading label="Transactions" value={num(sales?.transactions ?? 0)} sub="payments in range" />
+            <Reading label="Average / day" tone="info" value={money(sales?.avgPerDay ?? 0)} sub="days with collections" />
+            <Reading
+              label="Best period"
+              tone="hot"
+              value={money(sales?.best ?? 0)}
+              sub={bestPoint ? `${bestPoint.label}, click to list` : 'no sales yet'}
+              on={!!bestPoint && periodLabel === bestPoint.label && !!periodTx}
+              onClick={bestPoint ? () => void openPeriod(bestPoint.label) : undefined}
+            />
+          </Readings>
+        </header>
 
-      <Card title="Revenue" interactive right={<span className="text-xs text-slate-400">Click a bar to list transactions</span>}>
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={sales?.series ?? []} margin={{ top: 28, right: 12, left: 8, bottom: 4 }}>
-              <defs>
-                <linearGradient id="salesBar" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#fb923c" stopOpacity={1} />
-                  <stop offset="100%" stopColor="#f97316" stopOpacity={0.75} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => String(v)} />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                tickFormatter={(v) => (v >= 1000 ? `₱${v / 1000}k` : `₱${v}`)}
-                width={56}
-              />
-              <Tooltip formatter={(v: number) => peso(v)} labelStyle={{ color: '#334155' }} contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-              <Bar
-                dataKey="value"
-                fill="url(#salesBar)"
-                radius={[6, 6, 0, 0]}
-                name="Amount"
-                cursor="pointer"
-                onClick={(data: any) => {
-                  const label = data?.payload?.label || data?.label;
-                  if (label) void openPeriod(String(label));
-                }}
-              >
-                <LabelList
-                  dataKey="value"
-                  position="top"
-                  formatter={(v: number) => (Number(v) > 0 ? formatBarAmount(Number(v)) : '')}
-                  style={{ fill: '#475569', fontSize: 11, fontWeight: 600 }}
-                />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-
-      {periodTx && (
-        <Card
-          className="mt-5"
-          title={`Transactions · ${periodLabel}`}
-          right={
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn-secondary text-sm"
-                onClick={() =>
-                  openSalesReportPrint({
-                    title: `Sales · ${periodLabel}`,
-                    company: companyPrint,
-                    rangeLabel: periodLabel,
-                    total: periodTx.reduce((s, t) => s + Number(t.amount || 0), 0),
-                    rows: [{ label: periodLabel, value: periodTx.reduce((s, t) => s + Number(t.amount || 0), 0) }],
-                    transactions: periodTx.map((t) => ({
-                      date: t.date,
-                      customer: t.customer,
-                      amount: t.amount,
-                      type: t.type,
-                    })),
-                  })
-                }
-              >
-                <Printer size={14} /> Print period
-              </button>
-              <button type="button" className="btn-secondary text-sm" onClick={() => setPeriodTx(null)}>
-                Close
-              </button>
+        <div className="grid gap-x-8 gap-y-5 lg:grid-cols-5">
+          <section className="lg:col-span-3">
+            <PanelHead title="Revenue" note="Click a bar to list that period's transactions" />
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={series} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="var(--card-border)" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'currentColor' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={18} />
+                  <YAxis tick={{ fontSize: 10, fill: 'currentColor' }} width={52} axisLine={false} tickLine={false} tickFormatter={(v: number) => compactMoney(v)} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(148,163,184,0.18)' }}
+                    formatter={(v: number) => [moneyExact(v), 'Revenue']}
+                    contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Bar
+                    dataKey="value"
+                    radius={[4, 4, 0, 0]}
+                    cursor="pointer"
+                    onClick={(data: any) => {
+                      const label = data?.payload?.label || data?.label;
+                      if (label) void openPeriod(String(label));
+                    }}
+                  >
+                    {series.map((s) => (
+                      <Cell key={s.label} fill="var(--brand)" fillOpacity={periodTx && periodLabel !== s.label ? 0.35 : 1} />
+                    ))}
+                    {series.length <= 14 && (
+                      <LabelList
+                        dataKey="value"
+                        position="top"
+                        formatter={(v: number) => (Number(v) > 0 ? compactMoney(Number(v)) : '')}
+                        style={{ fill: 'currentColor', fontSize: 10, fontWeight: 600 }}
+                      />
+                    )}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
-          }
-        >
-          <DataTable
-            columns={[
-              { key: 'date', label: 'Date' },
-              { key: 'customer', label: 'Customer' },
-              { key: 'type', label: 'Type' },
-              { key: 'amount', label: 'Amount', align: 'right' },
-              { key: 'actions', label: '', align: 'right' },
-            ]}
-            rows={periodTx.map((t) => ({
-              key: t.id,
-              cells: [
-                <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
-                <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
-                <span className={`font-medium ${String(t.type || '').includes('cancel') ? 'text-rose-600' : 'text-slate-600'}`}>
-                  {String(t.type || '—').replace(/_/g, ' ')}
-                </span>,
-                <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
-                <button
-                  type="button"
-                  className="text-brand-600 text-xs inline-flex items-center gap-1"
-                  disabled={reprintId === t.id}
-                  onClick={() => reprintReceipt(t.id)}
-                >
-                  {reprintId === t.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
-                  Receipt
-                </button>,
-              ],
-            }))}
-            emptyMessage="No transactions in this period."
-          />
-        </Card>
-      )}
+          </section>
 
-      <Card
-        className="mt-5"
-        title="Recent transactions"
-        right={
-          <div className="flex flex-wrap gap-2 items-center">
-            <input
-              className="input w-36 text-sm"
-              placeholder="YYYY-MM"
-              value={clearMonth}
-              onChange={(e) => setClearMonth(e.target.value)}
+          <section className="lg:col-span-2">
+            <PanelHead
+              title="What it was for"
+              note={periodTx ? `Transactions in ${periodLabel}` : 'Latest 500 transactions in range'}
+              actions={typeFilter ? <button type="button" className="cc-link" onClick={() => setTypeFilter(null)}>Show all types</button> : undefined}
             />
-            <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={clearMonthReports}>
-              Clear month
-            </button>
-            <button type="button" className="btn-secondary text-sm text-rose-600" disabled={busy} onClick={clearAll}>
-              <Trash2 size={14} /> Clear all
-            </button>
+            {typeMix.length === 0 ? (
+              <p className="cc-empty">No transactions yet.</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {typeMix.map((m) => (
+                  <li key={m.type}>
+                    <button
+                      type="button"
+                      className={`cc-seg-row w-full ${typeFilter === m.type ? 'is-on' : ''}`}
+                      style={typeFilter === m.type ? { background: 'var(--cc-hover)' } : undefined}
+                      onClick={() => setTypeFilter((cur) => (cur === m.type ? null : m.type))}
+                    >
+                      <span className="flex items-baseline justify-between gap-3 text-sm">
+                        <span className="capitalize">{m.type}</span>
+                        <span className="text-[11px] opacity-55">{m.count}</span>
+                        <span className="ml-auto font-semibold">{money(m.amount)}</span>
+                      </span>
+                      <span className="cc-pulse-bar mt-1 block">
+                        <i style={{ width: `${(Math.abs(m.amount) / mixMax) * 100}%`, background: m.cancel ? TONE_VAR.bad : undefined }} />
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <section>
+          <PanelHead
+            title={periodTx ? `Transactions \u00b7 ${periodLabel}` : 'Recent transactions'}
+            note={`${num(shown.length)} shown \u00b7 ${money(shownTotal)}${typeFilter ? ` \u00b7 ${typeFilter} only` : ''}`}
+            actions={
+              <>
+                {periodTx && (
+                  <>
+                    <button type="button" className="cc-link" onClick={printPeriod}><Printer size={12} /> Print period</button>
+                    <button type="button" className="cc-link" onClick={() => setPeriodTx(null)}>Close period</button>
+                  </>
+                )}
+                <button type="button" className="cc-link" onClick={exportCsv} disabled={shown.length === 0}><Download size={12} /> CSV</button>
+                <Popover label="Clear data" icon={<Eraser size={14} />} align="right">
+                  <div className="w-64 space-y-3 p-3">
+                    <p className="text-[11px] opacity-65">Deleting transactions removes them from every sales and finance figure. It cannot be undone.</p>
+                    <div className="flex gap-2">
+                      <input className="cc-input flex-1" placeholder="YYYY-MM" value={clearMonth} onChange={(e) => setClearMonth(e.target.value)} />
+                      <button type="button" className="cc-btn" disabled={busy} onClick={clearMonthReports}>Clear month</button>
+                    </div>
+                    <button type="button" className="cc-btn w-full justify-center" style={{ color: TONE_VAR.bad }} disabled={busy} onClick={clearAll}>
+                      <Trash2 size={14} /> Clear all transactions
+                    </button>
+                  </div>
+                </Popover>
+              </>
+            }
+          />
+          <div className="mb-2">
+            <SearchBox value={search} onChange={setSearch} placeholder="Customer or type" />
           </div>
-        }
-      >
-        <DataTable
-          columns={[
-            { key: 'date', label: 'Date' },
-            { key: 'customer', label: 'Customer' },
-            { key: 'type', label: 'Type' },
-            { key: 'amount', label: 'Amount', align: 'right' },
-            { key: 'actions', label: '', align: 'right' },
-          ]}
-          rows={tx.map((t) => ({
-            key: t.id,
-            cells: [
-              <span className="text-xs text-slate-500">{String(t.date || '').replace('T', ' ').slice(0, 16)}</span>,
-              <span className="font-medium text-slate-800">{t.customer || '—'}</span>,
-              <span className={`font-medium ${String(t.type || '').includes('cancel') ? 'text-rose-600' : 'text-slate-600'}`}>
-                  {String(t.type || '—').replace(/_/g, ' ')}
-                </span>,
-              <span className="font-semibold text-slate-800">{peso(t.amount)}</span>,
-              <button
-                type="button"
-                className="text-brand-600 text-xs inline-flex items-center gap-1"
-                disabled={reprintId === t.id}
-                onClick={() => reprintReceipt(t.id)}
-              >
-                {reprintId === t.id ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
-                Receipt
-              </button>,
-            ],
-          }))}
-          emptyMessage="No transactions yet."
-        />
-      </Card>
+          <Table
+            columns={columns}
+            rows={shown}
+            rowKey={(t) => t.id}
+            empty={periodTx ? 'No transactions in this period.' : 'No transactions yet.'}
+          />
+        </section>
+      </div>
     </Layout>
   );
 }

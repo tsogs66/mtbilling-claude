@@ -3707,26 +3707,20 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
 .cc-seg button.is-on { background: var(--brand); color: #111827; opacity: 1; }
 .cc-seg-lens button { padding: 0.3rem 0.95rem; font-size: 0.8rem; }
 
-.cc-pulse { display: grid; grid-template-columns: repeat(2, 1fr); border-block: 1px solid var(--card-border); }
+.cc-pulse {
+  display: grid; grid-template-columns: repeat(2, 1fr); border-block: 1px solid var(--card-border); overflow: hidden;
+}
 .cc-pulse-item {
   position: relative; display: flex; flex-direction: column; gap: 0.1rem; padding: 0.7rem 0.8rem; text-align: left;
-  border-left: 1px solid var(--card-border); border-top: 1px solid var(--card-border);
+  margin: -1px 0 0 -1px; border-left: 1px solid var(--card-border); border-top: 1px solid var(--card-border);
 }
-.cc-pulse-item:nth-child(-n + 2) { border-top: 0; }
-.cc-pulse-item:nth-child(2n + 1) { border-left: 0; padding-left: 0.2rem; }
-.cc-pulse-item:hover { background: var(--cc-hover); }
+button.cc-pulse-item:hover { background: var(--cc-hover); }
 .cc-pulse-item.is-on { box-shadow: inset 0 -3px 0 var(--brand); background: color-mix(in srgb, var(--brand) 9%, transparent); }
 @media (min-width: 720px) {
-  .cc-pulse { grid-template-columns: repeat(4, 1fr); }
-  .cc-pulse-item:nth-child(-n + 4) { border-top: 0; }
-  .cc-pulse-item:nth-child(2n + 1) { border-left: 1px solid var(--card-border); padding-left: 0.8rem; }
-  .cc-pulse-item:nth-child(4n + 1) { border-left: 0; padding-left: 0.2rem; }
+  .cc-pulse { grid-template-columns: repeat(var(--cc-cols-md, 4), 1fr); }
 }
 @media (min-width: 1500px) {
-  .cc-pulse { grid-template-columns: repeat(8, 1fr); }
-  .cc-pulse-item { border-top: 0; }
-  .cc-pulse-item:nth-child(4n + 1) { border-left: 1px solid var(--card-border); padding-left: 0.8rem; }
-  .cc-pulse-item:first-child { border-left: 0; padding-left: 0.2rem; }
+  .cc-pulse { grid-template-columns: repeat(var(--cc-cols, 8), 1fr); }
 }
 .cc-pulse-label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.8; }
 .cc-pulse-value { font-size: 1.5rem; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; }
@@ -3798,3 +3792,17 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
   .cc-mapframe { height: 22rem; }
   .cc-queue, .cc-queue-tall { max-height: 22rem; }
 }
+
+.cc-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.cc-table th {
+  padding: 0.45rem 0.6rem; text-align: left; font-size: 0.64rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; white-space: nowrap; opacity: 0.6; border-bottom: 1px solid var(--card-border);
+}
+.cc-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--card-border); vertical-align: middle; }
+.cc-table tbody tr:hover { background: var(--cc-hover); }
+.cc-table tr.is-click { cursor: pointer; }
+.cc-table tr.is-on { background: color-mix(in srgb, var(--brand) 12%, transparent); }
+.cc-stack { display: flex; height: 0.9rem; border-radius: 0.45rem; overflow: hidden; background: var(--card-border); }
+.cc-stack button { height: 100%; min-width: 2px; transition: opacity 0.15s; }
+.cc-stack button:hover { opacity: 0.8; }
+.cc-stack.has-pick button:not(.is-on) { opacity: 0.35; }

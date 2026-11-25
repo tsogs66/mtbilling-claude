@@ -1,87 +1,77 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart,
-  ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
-import {
-  TrendingUp, Wallet, Receipt, Plus, Trash2, Printer, FileText, PieChart as PieIcon, ArrowUpRight, ArrowDownRight,
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Plus, Printer, RefreshCw, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
+import { Modal, ModalFooter, FormField } from '../components/ui';
 import {
-  Card, DataTable, Modal, ModalFooter, FormField, StatTile, TabPills, PageHeader,
-} from '../components/ui';
+  Col, compactMoney, money, moneyExact, num, PageBar, PanelHead, Reading, Readings, Table, TONE_VAR,
+} from '../components/command/kit';
 import { api, peso } from '../api';
 import { openSalesReportPrint } from '../lib/invoicePrint';
 import { useCompany } from '../context/CompanyContext';
 
-const PIE_COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#64748b', '#14b8a6'];
+const share = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 /**
- * Comprehensive financial reporting hub — MRR, income vs expense, AR, expenses
- * with charts + print-ready sales snapshot.
+ * Financial reporting: MRR, income against expenses, receivables and the expense
+ * ledger on one open page, with a print-ready sales snapshot.
  */
 export default function Finance() {
   const { company } = useCompany();
+  const navigate = useNavigate();
   const [data, setData] = useState<any>(null);
   const [sales, setSales] = useState<any>(null);
   const [edit, setEdit] = useState<any>(null);
-  const [tab, setTab] = useState('overview');
+  const [category, setCategory] = useState<string | null>(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     api.get('/finance/summary').then((r) => setData(r.data));
     api.get('/sales?group=month').then((r) => setSales(r.data)).catch(() => setSales(null));
-  };
+  }, []);
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
-  const expensePie = useMemo(
-    () =>
-      (data?.expensesByCategory || []).map((c: any) => ({
-        name: c.category || 'other',
-        value: Number(c.total || 0),
-      })),
-    [data]
-  );
-
-  const mrrBars = useMemo(
+  const plans = useMemo(
     () =>
       (data?.mrrByPlan || []).map((r: any) => ({
-        plan: String(r.plan || '—').slice(0, 18),
+        plan: String(r.plan || '\u2014'),
         mrr: Number(r.mrr || 0),
         subscribers: Number(r.subscribers || 0),
       })),
-    [data]
+    [data],
   );
-
-  const cashflow = useMemo(() => {
-    const income = Number(data?.incomeThisMonth || 0);
-    const expenses = Number(data?.expensesThisMonth || 0);
-    return [
-      { name: 'Income', value: income, fill: '#10b981' },
-      { name: 'Expenses', value: expenses, fill: '#f43f5e' },
-      { name: 'Net', value: Math.max(0, income - expenses), fill: '#0ea5e9' },
-    ];
-  }, [data]);
+  const categories = useMemo(
+    () =>
+      (data?.expensesByCategory || [])
+        .map((c: any) => ({ name: String(c.category || 'other'), total: Number(c.total || 0) }))
+        .sort((a: any, b: any) => b.total - a.total),
+    [data],
+  );
 
   if (!data) {
     return (
       <Layout title="Finance">
-        <p className="text-slate-500 text-sm">Loading financial report…</p>
+        <p className="text-sm opacity-60">Loading financial report…</p>
       </Layout>
     );
   }
 
+  const income = Number(data.incomeThisMonth || 0);
+  const expenses = Number(data.expensesThisMonth || 0);
   const net = Number(data.netThisMonth || 0);
+  const mrr = Number(data.mrr || 0);
+  const ar = Number(data.accountsReceivable || 0);
+  const flowMax = Math.max(1, income, expenses);
+  const plansMrr = plans.reduce((s: number, p: any) => s + p.mrr, 0);
+  const plansMax = Math.max(1, ...plans.map((p: any) => p.mrr));
+  const catMax = Math.max(1, ...categories.map((c: any) => c.total));
+  const ledger = (data.expenses || []).filter((e: any) => !category || String(e.category || 'other') === category);
+  const series: { label: string; value: number }[] = sales?.series || [];
+
   const companyPrint = company
-    ? {
-        name: company.name,
-        address: company.address,
-        phone: company.phone,
-        email: company.email,
-        logo: company.logo,
-      }
+    ? { name: company.name, address: company.address, phone: company.phone, email: company.email, logo: company.logo }
     : null;
   const printSales = () => {
     openSalesReportPrint({
@@ -90,217 +80,183 @@ export default function Finance() {
       company: companyPrint,
       rangeLabel: `Month starting ${data.monthStart || 'this month'}`,
       total: Number(sales?.total ?? data.incomeThisMonth ?? 0),
-      rows: (sales?.series || []).map((s: any) => ({ label: s.label, value: Number(s.value || 0) })),
-      meta: `MRR ${peso(data.mrr)} · AR ${peso(data.accountsReceivable)} · Net MTD ${peso(net)}`,
+      rows: series.map((s) => ({ label: s.label, value: Number(s.value || 0) })),
+      meta: `MRR ${peso(data.mrr)} \u00b7 AR ${peso(data.accountsReceivable)} \u00b7 Net MTD ${peso(net)}`,
     });
   };
 
+  const removeExpense = async (id: number) => {
+    if (!confirm('Delete this expense?')) return;
+    await api.delete(`/finance/expenses/${id}`);
+    load();
+  };
+
+  const columns: Col<any>[] = [
+    { key: 'date', label: 'Date', render: (e) => <span className="text-xs opacity-70">{e.spent_at}</span> },
+    { key: 'cat', label: 'Category', render: (e) => <span className="capitalize">{e.category}</span> },
+    { key: 'desc', label: 'Description', render: (e) => <span className="opacity-80">{e.description || '\u2014'}</span> },
+    { key: 'amt', label: 'Amount', align: 'right', render: (e) => <span className="font-semibold">{peso(e.amount)}</span> },
+    {
+      key: 'actions',
+      label: '',
+      align: 'right',
+      render: (e) => (
+        <button type="button" className="cc-icon" style={{ color: TONE_VAR.bad }} onClick={() => removeExpense(e.id)} aria-label="Delete expense">
+          <Trash2 size={14} />
+        </button>
+      ),
+    },
+  ];
+
   return (
     <Layout title="Finance">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
-        <PageHeader
-          title="Financial reporting"
-          description="MRR, cashflow, accounts receivable, and expense mix — print sales/finance snapshot anytime."
-          icon={TrendingUp}
-        />
-        <div className="flex flex-wrap gap-2">
-          <Link to="/sales" className="btn-secondary text-sm">Sales detail</Link>
-          <Link to="/invoices" className="btn-secondary text-sm">Invoices / AR</Link>
-          <button type="button" className="btn-primary text-sm" onClick={printSales}>
-            <Printer size={16} /> Print report
-          </button>
-        </div>
-      </div>
+      <div className="cc space-y-5 pb-10">
+        <header className="space-y-3">
+          <PageBar title="Financial reporting" subtitle={`Month starting ${data.monthStart || 'this month'} \u00b7 MRR, cashflow, receivables and expenses`}>
+            <Link to="/sales" className="cc-btn">Sales detail</Link>
+            <Link to="/invoices" className="cc-btn">Invoices / AR</Link>
+            <button type="button" className="cc-btn" onClick={load} title="Refresh"><RefreshCw size={14} /></button>
+            <button type="button" className="cc-btn is-on" onClick={printSales}>
+              <Printer size={14} /> Print report
+            </button>
+          </PageBar>
 
-      <div className="mb-5">
-        <TabPills
-          tabs={[
-            { key: 'overview', label: 'Overview' },
-            { key: 'mrr', label: 'MRR & plans' },
-            { key: 'expenses', label: 'Expenses' },
-          ]}
-          active={tab}
-          onChange={setTab}
-        />
-      </div>
+          <Readings count={6}>
+            <Reading label="Projected MRR" tone="info" value={money(mrr)} sub={`${num(data.activeSubscribers)} billed subscribers`} onClick={() => navigate('/pppoe')} />
+            <Reading label="Income (MTD)" tone="good" value={money(income)} sub={mrr > 0 ? `${share(income, mrr)}% of MRR collected` : 'collected this month'} bar={mrr > 0 ? income / mrr : undefined} onClick={() => navigate('/sales')} />
+            <Reading label="Expenses (MTD)" tone="warn" value={money(expenses)} sub={income > 0 ? `${share(expenses, income)}% of income` : 'logged this month'} bar={income > 0 ? expenses / income : undefined} />
+            <Reading label="Net (MTD)" tone={net >= 0 ? 'good' : 'bad'} value={money(net)} sub={net >= 0 ? 'income after expenses' : 'spending ahead of income'} />
+            <Reading label="Open AR" tone="bad" value={money(ar)} sub="unpaid invoice balance" onClick={() => navigate('/invoices')} />
+            <Reading label="ARPU" value={money(data.activeSubscribers > 0 ? mrr / data.activeSubscribers : 0)} sub="MRR per billed subscriber" />
+          </Readings>
+        </header>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
-        <StatTile label="Projected MRR" value={peso(data.mrr)} icon={TrendingUp} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
-        <StatTile label="Active billed" value={data.activeSubscribers} icon={Wallet} delay={40} />
-        <StatTile label="Income (MTD)" value={peso(data.incomeThisMonth)} icon={ArrowUpRight} tone="text-emerald-600" delay={80} />
-        <StatTile label="Expenses (MTD)" value={peso(data.expensesThisMonth)} icon={ArrowDownRight} tone="text-rose-600" delay={120} />
-        <StatTile
-          label="Net (MTD)"
-          value={peso(net)}
-          icon={TrendingUp}
-          tone={net >= 0 ? 'text-emerald-600' : 'text-rose-600'}
-          delay={160}
-        />
-      </div>
-
-      {tab === 'overview' && (
-        <>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-5">
-            <Card title="Cashflow this month" icon={Wallet} className="xl:col-span-1">
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={cashflow} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `₱${v / 1000}k` : `₱${v}`)} width={48} />
-                    <Tooltip formatter={(v: number) => peso(v)} contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0' }} />
-                    <Bar dataKey="value" radius={[8, 8, 0, 0]}>
-                      {cashflow.map((e) => (
-                        <Cell key={e.name} fill={e.fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+        <div className="grid gap-x-8 gap-y-5 lg:grid-cols-5">
+          <section className="lg:col-span-2">
+            <PanelHead title="Cashflow this month" note="Income against expenses" />
+            <div className="space-y-4 py-2">
+              {[
+                { label: 'Income', value: income, tone: 'good' as const },
+                { label: 'Expenses', value: expenses, tone: 'bad' as const },
+              ].map((r) => (
+                <div key={r.label}>
+                  <div className="mb-1 flex items-baseline justify-between text-sm">
+                    <span className="opacity-75">{r.label}</span>
+                    <span className="font-semibold">{moneyExact(r.value)}</span>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full" style={{ background: 'var(--card-border)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${(r.value / flowMax) * 100}%`, background: TONE_VAR[r.tone] }} />
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-baseline justify-between border-t pt-3 text-sm" style={{ borderColor: 'var(--card-border)' }}>
+                <span className="opacity-75">Net</span>
+                <span className="text-lg font-bold" style={{ color: TONE_VAR[net >= 0 ? 'good' : 'bad'] }}>{moneyExact(net)}</span>
               </div>
-              <p className="text-xs text-slate-500 mt-2">
-                Open AR: <b className="text-slate-800">{peso(data.accountsReceivable)}</b>
-              </p>
-            </Card>
+            </div>
+          </section>
 
-            <Card title="Sales trend" icon={TrendingUp} className="xl:col-span-2" right={<Link to="/sales" className="text-sm text-brand-600">Open sales →</Link>}>
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={sales?.series || []} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="finArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#0ea5e9" stopOpacity={0.35} />
-                        <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.02} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `₱${v / 1000}k` : `₱${v}`)} width={48} />
-                    <Tooltip formatter={(v: number) => peso(v)} contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0' }} />
-                    <Area type="monotone" dataKey="value" stroke="#0284c7" fill="url(#finArea)" strokeWidth={2} name="Sales" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="bg-gradient-to-br from-sky-50 to-white border-sky-100">
-              <div className="flex items-center gap-2 text-sky-700 text-sm font-semibold mb-1"><PieIcon size={16} /> Health snapshot</div>
-              <p className="text-2xl font-bold text-slate-900">{data.activeSubscribers} <span className="text-sm font-medium text-slate-500">active</span></p>
-              <p className="text-xs text-slate-500 mt-1">Projected MRR {peso(data.mrr)}</p>
-            </Card>
-            <Card className="bg-gradient-to-br from-emerald-50 to-white border-emerald-100">
-              <div className="flex items-center gap-2 text-emerald-700 text-sm font-semibold mb-1"><FileText size={16} /> Collections</div>
-              <p className="text-2xl font-bold text-slate-900">{peso(data.incomeThisMonth)}</p>
-              <p className="text-xs text-slate-500 mt-1">Income month-to-date</p>
-            </Card>
-            <Card className="bg-gradient-to-br from-rose-50 to-white border-rose-100">
-              <div className="flex items-center gap-2 text-rose-700 text-sm font-semibold mb-1"><Receipt size={16} /> Receivables</div>
-              <p className="text-2xl font-bold text-slate-900">{peso(data.accountsReceivable)}</p>
-              <p className="text-xs text-slate-500 mt-1">Open invoice balance</p>
-            </Card>
-          </div>
-        </>
-      )}
-
-      {tab === 'mrr' && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <Card title="MRR by plan" icon={TrendingUp}>
-            <div className="h-72">
+          <section className="lg:col-span-3">
+            <PanelHead title="Sales trend" note="Last 12 months of collected payments" actions={<Link to="/sales" className="cc-link">Open sales</Link>} />
+            <div className="h-52">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={mrrBars} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `₱${v / 1000}k` : `₱${v}`)} />
-                  <YAxis type="category" dataKey="plan" width={100} tick={{ fontSize: 11, fill: '#64748b' }} />
-                  <Tooltip formatter={(v: number) => peso(v)} contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0' }} />
-                  <Bar dataKey="mrr" fill="#0ea5e9" radius={[0, 6, 6, 0]} name="MRR" />
-                </BarChart>
+                <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="finArea" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--brand)" stopOpacity={0.4} />
+                      <stop offset="100%" stopColor="var(--brand)" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="var(--card-border)" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'currentColor' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={24} />
+                  <YAxis tick={{ fontSize: 10, fill: 'currentColor' }} width={52} axisLine={false} tickLine={false} tickFormatter={(v: number) => compactMoney(v)} />
+                  <Tooltip
+                    formatter={(v: number) => [moneyExact(v), 'Sales']}
+                    contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 8, fontSize: 12 }}
+                  />
+                  <Area type="monotone" dataKey="value" stroke="var(--brand)" fill="url(#finArea)" strokeWidth={2} name="Sales" />
+                </AreaChart>
               </ResponsiveContainer>
             </div>
-          </Card>
-          <Card title="Plan mix" icon={Wallet}>
-            <DataTable
-              columns={[
-                { key: 'plan', label: 'Plan / profile' },
-                { key: 'subs', label: 'Subs', align: 'right' },
-                { key: 'mrr', label: 'MRR', align: 'right' },
-              ]}
-              rows={(data.mrrByPlan || []).map((r: any) => ({
-                key: r.plan,
-                cells: [r.plan, r.subscribers, peso(r.mrr)],
-              }))}
-              emptyMessage="No active priced subscribers."
-            />
-          </Card>
+          </section>
         </div>
-      )}
 
-      {tab === 'expenses' && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <Card title="Expense mix" icon={PieIcon}>
-            <div className="h-64">
-              {expensePie.length === 0 ? (
-                <p className="text-sm text-slate-400 p-6">No expenses logged yet.</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={expensePie} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                      {expensePie.map((_: any, i: number) => (
-                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: number) => peso(v)} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </Card>
-          <Card
-            title="Expense ledger"
-            icon={Receipt}
-            right={
-              <button
-                className="btn-primary"
-                onClick={() =>
-                  setEdit({ category: 'opex', amount: '', spent_at: new Date().toISOString().slice(0, 10), description: '' })
-                }
-              >
-                <Plus size={16} /> Add
-              </button>
-            }
-          >
-            <DataTable
-              columns={[
-                { key: 'date', label: 'Date' },
-                { key: 'cat', label: 'Category' },
-                { key: 'desc', label: 'Description' },
-                { key: 'amt', label: 'Amount', align: 'right' },
-                { key: 'actions', label: '', align: 'right' },
-              ]}
-              rows={(data.expenses || []).map((e: any) => ({
-                key: e.id,
-                cells: [
-                  e.spent_at,
-                  e.category,
-                  e.description || '—',
-                  peso(e.amount),
-                  <button
-                    className="text-rose-500"
-                    onClick={async () => {
-                      await api.delete(`/finance/expenses/${e.id}`);
-                      load();
-                    }}
-                  >
-                    <Trash2 size={14} />
-                  </button>,
-                ],
-              }))}
-              emptyMessage="No expenses logged this period."
+        <section>
+          <PanelHead
+            title="Recurring revenue by plan"
+            note="Click a plan to open its subscribers"
+            actions={<span className="text-xs opacity-60">{money(plansMrr)} / month</span>}
+          />
+          {plans.length === 0 ? (
+            <p className="cc-empty">No active priced subscribers.</p>
+          ) : (
+            <ul className="grid gap-x-10 md:grid-cols-2">
+              {plans.map((p: any) => (
+                <li key={p.plan}>
+                  <button type="button" className="cc-seg-row w-full" onClick={() => navigate(`/pppoe?q=${encodeURIComponent(p.plan)}`)}>
+                    <span className="flex items-baseline gap-3 text-sm">
+                      <span className="min-w-0 flex-1 truncate font-medium">{p.plan}</span>
+                      <span className="text-[11px] opacity-55">{num(p.subscribers)} subs · {share(p.mrr, plansMrr)}%</span>
+                      <span className="w-24 text-right font-semibold">{money(p.mrr)}</span>
+                    </span>
+                    <span className="cc-pulse-bar mt-1 block"><i style={{ width: `${(p.mrr / plansMax) * 100}%` }} /></span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <div className="grid gap-x-8 gap-y-5 lg:grid-cols-5">
+          <section className="lg:col-span-2">
+            <PanelHead
+              title="Expense mix"
+              note="Click a category to filter the ledger"
+              actions={category ? <button type="button" className="cc-link" onClick={() => setCategory(null)}>Show all</button> : undefined}
             />
-          </Card>
+            {categories.length === 0 ? (
+              <p className="cc-empty">No expenses logged yet.</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {categories.map((c: any) => (
+                  <li key={c.name}>
+                    <button
+                      type="button"
+                      className="cc-seg-row w-full"
+                      style={category === c.name ? { background: 'var(--cc-hover)' } : undefined}
+                      onClick={() => setCategory((cur) => (cur === c.name ? null : c.name))}
+                    >
+                      <span className="flex items-baseline gap-3 text-sm">
+                        <span className="min-w-0 flex-1 truncate capitalize">{c.name}</span>
+                        <span className="text-[11px] opacity-55">{share(c.total, expenses || categories.reduce((s: number, x: any) => s + x.total, 0))}%</span>
+                        <span className="w-24 text-right font-semibold">{money(c.total)}</span>
+                      </span>
+                      <span className="cc-pulse-bar mt-1 block"><i style={{ width: `${(c.total / catMax) * 100}%`, background: TONE_VAR.warn }} /></span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="lg:col-span-3">
+            <PanelHead
+              title="Expense ledger"
+              note={category ? `${category} only` : 'Most recent first'}
+              actions={
+                <button
+                  type="button"
+                  className="cc-btn is-on"
+                  onClick={() => setEdit({ category: category || 'opex', amount: '', spent_at: new Date().toISOString().slice(0, 10), description: '' })}
+                >
+                  <Plus size={14} /> Add expense
+                </button>
+              }
+            />
+            <Table columns={columns} rows={ledger} rowKey={(e: any) => e.id} empty="No expenses logged this period." />
+          </section>
         </div>
-      )}
+      </div>
 
       {edit && (
         <ExpenseModal
