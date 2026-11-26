@@ -26,6 +26,7 @@ const SUITES = {
     'src/merchantPayMonths.test.ts',
     'src/planChangePayment.test.ts',
     'src/genieacs.test.ts',
+    'src/extensionLimit.test.ts',
     'src/ispDesk.test.ts',
     'src/apiPermissions.test.ts',
     'src/dbSync.test.ts',

@@ -1,3 +1,4 @@
+import { extensionsExhausted } from './extensions.js';
 import { db } from './db.js';
 import { buildBrandedEmail, buildReceiptEmailBody, parseLogoDataUrl } from './emailTemplate.js';
 import { formatCurrency } from './currency.js';
@@ -839,6 +840,8 @@ export type BillingCandidate = {
   hoursInNonPayment: number | null;
   profile: string;
   action: 'expire' | 'disable' | 'restore';
+  /** Disabled with no grace because every extension was already used. */
+  extensionsExhausted?: boolean;
 };
 
 function candidateBase(u: any, hoursOverdue: number | null): Omit<BillingCandidate, 'action'> {
@@ -871,6 +874,16 @@ function classifyOverdueUser(
   if (st === 'disabled') return null;
 
   const base = candidateBase(u, hoursOverdue);
+
+  // Every extension is spent and the line is past due again: the extensions
+  // were the grace, so go straight to non-payment + disabled. If the counter
+  // cannot be read, fall through to the normal grace rules rather than cut a
+  // line off on a guess.
+  try {
+    if (extensionsExhausted(u.id)) return { ...base, action: 'disable', extensionsExhausted: true };
+  } catch {
+    /* counter unavailable */
+  }
 
   // Grace is measured from the account due date (not from when we first marked non-payment).
   if (hoursOverdue >= graceHours) {
@@ -1126,7 +1139,7 @@ export async function executeBillingEnforcement(opts?: {
       actionJobs.push({ kind: 'expire', u, classified });
       continue;
     }
-    if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable)) {
+    if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable || classified.extensionsExhausted)) {
       actionJobs.push({ kind: 'disable', u, classified });
     }
   }
@@ -1268,13 +1281,13 @@ export async function executeBillingEnforcement(opts?: {
         } catch {
           /* optional */
         }
-        const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
+        const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — ${classified.extensionsExhausted ? 'all your extensions were used and the subscription is still unpaid' : `subscription overdue past the ${graceHours}h grace period`} (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
         if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
       }
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'warning',
         'billing',
-        `Disabled ${u.username} — ${classified.hoursOverdue}h past due (grace ${graceHours}h)${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
+        `Disabled ${u.username} — ${classified.hoursOverdue}h past due (${classified.extensionsExhausted ? 'all extensions used, no grace' : `grace ${graceHours}h`})${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
       );
     }
   }
