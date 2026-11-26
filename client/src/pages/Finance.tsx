@@ -124,7 +124,7 @@ export default function Finance() {
         />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-4 mb-6">
         <StatTile label="Projected MRR" value={peso(data.mrr)} icon={TrendingUp} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
         <StatTile label="Active billed" value={data.activeSubscribers} icon={Wallet} delay={40} />
         <StatTile label="Income (MTD)" value={peso(data.incomeThisMonth)} icon={ArrowUpRight} tone="text-emerald-600" delay={80} />

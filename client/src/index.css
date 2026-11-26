@@ -3658,4 +3658,54 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
   [role='tab'] {
     min-height: 2.5rem;
   }
+  .cc button,
+  .cc-palette button,
+  .cc-drawer button {
+    min-height: 0;
+  }
+}
+
+/* Command Center fit. Doubled classes so these win after that stylesheet loads.
+   The map frame must be its own stacking context or its tiles cover the phone menu. */
+.cc-mapframe.cc-mapframe {
+  z-index: 0;
+  isolation: isolate;
+}
+.cc-tabs.cc-tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+@media (max-width: 767px) {
+  .cc-drawer.cc-drawer {
+    top: auto;
+    right: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    bottom: calc(var(--bottom-nav-h, 3.5rem) + 0.5rem);
+    max-height: min(70dvh, 32rem);
+  }
+  .cc-toast.cc-toast {
+    bottom: calc(var(--bottom-nav-h, 3.5rem) + 0.75rem);
+  }
+  .cc-search.cc-search {
+    width: 100%;
+  }
+  .cc .mb-2.flex > .flex {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .cc-pop.cc-pop {
+    position: fixed;
+    left: 0.5rem;
+    right: 0.5rem;
+    top: calc(env(safe-area-inset-top, 0px) + 4.5rem);
+    width: auto;
+    max-height: min(70dvh, 28rem);
+    overflow-y: auto;
+    z-index: 70;
+  }
+  .cc-pop > * {
+    width: auto !important;
+    max-width: 100%;
+  }
 }
