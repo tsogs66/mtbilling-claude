@@ -577,7 +577,7 @@ body {
 }
 [data-theme='onepiece'] .btn-primary,
 [data-theme='onepiece'] button.btn-primary {
-  background: linear-gradient(135deg, #c8102e, #e8b923) !important;
+  background: linear-gradient(135deg, #7f1d1d, #c8102e) !important;
   border: none;
   color: #fff !important;
 }
@@ -2938,7 +2938,7 @@ body {
     @apply font-semibold text-slate-800 tracking-tight;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white text-sm font-semibold px-4 py-2.5 min-h-11 rounded-xl shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.98];
+    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-slate-950 text-sm font-semibold px-4 py-2.5 min-h-11 rounded-xl shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.98];
   }
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium px-4 py-2 min-h-10 rounded-xl transition-all duration-200;
@@ -3708,4 +3708,29 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
     width: auto !important;
     max-width: 100%;
   }
+}
+
+/* Card toolbars stack before the desktop width so a row of controls is not
+   pushed off the side of a tablet. */
+@media (max-width: 1023px) {
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .card-header > * {
+    max-width: 100%;
+  }
+}
+
+/* White type on the bright brand fill is about 2.8:1. Dark type stays readable. */
+button.bg-brand-500,
+button.from-brand-500,
+.btn-primary {
+  color: #0f172a;
+}
+
+[data-theme='light'] button.text-slate-300,
+[data-theme='light'] button.text-slate-400 {
+  color: #334155;
 }

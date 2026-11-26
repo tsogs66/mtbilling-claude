@@ -733,7 +733,7 @@ export function IconAction({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={`inline-flex items-center justify-center min-h-10 min-w-10 p-2 rounded-lg text-slate-400 transition-colors ${tones[tone]}`}
+      className={`inline-flex items-center justify-center min-h-10 min-w-10 p-2 rounded-lg text-slate-600 transition-colors ${tones[tone]}`}
     >
       <Icon size={16} />
     </button>
