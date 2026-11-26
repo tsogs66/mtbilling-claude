@@ -16,6 +16,8 @@ import {
   X,
   Loader2,
   CheckCircle2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { peso } from '../../api';
 import { getApiBase } from '../../config';
@@ -885,6 +887,110 @@ export function PortalRequestTabs({
   );
 }
 
+export function PortalWifiPanel() {
+  const [info, setInfo] = useState<{ available: boolean; ssid: string | null; maxPerHour: number } | null>(null);
+  const [ssid, setSsid] = useState('');
+  const [password, setPassword] = useState('');
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () =>
+    void portalFetch('/public/portal/wifi')
+      .then((d) => setInfo(d))
+      .catch(() => setInfo(null));
+  useEffect(() => {
+    load();
+  }, []);
+
+  if (!info?.available) return null;
+
+  const pwTooShort = password.length > 0 && password.length < 8;
+  const canSave = !busy && (ssid.trim() !== '' || password !== '') && !pwTooShort;
+
+  const save = async () => {
+    const changing = [ssid.trim() ? 'name' : '', password ? 'password' : ''].filter(Boolean).join(' and ');
+    if (
+      !window.confirm(
+        `Change your Wi-Fi ${changing}? Phones, TVs and other devices will disconnect and need ${
+          password ? 'the new password' : 'to join the new name'
+        }.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      await portalFetch('/public/portal/wifi', {
+        method: 'POST',
+        body: JSON.stringify({ ssid: ssid.trim() || undefined, password: password || undefined }),
+      });
+      setMsg({ ok: true, text: 'Sent to your router. It can take a minute to apply; your devices will then need to reconnect.' });
+      setPassword('');
+      setSsid('');
+      load();
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message || 'Could not change Wi-Fi' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Wi-Fi name and password" icon={Wifi} hint="Change what your router broadcasts. Leave a box empty to keep it as it is.">
+      <p className="text-sm text-portal-muted mb-3">
+        Current name: <b className="text-white">{info.ssid || 'not reported yet'}</b>
+      </p>
+      <label className="block text-xs text-portal-dim mb-2">
+        New Wi-Fi name
+        <input
+          className="portal-field w-full px-3 py-2.5 mt-1"
+          value={ssid}
+          maxLength={32}
+          autoComplete="off"
+          placeholder="Up to 32 characters"
+          onChange={(e) => setSsid(e.target.value)}
+        />
+      </label>
+      <label className="block text-xs text-portal-dim mb-1">
+        New Wi-Fi password
+        <div className="relative mt-1">
+          <input
+            className="portal-field w-full px-3 py-2.5 pr-11"
+            type={show ? 'text' : 'password'}
+            value={password}
+            maxLength={63}
+            autoComplete="new-password"
+            placeholder="8 to 63 characters"
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button
+            type="button"
+            className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 text-portal-muted hover:text-white"
+            aria-label={show ? 'Hide password' : 'Show password'}
+            onClick={() => setShow((v) => !v)}
+          >
+            {show ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+      </label>
+      {pwTooShort && <p className="text-xs text-amber-300 mb-1">The password needs at least 8 characters.</p>}
+      <button
+        type="button"
+        className="portal-cta mt-2 rounded-xl px-4 py-2.5 text-sm disabled:opacity-50"
+        disabled={!canSave}
+        onClick={() => void save()}
+      >
+        {busy ? 'Sending…' : 'Update Wi-Fi'}
+      </button>
+      {msg && (
+        <p className={`text-xs mt-2 leading-relaxed ${msg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{msg.text}</p>
+      )}
+    </Section>
+  );
+}
+
 export function PortalVisitsPanel({ openJobs }: { openJobs?: any[] }) {
   const visits = useMemo(
     () =>
@@ -1183,6 +1289,7 @@ export function PortalExtrasStack({
         email={me?.customer?.email}
         onUpdated={onReloadMe}
       />
+      <PortalWifiPanel />
       <PortalDeviceHelperPanel />
       <PortalReferralPanel />
       <p className="text-[11px] text-portal-dim text-center flex items-center justify-center gap-1 py-1">
