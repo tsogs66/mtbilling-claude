@@ -227,10 +227,10 @@ function PortalPasswordCard() {
       const result = await portalFetch('/public/portal/change-password', {
         method: 'POST',
         body: JSON.stringify({
-          password: chosen,
           newPassword: chosen,
-          confirm: confirm.trim(),
           confirmPassword: confirm.trim(),
+          password: chosen,
+          confirm: confirm.trim(),
         }),
       });
       if (!result?.passwordVerified) {
@@ -332,6 +332,7 @@ export default function ClientPortal() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState('');
+  const [pwOk, setPwOk] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotAccount, setForgotAccount] = useState('');
   const [forgotPhone, setForgotPhone] = useState('');
@@ -476,6 +477,7 @@ export default function ClientPortal() {
   const submitNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPwMsg('');
+    setPwOk(false);
     if (newPassword.trim() !== confirmPassword.trim()) {
       setPwMsg('Passwords do not match');
       return;
@@ -490,10 +492,10 @@ export default function ClientPortal() {
       const result = await portalFetch('/public/portal/change-password', {
         method: 'POST',
         body: JSON.stringify({
-          password: chosen,
           newPassword: chosen,
-          confirm: confirmPassword.trim(),
           confirmPassword: confirmPassword.trim(),
+          password: chosen,
+          confirm: confirmPassword.trim(),
         }),
       });
       if (!result?.passwordVerified || result?.mustChangePassword) {
@@ -503,6 +505,7 @@ export default function ClientPortal() {
       setNewPassword('');
       setConfirmPassword('');
       setPassword(chosen);
+      setPwOk(true);
       setPwMsg(
         result?.keptExisting
           ? 'That password is already saved. You can sign in with it.'
@@ -524,6 +527,7 @@ export default function ClientPortal() {
 
   const keepCurrentPassword = async () => {
     setPwMsg('');
+    setPwOk(false);
     setPwBusy(true);
     try {
       const result = await portalFetch('/public/portal/change-password', {
@@ -536,6 +540,7 @@ export default function ClientPortal() {
       }
       setNewPassword('');
       setConfirmPassword('');
+      setPwOk(true);
       setPwMsg('Current password kept. Welcome to your portal.');
       setMe((prev: any) => (prev ? { ...prev, mustChangePassword: false } : prev));
       try {
@@ -956,10 +961,10 @@ export default function ClientPortal() {
           {pwMsg && (
             <div
               className={`text-sm rounded-xl px-3 py-2 border ${
-                pwMsg.includes('updated') || pwMsg.includes('kept') || pwMsg.includes('Welcome')
-                  ? 'text-emerald-200 bg-emerald-500/15 border-emerald-400/25'
-                  : 'text-rose-200 bg-rose-500/15 border-rose-400/25'
-              }`}
+              pwOk
+                ? 'text-emerald-200 bg-emerald-500/15 border-emerald-400/25'
+                : 'text-rose-200 bg-rose-500/15 border-rose-400/25'
+            }`}
             >
               {pwMsg}
             </div>
