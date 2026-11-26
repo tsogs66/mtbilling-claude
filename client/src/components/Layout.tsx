@@ -75,15 +75,6 @@ export default function Layout({
           </div>
         )}
         <NativeAppBridge />
-        {sidebarOpen && !nativeShell && (
-          <button
-            type="button"
-            aria-label="Close menu"
-            className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden animate-fade-in"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-
         {!nativeShell && <Sidebar />}
 
         <div className="relative z-[1] flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden lg:pl-0">
@@ -111,12 +102,12 @@ export default function Layout({
             className={
               fullBleed
                 ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''} ${
-                    nativeShell ? 'native-shell-main native-shell-main-bleed' : ''
+                    nativeShell ? 'native-shell-main native-shell-main-bleed' : 'phone-shell-main-bleed'
                   }`
                 : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''} ${
                     nativeShell
                       ? 'native-shell-main'
-                      : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+                      : 'phone-shell-main pb-[max(0.75rem,env(safe-area-inset-bottom))]'
                   }`
             }
             aria-readonly={readOnly || undefined}
@@ -127,7 +118,11 @@ export default function Layout({
               <div className="max-w-[1600px] mx-auto w-full min-w-0">{children}</div>
             )}
           </main>
-          {nativeShell && <BottomNav />}
+          {nativeShell ? <BottomNav /> : (
+            <div className="md:hidden">
+              <BottomNav />
+            </div>
+          )}
         </div>
       </div>
     </LayoutContext.Provider>

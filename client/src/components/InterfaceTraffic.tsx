@@ -179,22 +179,26 @@ function GraphCard({
   const last = data[data.length - 1];
   return (
     <div className="card p-4">
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <span className="text-xs text-slate-400">Enabled</span>
         <button
+          type="button"
           onClick={onToggle}
-          className={`relative w-9 h-5 rounded-full transition-colors ${cfg.enabled ? 'bg-brand-500' : 'bg-slate-300'}`}
+          role="switch"
+          aria-checked={cfg.enabled}
+          aria-label={cfg.enabled ? 'Disable graph' : 'Enable graph'}
+          className={`relative w-11 h-6 rounded-full transition-colors ${cfg.enabled ? 'bg-brand-500' : 'bg-slate-300'}`}
         >
-          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${cfg.enabled ? 'translate-x-4' : ''}`} />
+          <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${cfg.enabled ? 'translate-x-5' : ''}`} />
         </button>
         <select
           value={cfg.iface}
           onChange={(e) => onSelect(e.target.value)}
-          className="ml-auto text-sm border border-slate-200 rounded-lg px-2 py-1.5 max-w-[190px] focus:outline-none focus:ring-2 focus:ring-brand-500"
+          className="ml-auto min-w-0 max-w-full flex-1 text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-500"
         >
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        <button onClick={onDelete} className="text-slate-300 hover:text-rose-500" title="Remove graph">
+        <button type="button" onClick={onDelete} className="inline-flex items-center justify-center min-h-10 min-w-10 shrink-0 text-slate-600 hover:text-rose-500" title="Remove graph" aria-label="Remove graph">
           <Trash2 size={16} />
         </button>
       </div>

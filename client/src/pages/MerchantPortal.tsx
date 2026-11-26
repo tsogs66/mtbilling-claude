@@ -577,15 +577,15 @@ export default function MerchantPortal() {
                 )}
                 <button
                   type="button"
-                  className="portal-cta inline-flex items-center gap-1.5 text-xs"
+                  className="portal-cta inline-flex items-center gap-1.5 text-xs min-h-11 px-3"
                   onClick={() => void saveTheme(theme === 'matrix' ? 'orbital' : 'matrix')}
-                  title="Toggle portal theme"
+                  aria-label={theme === 'matrix' ? 'Switch to Orbital theme' : 'Switch to Matrix theme'}
                 >
-                  <Palette size={14} /> {theme === 'matrix' ? 'Matrix' : 'Orbital'}
+                  <Palette size={14} /> {theme === 'matrix' ? 'Switch to Orbital' : 'Switch to Matrix'}
                 </button>
                 <button
                   type="button"
-                  className="portal-cta inline-flex items-center gap-1.5 text-xs"
+                  className="portal-cta inline-flex items-center gap-1.5 text-xs min-h-11 px-3"
                   onClick={() => {
                     logout();
                     setSelected(null);

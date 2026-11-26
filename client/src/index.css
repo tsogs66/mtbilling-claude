@@ -318,7 +318,10 @@ body {
   box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.35);
 }
 .theme-topbar-menu-muted {
-  color: var(--topbar-muted);
+  color: color-mix(in srgb, var(--topbar-fg) 68%, var(--topbar-muted));
+}
+[data-theme='light'] .theme-topbar-menu-item.is-active {
+  color: #c2410c;
 }
 .theme-topbar-menu-item {
   color: var(--topbar-fg);
@@ -574,7 +577,7 @@ body {
 }
 [data-theme='onepiece'] .btn-primary,
 [data-theme='onepiece'] button.btn-primary {
-  background: linear-gradient(135deg, #c8102e, #e8b923) !important;
+  background: linear-gradient(135deg, #7f1d1d, #c8102e) !important;
   border: none;
   color: #fff !important;
 }
@@ -2935,7 +2938,7 @@ body {
     @apply font-semibold text-slate-800 tracking-tight;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white text-sm font-semibold px-4 py-2.5 min-h-11 rounded-xl shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.98];
+    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-slate-950 text-sm font-semibold px-4 py-2.5 min-h-11 rounded-xl shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.98];
   }
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium px-4 py-2 min-h-10 rounded-xl transition-all duration-200;
@@ -3627,4 +3630,107 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
     --portal-glass: rgba(10, 28, 52, 0.88);
     --portal-glass-strong: rgba(6, 18, 36, 0.94);
   }
+}
+
+/* Phones use the bottom menu (same shell as the Android app). Reserve its
+   height so page content and toasts stay above it. Two classes so this beats
+   Tailwind's p-* padding shorthand. */
+@media (max-width: 767px) {
+  html:not(.native-app) {
+    --bottom-nav-h: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+  html:not(.native-app) main.phone-shell-main {
+    padding-bottom: calc(var(--bottom-nav-h) + 0.75rem);
+  }
+  html:not(.native-app) main.phone-shell-main-bleed {
+    padding-bottom: var(--bottom-nav-h);
+  }
+  .theme-topbar-icon-btn {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+@media (max-width: 1023px) {
+  button:not([role='switch']),
+  [role='tab'] {
+    min-height: 2.5rem;
+  }
+  .cc button,
+  .cc-palette button,
+  .cc-drawer button {
+    min-height: 0;
+  }
+}
+
+/* Command Center fit. Doubled classes so these win after that stylesheet loads.
+   The map frame must be its own stacking context or its tiles cover the phone menu. */
+.cc-mapframe.cc-mapframe {
+  z-index: 0;
+  isolation: isolate;
+}
+.cc-tabs.cc-tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+@media (max-width: 767px) {
+  .cc-drawer.cc-drawer {
+    top: auto;
+    right: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    bottom: calc(var(--bottom-nav-h, 3.5rem) + 0.5rem);
+    max-height: min(70dvh, 32rem);
+  }
+  .cc-toast.cc-toast {
+    bottom: calc(var(--bottom-nav-h, 3.5rem) + 0.75rem);
+  }
+  .cc-search.cc-search {
+    width: 100%;
+  }
+  .cc .mb-2.flex > .flex {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .cc-pop.cc-pop {
+    position: fixed;
+    left: 0.5rem;
+    right: 0.5rem;
+    top: calc(env(safe-area-inset-top, 0px) + 4.5rem);
+    width: auto;
+    max-height: min(70dvh, 28rem);
+    overflow-y: auto;
+    z-index: 70;
+  }
+  .cc-pop > * {
+    width: auto !important;
+    max-width: 100%;
+  }
+}
+
+/* Card toolbars stack before the desktop width so a row of controls is not
+   pushed off the side of a tablet. */
+@media (max-width: 1023px) {
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .card-header > * {
+    max-width: 100%;
+  }
+}
+
+/* White type on the bright brand fill is about 2.8:1. Dark type stays readable. */
+button.bg-brand-500,
+button.from-brand-500,
+.btn-primary {
+  color: #0f172a;
+}
+
+[data-theme='light'] button.text-slate-300,
+[data-theme='light'] button.text-slate-400 {
+  color: #334155;
 }

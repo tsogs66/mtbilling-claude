@@ -198,7 +198,7 @@ export default function SalesReport() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-5">
         <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
         <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
         <StatTile label="Average / day" value={peso(sales?.avgPerDay ?? 0)} icon={TrendingUp} accent="from-sky-500/15 to-transparent" delay={100} />

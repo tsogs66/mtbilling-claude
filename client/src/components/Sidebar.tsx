@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { ChevronDown, X } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import Logo from './Logo';
 import { useLayout } from './Layout';
 import { useAuth } from '../context/AuthContext';
@@ -28,7 +28,7 @@ function writeSavedScroll(y: number) {
 }
 
 export default function Sidebar() {
-  const { sidebarOpen, setSidebarOpen } = useLayout();
+  const { setSidebarOpen } = useLayout();
   const { canAccess, canWrite, user } = useAuth();
   const { theme } = useTheme();
   const location = useLocation();
@@ -84,22 +84,12 @@ export default function Sidebar() {
   return (
     <aside
       className={[
-        'theme-sidebar fixed lg:sticky top-0 z-50 h-[100dvh] lg:h-full w-[min(var(--sidebar-width),100vw)] max-w-[100vw] shrink-0',
-        'flex flex-col shadow-sidebar transition-transform duration-300 ease-out',
-        'pb-[env(safe-area-inset-bottom)]',
-        sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+        'theme-sidebar hidden md:flex md:sticky top-0 z-30 h-full w-[var(--sidebar-width)] shrink-0',
+        'flex-col shadow-sidebar',
       ].join(' ')}
     >
       <div className="theme-sidebar-header h-16 flex items-center justify-between px-4 shrink-0">
         <Logo size="sm" variant={logoVariant} />
-        <button
-          type="button"
-          className="theme-sidebar-icon-btn lg:hidden p-1.5 rounded-lg transition-colors"
-          onClick={() => setSidebarOpen(false)}
-          aria-label="Close sidebar"
-        >
-          <X size={18} />
-        </button>
       </div>
 
       <nav
@@ -191,7 +181,7 @@ export default function Sidebar() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="theme-sidebar-user-name text-xs font-medium truncate">{user?.username || 'Panel'}</div>
-            <div className="theme-sidebar-user-meta text-[10px] truncate" title={hostLabel || undefined}>
+            <div className="theme-sidebar-user-meta text-[10px] leading-snug line-clamp-2 break-words" title={hostLabel || undefined}>
               {user?.role || '—'} · {hostLabel || 'ts0gs v1.0.0'}
             </div>
           </div>

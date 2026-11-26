@@ -149,7 +149,7 @@ function SystemOverviewUnlicensed() {
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatTile
           label="CPU"
           value={host ? `${host.cpuUsage}%` : '—'}
@@ -332,7 +332,7 @@ function DashboardLicensed() {
               Subscriber health, cashflow, and host vitals in one glass cockpit.
             </p>
           </div>
-          <div className="snap-dash-hero-badge hidden sm:flex">
+          <div className="snap-dash-hero-badge hidden lg:flex">
             <Activity size={16} className="text-orange-300" />
             Snapshot UI
           </div>
@@ -349,7 +349,7 @@ function DashboardLicensed() {
       </div>
 
       {finance && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <StatTile label="Projected MRR" value={peso(finance.mrr)} icon={TrendingUp} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
           <StatTile label="Income MTD" value={peso(finance.incomeThisMonth)} icon={Wallet} tone="text-emerald-600" delay={40} />
           <StatTile label="Expenses MTD" value={peso(finance.expensesThisMonth)} icon={Wallet} tone="text-rose-600" delay={80} />
@@ -362,7 +362,7 @@ function DashboardLicensed() {
           <SectionTitle icon={Activity}>
             <Link to="/noc" className="hover:text-brand-600">NOC devices</Link>
           </SectionTitle>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatTile
               label="Custom online"
               value={`${nocSummary.customOnline ?? 0}/${nocSummary.customTotal ?? 0}`}

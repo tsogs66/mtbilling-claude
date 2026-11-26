@@ -54,7 +54,7 @@ export default function BottomNav() {
 
       <div
         className={[
-          'theme-bottom-nav-sheet fixed inset-x-0 bottom-0 z-[60] max-h-[min(85dvh,520px)] flex flex-col rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out',
+          'theme-bottom-nav-sheet fixed inset-x-0 bottom-0 z-[60] max-h-[min(88dvh,680px)] flex flex-col rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out',
           moreOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none',
         ].join(' ')}
         aria-hidden={!moreOpen}
