@@ -16,7 +16,6 @@ export function validateChosenPortalPassword(password: string): string | null {
   const pw = String(password || '');
   if (pw.length < 6) return 'Password must be at least 6 characters';
   if (pw.length > 64) return 'Password must be at most 64 characters';
-  if (/\s/.test(pw)) return 'Password cannot contain spaces';
   return null;
 }
 
@@ -106,8 +105,21 @@ export function portalPasswordExactMatch(plain: string, hash: string | null | un
   return bcryptCompare(raw, String(hash));
 }
 
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 /**
  * Accept every field name the portal, the admin editor, and older clients send.
+ *
+ * `newPassword` is the password the subscriber just typed. `password` is only
+ * the legacy name for that same value. When both are present and they differ,
+ * `password` is the previous mobile default (autofill or an older body) and
+ * must not win — that left the account on the mobile number.
  * A typed password always wins over "keep current".
  */
 export function readPortalPasswordChange(body: Record<string, unknown> | null | undefined): {
@@ -116,10 +128,12 @@ export function readPortalPasswordChange(body: Record<string, unknown> | null | 
   keepCurrent: boolean;
 } {
   const b = body || {};
-  const password = String(b.password || b.newPassword || b.new_password || b.pin || '').trim();
-  const confirm = String(
-    b.confirm || b.confirmPassword || b.confirm_password || b.confirmPin || ''
-  ).trim();
+  const explicitNew = firstText(b.newPassword, b.new_password);
+  const legacy = firstText(b.password, b.pin);
+  const password = explicitNew || legacy;
+  const explicitConfirm = firstText(b.confirmPassword, b.confirm_password);
+  const legacyConfirm = firstText(b.confirm, b.confirmPin);
+  const confirm = explicitNew ? explicitConfirm || legacyConfirm : legacyConfirm || explicitConfirm;
   const keepFlag = b.keepCurrent === true || b.keep_current === true || b.keepDefault === true;
   return { password, confirm, keepCurrent: keepFlag && !password };
 }

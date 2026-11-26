@@ -39,6 +39,7 @@ import { initPortalExtras, pushPortalActivity, registerPortalExtraRoutes } from 
 import { loginRateLimitCheck, loginRateLimitFail, loginRateLimitSuccess } from './loginRateLimit.js';
 import {
   defaultPortalPasswordFromContact,
+  isDefaultPortalPassword,
   portalPasswordExactMatch,
   portalPasswordMatches,
   readPortalPasswordChange,
@@ -153,18 +154,26 @@ export function ensureDefaultPortalCredentials(
   const phone = defaultPortalPasswordFromContact(user.contact);
   if (!phone) return { ok: false, error: 'Phone/contact number required for default portal password' };
 
-  const hasCreds = !!(user.portal_enabled && user.portal_pin_hash);
-  if (hasCreds && !opts?.force) {
-    return { ok: true, skipped: true };
+  const hash = bcrypt.hashSync(phone, 10);
+  if (opts?.force) {
+    db.prepare(
+      `UPDATE pppoe_users SET portal_enabled = 1, portal_pin_hash = ?, portal_must_change_password = 1 WHERE id = ?`
+    ).run(hash, userId);
+    db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
+    return { ok: true, provisioned: true };
   }
 
-  const hash = bcrypt.hashSync(phone, 10);
-  db.prepare(
-    `UPDATE pppoe_users SET portal_enabled = 1, portal_pin_hash = ?, portal_must_change_password = 1 WHERE id = ?`
-  ).run(hash, userId);
-  if (opts?.force) {
-    db.prepare('DELETE FROM client_portal_sessions WHERE pppoe_user_id = ?').run(userId);
-  }
+  // Conditional so a subscriber save that already stored a chosen password
+  // cannot be overwritten by a provisioner that read the row earlier.
+  const upd = db
+    .prepare(
+      `UPDATE pppoe_users
+       SET portal_enabled = 1, portal_pin_hash = ?, portal_must_change_password = 1
+       WHERE id = ?
+         AND (COALESCE(portal_enabled, 0) = 0 OR portal_pin_hash IS NULL OR portal_pin_hash = '')`
+    )
+    .run(hash, userId);
+  if (!upd.changes) return { ok: true, skipped: true };
   return { ok: true, provisioned: true };
 }
 
@@ -216,6 +225,20 @@ export function commitSubscriberPortalPassword(
         throw new Error('Password could not be verified after save — please try again');
       }
       if (!hashToStore && password && !portalPasswordExactMatch(password, verify.portal_pin_hash)) {
+        throw new Error('Password could not be verified after save — please try again');
+      }
+      // Login checks this same hash. A chosen password that is not the mobile
+      // number must be the one that matches, and the mobile number must not.
+      if (hashToStore && !portalPasswordMatches(password, verify.portal_pin_hash, user.contact)) {
+        throw new Error('Password could not be verified after save — please try again');
+      }
+      const mobile = defaultPortalPasswordFromContact(user.contact);
+      if (
+        hashToStore &&
+        mobile &&
+        !isDefaultPortalPassword(password, user.contact) &&
+        portalPasswordMatches(mobile, verify.portal_pin_hash, user.contact)
+      ) {
         throw new Error('Password could not be verified after save — please try again');
       }
     });

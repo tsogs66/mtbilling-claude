@@ -73,4 +73,34 @@ assert.equal(portalPasswordExactMatch(variant, afterVariant.portal_pin_hash), tr
 assert.equal(portalPasswordExactMatch(phone, afterVariant.portal_pin_hash), false);
 assert.equal(portalPasswordMatches(phone, afterVariant.portal_pin_hash, phone), true);
 
+const shadowed = commitSubscriberPortalPassword(id, {
+  password: phone,
+  confirm: phone,
+  newPassword: 'Harbor9',
+  confirmPassword: 'Harbor9',
+});
+assert.equal(shadowed.ok, true);
+if (shadowed.ok) {
+  assert.equal(shadowed.saved, true);
+  assert.equal(shadowed.keptExisting, false);
+}
+const afterShadow = db.prepare('SELECT portal_pin_hash FROM pppoe_users WHERE id = ?').get(id) as {
+  portal_pin_hash: string;
+};
+assert.equal(portalPasswordExactMatch('Harbor9', afterShadow.portal_pin_hash), true);
+assert.equal(portalPasswordMatches(phone, afterShadow.portal_pin_hash, phone), false);
+assert.equal(portalPasswordMatches('Harbor9', afterShadow.portal_pin_hash, phone), true);
+
+const spaced = commitSubscriberPortalPassword(id, {
+  newPassword: 'Harbor 9',
+  confirmPassword: 'Harbor 9',
+});
+assert.equal(spaced.ok, true);
+if (spaced.ok) assert.equal(spaced.saved, true);
+const afterSpace = db.prepare('SELECT portal_pin_hash FROM pppoe_users WHERE id = ?').get(id) as {
+  portal_pin_hash: string;
+};
+assert.equal(portalPasswordExactMatch('Harbor 9', afterSpace.portal_pin_hash), true);
+assert.equal(portalPasswordMatches(phone, afterSpace.portal_pin_hash, phone), false);
+
 console.log('portal password save ok');

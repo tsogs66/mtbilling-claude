@@ -58,7 +58,7 @@ assert(!portalPasswordMatches('09181234567', hashDashed, contactDashed), 'other 
 
 assert(validateChosenPortalPassword('abcdef') === null, 'valid new password');
 assert(validateChosenPortalPassword('abc') !== null, 'too short');
-assert(validateChosenPortalPassword('abc def') !== null, 'spaces rejected for new passwords');
+assert(validateChosenPortalPassword('Harbor 9') === null, 'internal spaces are kept as typed');
 
 assert(!phonesEquivalent('secret42', 'secret42'), 'non-phone strings are not phone equivalents');
 assert(!phonesEquivalent('hello123456', '123456'), 'short digit strings are not mobiles');
@@ -78,6 +78,16 @@ assert(
   readPortalPasswordChange({ keepCurrent: true }).keepCurrent === true,
   'keep current only when no new password was sent'
 );
+
+const shadowed = readPortalPasswordChange({
+  password: '09171234567',
+  confirm: '09171234567',
+  newPassword: 'Harbor9',
+  confirmPassword: 'Harbor9',
+});
+assert(shadowed.password === 'Harbor9', 'newPassword wins over the legacy password field');
+assert(shadowed.confirm === 'Harbor9', 'confirmPassword wins when a new password was sent');
+assert(shadowed.keepCurrent === false, 'a new password is not keep-current');
 
 if (failed) {
   console.error(`\n${failed} assertion(s) failed`);
