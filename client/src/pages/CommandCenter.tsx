@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis,
 } from 'recharts';
 import {
-  Bookmark, ChevronDown, Command, Copy, Download, ExternalLink, Filter, LayoutGrid, Maximize2, Minimize2, Radar, RefreshCw,
+  Bookmark, Command, Copy, Download, ExternalLink, Filter, LayoutGrid, Maximize2, Minimize2, Radar, RefreshCw,
   Rows3, Search, Timer, X, Zap,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import CommandMap, { TONE_HEX } from '../components/command/CommandMap';
+import { Dot, money, num, PanelHead, pct, Popover, Reading, Readings, TONE_VAR } from '../components/command/kit';
 import CommandPalette, { type PaletteAction } from '../components/command/CommandPalette';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
@@ -16,21 +17,8 @@ import { copyText } from '../lib/clipboard';
 import {
   applyFilters, buildPace, buildRunway, categoryOf, csvOf, EMPTY_FILTERS, FLAG_LABEL, FLAG_TONE, filtersActive, LENS_CATEGORIES,
   LENSES, QUEUES, queueCounts, queueFor, reminderText, riskTone, segmentBy, shortDay, summarize, toggle,
-  type CcFeed, type CcFlag, type CcSubscriber, type Filters, type Lens, type QueueKey, type SavedView, type Segment, type Tone,
+  type CcFeed, type CcFlag, type CcSubscriber, type Filters, type Lens, type QueueKey, type SavedView, type Segment,
 } from '../lib/commandModel';
-
-const TONE_VAR: Record<Tone, string> = {
-  good: 'var(--cc-good)',
-  warn: 'var(--cc-warn)',
-  bad: 'var(--cc-bad)',
-  info: 'var(--cc-info)',
-  mute: 'var(--cc-mute)',
-  hot: 'var(--cc-hot)',
-};
-
-const money = (n: number) => `\u20b1${Math.round(n || 0).toLocaleString('en-PH')}`;
-const num = (n: number) => (n || 0).toLocaleString('en-PH');
-const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
 
 const PREFS_KEY = 'mt.cc.prefs';
 const VIEWS_KEY = 'mt.cc.views';
@@ -92,37 +80,6 @@ function readUrlState(params: URLSearchParams): Partial<{ lens: Lens; filters: F
   } catch {
     return {};
   }
-}
-
-function useClickAway(ref: React.RefObject<HTMLElement>, onAway: () => void) {
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onAway();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [ref, onAway]);
-}
-
-function Popover({ label, icon, badge, children, align = 'left' }: { label: string; icon: ReactNode; badge?: string | number; children: ReactNode; align?: 'left' | 'right' }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useClickAway(ref, () => setOpen(false));
-  return (
-    <div className="relative" ref={ref}>
-      <button type="button" className={`cc-btn ${open ? 'is-on' : ''}`} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        {icon}
-        <span>{label}</span>
-        {badge ? <span className="cc-badge">{badge}</span> : null}
-        <ChevronDown size={13} className="opacity-60" />
-      </button>
-      {open && <div className={`cc-pop ${align === 'right' ? 'right-0' : 'left-0'}`}>{children}</div>}
-    </div>
-  );
-}
-
-function Dot({ tone }: { tone: Tone }) {
-  return <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: TONE_VAR[tone] }} />;
 }
 
 export default function CommandCenter({ onClassic }: { onClassic: () => void }) {
@@ -450,16 +407,16 @@ export default function CommandCenter({ onClassic }: { onClassic: () => void }) 
 
         {feed && subs.length > 0 && (
           <>
-            <section aria-label="Pulse" className="cc-pulse">
-              <PulseItem label="Billable" value={num(sum.billable)} sub={`${num(sum.disabled)} disabled`} onClick={() => patchFilters({ cat: [] })} on={false} />
-              <PulseItem label="Online" value={num(sum.online)} sub={`${pct(sum.online, sum.billable)}% of billable`} tone="good" on={lens === 'network' && filters.cat.join() === 'online'} onClick={() => focusLens('network', ['online'])} />
-              <PulseItem label="Offline" value={num(sum.offline)} sub={sum.paidOffline ? `${num(sum.paidOffline)} of them paid` : 'active but not connected'} tone="bad" on={lens === 'network' && filters.cat.join() === 'offline'} onClick={() => focusLens('network', ['offline'])} />
-              <PulseItem label="On hold" value={num(sum.held)} sub="non-payment or expired" tone="warn" on={lens === 'network' && filters.cat.join() === 'hold'} onClick={() => focusLens('network', ['hold'])} />
-              <PulseItem label="Collected" value={money(sum.collected)} sub={`${pct(sum.collected, sum.target)}% of ${money(sum.target)} target`} tone="good" bar={sum.target ? Math.min(1, sum.collected / sum.target) : 0} on={lens === 'revenue' && filters.cat.join() === 'paid,late'} onClick={() => focusLens('revenue', ['paid', 'late'])} />
-              <PulseItem label="Not paid" value={money(sum.unpaidAmount)} sub={`${num(sum.unpaidCount)} subscribers`} tone="bad" on={lens === 'revenue' && filters.cat.join() === 'unpaid'} onClick={() => focusLens('revenue', ['unpaid'])} />
-              <PulseItem label="Paid after due" value={num(sum.lateCount)} sub={`${num(sum.onTimeCount)} paid on time`} tone="warn" on={lens === 'revenue' && filters.cat.join() === 'late'} onClick={() => focusLens('revenue', ['late'])} />
-              <PulseItem label="Critical" value={num(sum.critical)} sub={sum.onlineUnpaid ? `${num(sum.onlineUnpaid)} online, unpaid` : 'risk 75 and up'} tone="hot" on={lens === 'risk' && filters.cat.join() === 'critical'} onClick={() => focusLens('risk', ['critical'])} />
-            </section>
+            <Readings count={8}>
+              <Reading label="Billable" value={num(sum.billable)} sub={`${num(sum.disabled)} disabled`} onClick={() => patchFilters({ cat: [] })} on={false} />
+              <Reading label="Online" value={num(sum.online)} sub={`${pct(sum.online, sum.billable)}% of billable`} tone="good" on={lens === 'network' && filters.cat.join() === 'online'} onClick={() => focusLens('network', ['online'])} />
+              <Reading label="Offline" value={num(sum.offline)} sub={sum.paidOffline ? `${num(sum.paidOffline)} of them paid` : 'active but not connected'} tone="bad" on={lens === 'network' && filters.cat.join() === 'offline'} onClick={() => focusLens('network', ['offline'])} />
+              <Reading label="On hold" value={num(sum.held)} sub="non-payment or expired" tone="warn" on={lens === 'network' && filters.cat.join() === 'hold'} onClick={() => focusLens('network', ['hold'])} />
+              <Reading label="Collected" value={money(sum.collected)} sub={`${pct(sum.collected, sum.target)}% of ${money(sum.target)} target`} tone="good" bar={sum.target ? Math.min(1, sum.collected / sum.target) : 0} on={lens === 'revenue' && filters.cat.join() === 'paid,late'} onClick={() => focusLens('revenue', ['paid', 'late'])} />
+              <Reading label="Not paid" value={money(sum.unpaidAmount)} sub={`${num(sum.unpaidCount)} subscribers`} tone="bad" on={lens === 'revenue' && filters.cat.join() === 'unpaid'} onClick={() => focusLens('revenue', ['unpaid'])} />
+              <Reading label="Paid after due" value={num(sum.lateCount)} sub={`${num(sum.onTimeCount)} paid on time`} tone="warn" on={lens === 'revenue' && filters.cat.join() === 'late'} onClick={() => focusLens('revenue', ['late'])} />
+              <Reading label="Critical" value={num(sum.critical)} sub={sum.onlineUnpaid ? `${num(sum.onlineUnpaid)} online, unpaid` : 'risk 75 and up'} tone="hot" on={lens === 'risk' && filters.cat.join() === 'critical'} onClick={() => focusLens('risk', ['critical'])} />
+            </Readings>
 
             {(widgetOn('map') || widgetOn('queue')) && (
               <section className={`grid gap-5 ${topRow ? 'lg:grid-cols-12' : ''}`}>
@@ -646,34 +603,6 @@ export default function CommandCenter({ onClassic }: { onClassic: () => void }) 
       />
       {toast && <div className="cc-toast" role="status">{toast}</div>}
     </Layout>
-  );
-}
-
-function PanelHead({ title, note, actions }: { title: string; note?: string; actions?: ReactNode }) {
-  return (
-    <div className="mb-2 flex flex-wrap items-end justify-between gap-2 border-t pt-3" style={{ borderColor: 'var(--card-border)' }}>
-      <div>
-        <h3 className="text-sm font-semibold tracking-wide">{title}</h3>
-        {note && <p className="text-[11px] opacity-60">{note}</p>}
-      </div>
-      {actions && <div className="flex items-center gap-3">{actions}</div>}
-    </div>
-  );
-}
-
-function PulseItem({
-  label, value, sub, tone, on, onClick, bar,
-}: { label: string; value: string; sub: string; tone?: Tone; on: boolean; onClick: () => void; bar?: number }) {
-  return (
-    <button type="button" onClick={onClick} className={`cc-pulse-item ${on ? 'is-on' : ''}`} aria-pressed={on}>
-      <span className="cc-pulse-label">
-        {tone && <Dot tone={tone} />}
-        {label}
-      </span>
-      <span className="cc-pulse-value" style={tone ? { color: TONE_VAR[tone] } : undefined}>{value}</span>
-      <span className="cc-pulse-sub">{sub}</span>
-      {bar != null && <span className="cc-pulse-bar"><i style={{ width: `${Math.round(bar * 100)}%` }} /></span>}
-    </button>
   );
 }
 

@@ -1,30 +1,75 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  Pie, PieChart, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-} from 'recharts';
-import { FileText, Plus, Wallet, AlertTriangle, KeyRound, Printer, Eye } from 'lucide-react';
+import { Download, KeyRound, Plus, Printer, RefreshCw, Sparkles } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, DataTable, Modal, ModalFooter, FormField, StatTile, StatusBadge, PageHeader } from '../components/ui';
+import { Modal, ModalFooter, FormField } from '../components/ui';
+import {
+  Col, downloadCsv, moneyExact, money, num, PageBar, PanelHead, Pill, Reading, Readings, SearchBox, Table, Tabs, TONE_VAR,
+} from '../components/command/kit';
+import type { Tone } from '../lib/commandModel';
 import { api, peso } from '../api';
 import { openInvoicePrint } from '../lib/invoicePrint';
 
-const AGING_COLORS = ['#10b981', '#f59e0b', '#f97316', '#f43f5e'];
+type Bucket = 'all' | 'current' | 'd1_30' | 'd31_60' | 'd61_plus';
+type TabKey = 'open' | 'overdue' | 'paid' | 'void' | 'all';
+
+const BUCKETS: { key: Exclude<Bucket, 'all'>; label: string; tone: Tone }[] = [
+  { key: 'current', label: 'Current', tone: 'good' },
+  { key: 'd1_30', label: '1\u201330 days', tone: 'warn' },
+  { key: 'd31_60', label: '31\u201360 days', tone: 'hot' },
+  { key: 'd61_plus', label: '61+ days', tone: 'bad' },
+];
+
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+const daysBetween = (from: string, to: string) =>
+  Math.round((new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86_400_000);
+
+const isOpen = (inv: any) => ['unpaid', 'partial', 'overdue'].includes(String(inv.status));
+const balanceOf = (inv: any) => Math.max(0, Number(inv.amount || 0) - Number(inv.amount_paid || 0));
+
+/** Same aging rule the server uses for the totals. */
+function bucketOf(inv: any, today: string): Exclude<Bucket, 'all'> {
+  if (!inv.due_date || inv.due_date >= today) return 'current';
+  const late = daysBetween(inv.due_date, today);
+  if (late <= 30) return 'd1_30';
+  if (late <= 60) return 'd31_60';
+  return 'd61_plus';
+}
+
+function effective(inv: any, today: string): 'paid' | 'void' | 'overdue' | 'partial' | 'unpaid' {
+  const s = String(inv.status || 'unpaid');
+  if (s === 'paid' || s === 'void') return s;
+  if (s === 'overdue' || (inv.due_date && inv.due_date < today)) return 'overdue';
+  return s === 'partial' ? 'partial' : 'unpaid';
+}
+
+const STATUS_TONE: Record<string, Tone> = { paid: 'good', void: 'mute', overdue: 'bad', partial: 'warn', unpaid: 'info' };
 
 export default function Invoices() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [aging, setAging] = useState<any>({});
+  const [loaded, setLoaded] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [payId, setPayId] = useState<number | null>(null);
   const [subs, setSubs] = useState<any[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
   const [previewBusy, setPreviewBusy] = useState<number | null>(null);
+  const [tab, setTab] = useState<TabKey>('open');
+  const [bucket, setBucket] = useState<Bucket>('all');
+  const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const today = useMemo(todayStr, []);
 
-  const load = () =>
-    api.get('/invoices').then((r) => {
-      setInvoices(r.data.invoices || []);
-      setAging(r.data.aging || {});
-    });
+  const load = useCallback(
+    () =>
+      api.get('/invoices').then((r) => {
+        setInvoices(r.data.invoices || []);
+        setAging(r.data.aging || {});
+        setLoaded(true);
+      }),
+    [],
+  );
 
   useEffect(() => {
     load();
@@ -36,27 +81,83 @@ export default function Invoices() {
         account_number: s.account_number || s.account,
       })));
     }).catch(() => {});
+  }, [load]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(el.tagName)) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const agingPie = useMemo(
-    () =>
-      [
-        { name: 'Current', value: Number(aging.current || 0) },
-        { name: '1–30d', value: Number(aging.d1_30 || 0) },
-        { name: '31–60d', value: Number(aging.d31_60 || 0) },
-        { name: '61d+', value: Number(aging.d61_plus || 0) },
-      ].filter((x) => x.value > 0),
-    [aging]
+  const term = search.trim().toLowerCase();
+  const matchesSearch = useCallback(
+    (inv: any) =>
+      !term ||
+      [inv.number, inv.customer_name, inv.account_number].some((v) => String(v || '').toLowerCase().includes(term)),
+    [term],
   );
 
-  const statusBars = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const inv of invoices) {
-      const s = String(inv.status || 'unpaid');
-      counts[s] = (counts[s] || 0) + 1;
+  const searched = useMemo(() => invoices.filter(matchesSearch), [invoices, matchesSearch]);
+
+  const tabCounts = useMemo(() => {
+    const c: Record<TabKey, number> = { open: 0, overdue: 0, paid: 0, void: 0, all: searched.length };
+    for (const inv of searched) {
+      const e = effective(inv, today);
+      if (isOpen(inv)) c.open++;
+      if (e === 'overdue') c.overdue++;
+      if (e === 'paid') c.paid++;
+      if (e === 'void') c.void++;
     }
-    return Object.entries(counts).map(([status, count]) => ({ status, count }));
-  }, [invoices]);
+    return c;
+  }, [searched, today]);
+
+  const rows = useMemo(() => {
+    return searched.filter((inv) => {
+      const e = effective(inv, today);
+      if (tab === 'open' && !isOpen(inv)) return false;
+      if (tab === 'overdue' && e !== 'overdue') return false;
+      if (tab === 'paid' && e !== 'paid') return false;
+      if (tab === 'void' && e !== 'void') return false;
+      if (bucket !== 'all' && (!isOpen(inv) || bucketOf(inv, today) !== bucket)) return false;
+      return true;
+    });
+  }, [searched, tab, bucket, today]);
+
+  const agingParts = useMemo(
+    () =>
+      BUCKETS.map((b) => ({ ...b, value: Number(aging[b.key] || 0) })),
+    [aging],
+  );
+  const agingTotal = agingParts.reduce((s, p) => s + p.value, 0);
+
+  const debtors = useMemo(() => {
+    const map = new Map<string, { name: string; account: string; owed: number; oldest: string; count: number }>();
+    for (const inv of invoices) {
+      if (!isOpen(inv)) continue;
+      const key = String(inv.account_number || inv.customer_name || inv.id);
+      const cur = map.get(key) || { name: inv.customer_name || '\u2014', account: inv.account_number || '', owed: 0, oldest: inv.due_date || today, count: 0 };
+      cur.owed += balanceOf(inv);
+      cur.count += 1;
+      if (inv.due_date && inv.due_date < cur.oldest) cur.oldest = inv.due_date;
+      map.set(key, cur);
+    }
+    return [...map.values()].sort((a, b) => b.owed - a.owed).slice(0, 6);
+  }, [invoices, today]);
+
+  const openCount = invoices.filter(isOpen).length;
+  const overdueCount = invoices.filter((i) => effective(i, today) === 'overdue').length;
+  const truncated = invoices.length >= 500;
+
+  const pickBucket = (b: Bucket) => {
+    setBucket((cur) => (cur === b ? 'all' : b));
+    setTab('open');
+  };
 
   const batch = async () => {
     if (!confirm('Generate unpaid invoices for all active subscribers with a plan price?')) return;
@@ -99,129 +200,225 @@ export default function Invoices() {
     }
   };
 
-  const statusBadge = (s: string) => {
-    if (s === 'paid') return <StatusBadge status="Active" />;
-    if (s === 'overdue') return <StatusBadge status="Expired" />;
-    if (s === 'void') return <StatusBadge status="inactive" />;
-    return <StatusBadge status="Non-payment" />;
-  };
+  const exportCsv = () =>
+    downloadCsv(
+      `invoices-${today}.csv`,
+      ['Invoice', 'Customer', 'Account', 'Due', 'Amount', 'Paid', 'Balance', 'Status'],
+      rows.map((i) => [i.number, i.customer_name, i.account_number, i.due_date, i.amount, i.amount_paid, balanceOf(i), effective(i, today)]),
+    );
+
+  const columns: Col<any>[] = [
+    { key: 'number', label: 'Invoice', render: (i) => <span className="font-mono text-xs font-semibold">{i.number}</span> },
+    {
+      key: 'customer',
+      label: 'Customer',
+      render: (i) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium">{i.customer_name || '\u2014'}</div>
+          <div className="text-[11px] opacity-55">{i.account_number || ''}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'due',
+      label: 'Due',
+      render: (i) => {
+        const late = i.due_date && isOpen(i) && i.due_date < today ? daysBetween(i.due_date, today) : 0;
+        return (
+          <div>
+            <div>{i.due_date || '\u2014'}</div>
+            {late > 0 && <div className="text-[11px]" style={{ color: TONE_VAR[late > 30 ? 'bad' : 'warn'] }}>{late}d late</div>}
+          </div>
+        );
+      },
+    },
+    { key: 'amount', label: 'Amount', align: 'right', render: (i) => peso(i.amount) },
+    { key: 'paid', label: 'Paid', align: 'right', render: (i) => <span className="opacity-70">{peso(i.amount_paid)}</span> },
+    {
+      key: 'balance',
+      label: 'Balance',
+      align: 'right',
+      render: (i) => {
+        const b = isOpen(i) ? balanceOf(i) : 0;
+        return <span className="font-semibold">{b > 0 ? peso(b) : '\u2014'}</span>;
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (i) => {
+        const e = effective(i, today);
+        return <Pill tone={STATUS_TONE[e]}>{e}</Pill>;
+      },
+    },
+    {
+      key: 'actions',
+      label: '',
+      align: 'right',
+      render: (i) => (
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <button type="button" className="cc-link" onClick={() => printInvoice(i.id)} disabled={previewBusy === i.id} title="Preview and print invoice">
+            <Printer size={12} /> Print
+          </button>
+          {i.status !== 'paid' && i.status !== 'void' && (
+            <button type="button" className="cc-link" onClick={() => setPayId(i.id)}>Record pay</button>
+          )}
+          {i.status !== 'paid' && i.status !== 'void' && (
+            <button type="button" className="cc-link" style={{ color: TONE_VAR.bad }} onClick={() => voidInv(i.id)}>Void</button>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <Layout title="Invoices & AR">
-      <div className="mb-5">
-        <PageHeader
-          title="Invoices & receivables"
-          description="Aging, status mix, and printable invoice / SOA for collectors."
-          icon={FileText}
-        />
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-4 mb-5">
-        <StatTile label="Total AR" value={peso(aging.total_ar || 0)} icon={Wallet} tone="text-rose-600" delay={0} />
-        <StatTile label="Current" value={peso(aging.current || 0)} icon={FileText} delay={40} />
-        <StatTile label="1–30 days" value={peso(aging.d1_30 || 0)} icon={AlertTriangle} tone="text-amber-600" delay={80} />
-        <StatTile label="31–60 days" value={peso(aging.d31_60 || 0)} icon={AlertTriangle} tone="text-orange-600" delay={120} />
-        <StatTile label="61+ days" value={peso(aging.d61_plus || 0)} icon={AlertTriangle} tone="text-rose-600" delay={160} />
-        <StatTile label="Paid MTD" value={peso(aging.paid_this_month || 0)} icon={Wallet} tone="text-emerald-600" delay={200} />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
-        <Card title="AR aging mix">
-          <div className="h-52">
-            {agingPie.length === 0 ? (
-              <p className="text-sm text-slate-400 p-6">No open receivables.</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={agingPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80}>
-                    {agingPie.map((_, i) => (
-                      <Cell key={i} fill={AGING_COLORS[i % AGING_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v: number) => peso(v)} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Card>
-        <Card title="Invoice status counts">
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={statusBars} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="status" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} width={32} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#0ea5e9" radius={[6, 6, 0, 0]} name="Invoices" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      </div>
-
-      <Card
-        title="Invoices"
-        icon={FileText}
-        right={
-          <div className="flex gap-2 flex-wrap">
-            <Link to="/subscriber-portal" className="btn-secondary">
-              <KeyRound size={16} /> Subscriber Portal
+      <div className="cc space-y-5 pb-10">
+        <header className="space-y-3">
+          <PageBar
+            title="Invoices & receivables"
+            subtitle={loaded ? `${num(invoices.length)} invoices loaded \u00b7 ${num(openCount)} open \u00b7 ${num(overdueCount)} overdue` : 'Loading receivables'}
+          >
+            <SearchBox inputRef={searchRef} value={search} onChange={setSearch} placeholder="Invoice, customer or account" />
+            <button type="button" className="cc-btn" onClick={() => load()} title="Refresh">
+              <RefreshCw size={14} />
+            </button>
+            <button type="button" className="cc-btn" onClick={exportCsv} disabled={rows.length === 0} title="Export the rows shown as CSV">
+              <Download size={14} /> <span className="hidden md:inline">CSV</span>
+            </button>
+            <Link to="/subscriber-portal" className="cc-btn">
+              <KeyRound size={14} /> <span className="hidden md:inline">Subscriber Portal</span>
             </Link>
-            <button className="btn-secondary" onClick={batch} disabled={batchBusy}>
-              {batchBusy ? 'Generating…' : 'Batch generate'}
+            <button type="button" className="cc-btn" onClick={batch} disabled={batchBusy}>
+              <Sparkles size={14} /> {batchBusy ? 'Generating\u2026' : 'Batch generate'}
             </button>
-            <button className="btn-primary" onClick={() => setCreateOpen(true)}>
-              <Plus size={16} /> New invoice
+            <button type="button" className="cc-btn is-on" onClick={() => setCreateOpen(true)}>
+              <Plus size={14} /> New invoice
             </button>
-          </div>
-        }
-      >
-        <DataTable
-          columns={[
-            { key: 'number', label: 'Invoice' },
-            { key: 'customer', label: 'Customer' },
-            { key: 'due', label: 'Due' },
-            { key: 'amount', label: 'Amount', align: 'right' },
-            { key: 'paid', label: 'Paid', align: 'right' },
-            { key: 'status', label: 'Status' },
-            { key: 'actions', label: '', align: 'right' },
-          ]}
-          rows={invoices.map((inv) => ({
-            key: inv.id,
-            cells: [
-              <span className="font-mono text-sm font-medium">{inv.number}</span>,
-              <div>
-                <div className="font-medium text-slate-800">{inv.customer_name || '—'}</div>
-                <div className="text-xs text-slate-400">{inv.account_number || ''}</div>
-              </div>,
-              inv.due_date || '—',
-              peso(inv.amount),
-              peso(inv.amount_paid),
-              statusBadge(inv.status),
-              <div className="flex justify-end gap-2 flex-wrap">
-                <button
-                  type="button"
-                  className="btn-secondary text-xs !py-1 inline-flex items-center gap-1"
-                  onClick={() => printInvoice(inv.id)}
-                  disabled={previewBusy === inv.id}
-                  title="Preview & print invoice"
-                >
-                  {previewBusy === inv.id ? <Eye size={12} /> : <Printer size={12} />}
-                  Print
-                </button>
-                {inv.status !== 'paid' && inv.status !== 'void' && (
-                  <button className="btn-secondary text-xs !py-1" onClick={() => setPayId(inv.id)}>Record pay</button>
-                )}
-                {inv.status !== 'void' && inv.status !== 'paid' && (
-                  <button className="text-xs text-rose-600" onClick={() => voidInv(inv.id)}>Void</button>
-                )}
-              </div>,
-            ],
-          }))}
-          emptyMessage="No invoices yet. Batch-generate for the month or create one."
-        />
-      </Card>
+          </PageBar>
+
+          <Readings count={6}>
+            <Reading
+              label="Total AR"
+              tone="bad"
+              value={money(aging.total_ar || 0)}
+              sub={`${num(openCount)} open invoices`}
+              on={tab === 'open' && bucket === 'all'}
+              onClick={() => { setBucket('all'); setTab('open'); }}
+            />
+            {BUCKETS.map((b) => (
+              <Reading
+                key={b.key}
+                label={b.label}
+                tone={b.tone}
+                value={money(aging[b.key] || 0)}
+                sub={agingTotal > 0 ? `${Math.round(((aging[b.key] || 0) / agingTotal) * 100)}% of AR` : 'nothing open'}
+                bar={agingTotal > 0 ? (aging[b.key] || 0) / agingTotal : 0}
+                on={bucket === b.key}
+                onClick={() => pickBucket(b.key)}
+              />
+            ))}
+            <Reading
+              label="Paid this month"
+              tone="good"
+              value={money(aging.paid_this_month || 0)}
+              sub="paid invoices since the 1st"
+              on={tab === 'paid'}
+              onClick={() => { setBucket('all'); setTab('paid'); }}
+            />
+          </Readings>
+        </header>
+
+        <div className="grid gap-x-8 gap-y-5 lg:grid-cols-5">
+          <section className="lg:col-span-3">
+            <PanelHead title="How old is the money owed" note="Click a segment to list only those invoices" />
+            {agingTotal === 0 ? (
+              <p className="cc-empty">No open receivables.</p>
+            ) : (
+              <>
+                <div className={`cc-stack ${bucket !== 'all' ? 'has-pick' : ''}`}>
+                  {agingParts.filter((p) => p.value > 0).map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      className={bucket === p.key ? 'is-on' : ''}
+                      style={{ width: `${(p.value / agingTotal) * 100}%`, background: TONE_VAR[p.tone] }}
+                      title={`${p.label}: ${moneyExact(p.value)}`}
+                      aria-label={`${p.label}: ${moneyExact(p.value)}`}
+                      onClick={() => pickBucket(p.key)}
+                    />
+                  ))}
+                </div>
+                <ul className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
+                  {agingParts.map((p) => (
+                    <li key={p.key} className="flex items-center gap-1.5">
+                      <i className="h-2 w-2 shrink-0 rounded-full" style={{ background: TONE_VAR[p.tone] }} />
+                      <span className="opacity-70">{p.label}</span>
+                      <span className="ml-auto font-semibold">{money(p.value)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+
+          <section className="lg:col-span-2">
+            <PanelHead title="Largest balances" note="Open invoices, grouped by subscriber" />
+            {debtors.length === 0 ? (
+              <p className="cc-empty">Nobody owes anything on the loaded invoices.</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {debtors.map((d) => (
+                  <li key={d.account || d.name}>
+                    <button type="button" className="cc-seg-row flex w-full items-center gap-3 text-sm" onClick={() => { setSearch(d.account || d.name); setTab('open'); setBucket('all'); }}>
+                      <span className="min-w-0 flex-1 truncate font-medium">{d.name}</span>
+                      <span className="text-[11px] opacity-55">
+                        {d.count} inv · since {d.oldest}
+                      </span>
+                      <span className="w-24 text-right font-semibold" style={{ color: TONE_VAR[d.oldest < today && daysBetween(d.oldest, today) > 30 ? 'bad' : 'warn'] }}>{money(d.owed)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <section>
+          <PanelHead
+            title="Invoices"
+            note={
+              truncated
+                ? 'Showing the newest 500 invoices. The readings above cover every invoice, so older ones may not appear in the list.'
+                : bucket !== 'all'
+                  ? `Filtered to the ${BUCKETS.find((b) => b.key === bucket)?.label} bucket`
+                  : 'Latest first'
+            }
+            actions={
+              (bucket !== 'all' || search) ? (
+                <button type="button" className="cc-link" onClick={() => { setBucket('all'); setSearch(''); }}>Clear filters</button>
+              ) : undefined
+            }
+          />
+          <Tabs
+            value={tab}
+            onChange={(k) => { setTab(k); setBucket('all'); }}
+            tabs={[
+              { key: 'open', label: 'Open', count: tabCounts.open },
+              { key: 'overdue', label: 'Overdue', count: tabCounts.overdue },
+              { key: 'paid', label: 'Paid', count: tabCounts.paid },
+              { key: 'void', label: 'Void', count: tabCounts.void },
+              { key: 'all', label: 'All', count: tabCounts.all },
+            ]}
+          />
+          <Table
+            columns={columns}
+            rows={rows}
+            rowKey={(i) => i.id}
+            empty={loaded ? 'No invoices here. Batch-generate for the month or create one.' : 'Loading\u2026'}
+          />
+        </section>
+      </div>
 
       {createOpen && (
         <CreateInvoiceModal
@@ -246,7 +443,6 @@ export default function Invoices() {
     </Layout>
   );
 }
-
 
 function CreateInvoiceModal({ subs, onClose, onSaved }: any) {
   const [form, setForm] = useState<any>({ pppoe_user_id: '', due_date: new Date().toISOString().slice(0, 10) });
@@ -313,4 +509,3 @@ function PayModal({ invoiceId, onClose, onSaved }: any) {
     </Modal>
   );
 }
-
