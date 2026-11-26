@@ -519,7 +519,7 @@ export default function CloudflareAccess() {
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <StatusBadge status={status} />
-            <button type="button" className="btn-secondary text-xs py-1.5" onClick={refreshStatus} disabled={busy || !!job}>
+            <button type="button" className="btn-secondary text-xs py-1.5 min-h-10 min-w-10" onClick={refreshStatus} disabled={busy || !!job} aria-label="Refresh tunnel status">
               <RefreshCw size={14} />
             </button>
             <button type="button" className="btn-primary" onClick={toggle} disabled={busy || !!job}>

@@ -197,7 +197,7 @@ export function StatTile({
       <div className={`absolute -top-8 -right-6 w-28 h-28 bg-gradient-to-bl ${accent} rounded-full blur-2xl opacity-80 pointer-events-none transition-opacity group-hover:opacity-100`} />
       <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className={`font-display text-2xl sm:text-3xl font-bold tracking-tight tabular-nums ${tone}`}>{value}</div>
+          <div className={`font-display text-lg sm:text-2xl xl:text-3xl font-bold tracking-tight tabular-nums leading-none whitespace-nowrap ${tone}`}>{value}</div>
           <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-1.5 font-medium uppercase tracking-wider">
             {dot && <span className={`w-2 h-2 rounded-full ${dot} animate-pulse-soft shadow-[0_0_8px_currentColor]`} />}
             {label}
@@ -277,14 +277,14 @@ export function TabPills({
   onChange: (key: string) => void;
 }) {
   return (
-    <div className="inline-flex gap-1 p-1 bg-slate-100 rounded-xl">
+    <div className="inline-flex flex-wrap gap-1 p-1 bg-slate-100 rounded-xl max-w-full">
       {tabs.map((t) => (
         <button
           key={t.key}
           type="button"
           onClick={() => onChange(t.key)}
           className={[
-            'text-xs font-semibold px-3 py-1.5 rounded-lg transition-all duration-200',
+            'text-xs font-semibold px-3 py-2 min-h-10 rounded-lg transition-all duration-200',
             active === t.key ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-500 hover:text-slate-700',
           ].join(' ')}
         >
@@ -307,7 +307,7 @@ export function TabBar({
   className?: string;
 }) {
   return (
-    <div className={`flex items-center gap-1 border-b border-slate-200/80 overflow-x-auto table-scroll-touch -mx-1 px-1 ${className}`}>
+    <div role="tablist" className={`flex flex-wrap items-center gap-1 border-b border-slate-200/80 -mx-1 px-1 ${className}`}>
       {tabs.map((t) => {
         const Icon = t.icon;
         const isActive = active === t.key;
@@ -315,9 +315,11 @@ export function TabBar({
           <button
             key={t.key}
             type="button"
+            role="tab"
+            aria-selected={isActive}
             onClick={() => onChange(t.key)}
             className={[
-              'relative flex items-center gap-2 px-4 py-3 min-h-11 text-sm font-medium whitespace-nowrap transition-colors shrink-0',
+              'relative flex items-center gap-2 px-3 sm:px-4 py-2.5 min-h-11 text-sm font-medium whitespace-nowrap transition-colors',
               isActive ? 'text-brand-600' : 'text-slate-500 hover:text-slate-700',
             ].join(' ')}
           >
@@ -349,7 +351,7 @@ export function Flash({ message, type = 'success', onDismiss }: { message: strin
       <Icon size={18} className="shrink-0" />
       <span className="flex-1">{message}</span>
       {onDismiss && (
-        <button type="button" onClick={onDismiss} className="opacity-60 hover:opacity-100">
+        <button type="button" onClick={onDismiss} className="inline-flex items-center justify-center min-h-10 min-w-10 opacity-60 hover:opacity-100" aria-label="Dismiss">
           <X size={16} />
         </button>
       )}
@@ -729,8 +731,9 @@ export function IconAction({
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className={`p-1.5 rounded-lg text-slate-400 transition-colors ${tones[tone]}`}
+      className={`inline-flex items-center justify-center min-h-10 min-w-10 p-2 rounded-lg text-slate-400 transition-colors ${tones[tone]}`}
     >
       <Icon size={16} />
     </button>

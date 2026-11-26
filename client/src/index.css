@@ -318,7 +318,10 @@ body {
   box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.35);
 }
 .theme-topbar-menu-muted {
-  color: var(--topbar-muted);
+  color: color-mix(in srgb, var(--topbar-fg) 68%, var(--topbar-muted));
+}
+[data-theme='light'] .theme-topbar-menu-item.is-active {
+  color: #c2410c;
 }
 .theme-topbar-menu-item {
   color: var(--topbar-fg);
@@ -3626,5 +3629,33 @@ html.portal-route[data-portal-theme='orbital'] .subscriber-portal textarea {
   html.portal-route[data-portal-theme='orbital'] {
     --portal-glass: rgba(10, 28, 52, 0.88);
     --portal-glass-strong: rgba(6, 18, 36, 0.94);
+  }
+}
+
+/* Phones use the bottom menu (same shell as the Android app). Reserve its
+   height so page content and toasts stay above it. Two classes so this beats
+   Tailwind's p-* padding shorthand. */
+@media (max-width: 767px) {
+  html:not(.native-app) {
+    --bottom-nav-h: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+  html:not(.native-app) main.phone-shell-main {
+    padding-bottom: calc(var(--bottom-nav-h) + 0.75rem);
+  }
+  html:not(.native-app) main.phone-shell-main-bleed {
+    padding-bottom: var(--bottom-nav-h);
+  }
+  .theme-topbar-icon-btn {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+@media (max-width: 1023px) {
+  button:not([role='switch']),
+  [role='tab'] {
+    min-height: 2.5rem;
   }
 }
