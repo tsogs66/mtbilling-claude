@@ -97,7 +97,7 @@ export default function Topbar({ title }: { title: string }) {
           </button>
 
           {routerOpen && (
-            <div className="theme-topbar-menu absolute right-0 mt-2 w-[min(16rem,calc(100vw-1rem))] max-h-[min(70dvh,24rem)] overflow-y-auto py-2 z-[600] animate-scale-in origin-top-right">
+            <div className="theme-topbar-menu fixed left-3 right-3 top-[calc(env(safe-area-inset-top,0px)+4.25rem)] z-[600] max-h-[min(70dvh,24rem)] overflow-y-auto py-2 animate-scale-in sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(16rem,calc(100vw-1rem))] sm:origin-top-right">
               <div className="theme-topbar-menu-muted px-3 py-2 text-[10px] font-bold uppercase tracking-wider">
                 Select router
               </div>
@@ -141,7 +141,7 @@ export default function Topbar({ title }: { title: string }) {
           </button>
 
           {themeOpen && (
-            <div className="theme-topbar-menu absolute right-0 mt-2 w-[min(18rem,calc(100vw-1rem))] max-h-[min(70dvh,32rem)] overflow-y-auto py-2 z-[600] animate-scale-in origin-top-right">
+            <div className="theme-topbar-menu fixed left-3 right-3 top-[calc(env(safe-area-inset-top,0px)+4.25rem)] z-[600] max-h-[min(70dvh,32rem)] overflow-y-auto py-2 animate-scale-in sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(18rem,calc(100vw-1rem))] sm:origin-top-right">
               <div className="theme-topbar-menu-muted px-3 py-2 text-[10px] font-bold uppercase tracking-wider">
                 Theme
               </div>
@@ -201,7 +201,7 @@ export default function Topbar({ title }: { title: string }) {
           </button>
 
           {userOpen && (
-            <div className="theme-topbar-menu absolute right-0 mt-2 w-[min(16rem,calc(100vw-1rem))] py-2 z-[600] animate-scale-in origin-top-right">
+            <div className="theme-topbar-menu fixed left-3 right-3 top-[calc(env(safe-area-inset-top,0px)+4.25rem)] z-[600] py-2 animate-scale-in sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[min(16rem,calc(100vw-1rem))] sm:origin-top-right">
               <div className="px-4 py-3 border-b border-[var(--topbar-menu-border)]">
                 <div className="text-sm font-semibold">{user?.username}</div>
                 <div className="theme-topbar-menu-muted text-xs">{user?.role || '—'}</div>

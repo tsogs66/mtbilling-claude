@@ -197,7 +197,7 @@ export function StatTile({
       <div className={`absolute -top-8 -right-6 w-28 h-28 bg-gradient-to-bl ${accent} rounded-full blur-2xl opacity-80 pointer-events-none transition-opacity group-hover:opacity-100`} />
       <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className={`font-display text-lg sm:text-2xl xl:text-3xl font-bold tracking-tight tabular-nums leading-none whitespace-nowrap ${tone}`}>{value}</div>
+          <div className={`font-display text-lg sm:text-2xl font-bold tracking-tight tabular-nums leading-none whitespace-nowrap ${tone}`}>{value}</div>
           <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-1.5 font-medium uppercase tracking-wider">
             {dot && <span className={`w-2 h-2 rounded-full ${dot} animate-pulse-soft shadow-[0_0_8px_currentColor]`} />}
             {label}

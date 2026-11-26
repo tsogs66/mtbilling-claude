@@ -116,7 +116,7 @@ export default function Invoices() {
         />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5">
+      <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-4 mb-5">
         <StatTile label="Total AR" value={peso(aging.total_ar || 0)} icon={Wallet} tone="text-rose-600" delay={0} />
         <StatTile label="Current" value={peso(aging.current || 0)} icon={FileText} delay={40} />
         <StatTile label="1–30 days" value={peso(aging.d1_30 || 0)} icon={AlertTriangle} tone="text-amber-600" delay={80} />
